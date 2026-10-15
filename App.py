@@ -16,8 +16,16 @@ st.set_page_config(page_title="Khmer Auto Caption", page_icon="🎬")
 st.title("🎬 Khmer Auto Caption")
 st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ ដោយ AI")
 
-MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
 REQUEST_TIMEOUT_MS = 120000  # 120 វិនាទី
+
+PREFERRED_MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3-flash",
+    "gemini-flash-latest",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+]
 
 FONT_URL = (
     "https://raw.githubusercontent.com/google/fonts/"
@@ -115,6 +123,37 @@ def extract_audio(video_path, audio_path):
         "-b:a", "64k",
         audio_path,
     ])
+
+
+def get_available_models(client):
+    """សួរ API ថាម៉ូដែលណាអាចប្រើ generateContent បាន។"""
+    found = []
+    try:
+        for m in client.models.list():
+            name = (getattr(m, "name", "") or "").replace("models/", "")
+            actions = getattr(m, "supported_actions", None) or []
+            low = name.lower()
+
+            if not name or "generateContent" not in actions:
+                continue
+            if "flash" not in low and "pro" not in low:
+                continue
+            if any(
+                x in low
+                for x in (
+                    "tts", "live", "embedding", "image",
+                    "imagen", "veo", "robotics",
+                )
+            ):
+                continue
+            found.append(name)
+    except Exception:
+        pass
+
+    ordered = [m for m in PREFERRED_MODELS if m in found]
+    ordered += [m for m in found if m not in ordered and "flash" in m.lower()]
+    ordered += [m for m in found if m not in ordered]
+    return ordered[:5]
 
 
 def parse_segments(raw, duration):
@@ -222,6 +261,18 @@ def transcribe(api_key, audio_path, duration, status):
             "សំឡេងធំពេក។ សូមប្រើវីដេអូខ្លីជាងនេះ (ប្រហែលក្រោម ៣០ នាទី)។"
         )
 
+    status.write("កំពុងរកម៉ូដែលដែលអាចប្រើបាន...")
+    models = get_available_models(client)
+
+    if not models:
+        raise RuntimeError(
+            "API Key នេះមើលមិនឃើញម៉ូដែលណាមួយទេ។\n"
+            "សូមបង្កើត Key ថ្មីនៅ aistudio.google.com "
+            "ហើយដាក់ក្នុង Streamlit Secrets (GEMINI_API_KEY)។"
+        )
+
+    status.write("ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
+
     prompt = (
         "Transcribe this audio exactly as spoken. "
         "The speech is primarily Khmer. Write in Khmer script. "
@@ -236,16 +287,20 @@ def transcribe(api_key, audio_path, duration, status):
         "If there is no speech, return an empty array []."
     )
 
-    config = types.GenerateContentConfig(
+    config_fast = types.GenerateContentConfig(
         temperature=0,
         response_mime_type="application/json",
         thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
+    config_plain = types.GenerateContentConfig(
+        temperature=0,
+        response_mime_type="application/json",
+    )
 
     errors = []
 
-    for model in MODELS:
-        for attempt in range(2):
+    for model in models:
+        for config in (config_fast, config_plain):
             try:
                 status.write(f"កំពុងស្គាល់សំឡេងដោយ {model}...")
                 response = client.models.generate_content(
@@ -275,16 +330,28 @@ def transcribe(api_key, audio_path, duration, status):
 
             except Exception as e:
                 message = str(e)
-                errors.append(f"{model}: {message}")
-                retryable = (
-                    "503" in message
-                    or "UNAVAILABLE" in message.upper()
-                    or "timeout" in message.lower()
-                    or "timed out" in message.lower()
-                )
-                if attempt == 0 and retryable:
+                low = message.lower()
+
+                # ម៉ូដែលមិនគាំទ្រ thinking → សាកម្តងទៀតដោយគ្មាន thinking
+                if config is config_fast and "thinking" in low:
+                    continue
+
+                errors.append(f"{model}: {message[:300]}")
+
+                # 503 / timeout → សាកម្តងទៀតម្តង
+                if (
+                    config is config_fast
+                    and (
+                        "503" in message
+                        or "unavailable" in low
+                        or "timeout" in low
+                        or "timed out" in low
+                    )
+                ):
                     time.sleep(2)
                     continue
+
+                # 404 / 429 / កំហុសផ្សេង → ទៅម៉ូដែលបន្ទាប់
                 break
 
     raise RuntimeError(
