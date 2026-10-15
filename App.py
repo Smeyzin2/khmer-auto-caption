@@ -1,5 +1,6 @@
 
 import os
+import re
 import subprocess
 import tempfile
 import wave
@@ -8,24 +9,24 @@ import urllib.request
 import imageio_ffmpeg
 import numpy as np
 import streamlit as st
-import torch
 from transformers import pipeline
 
 st.set_page_config(
     page_title="Khmer Auto Caption",
-    page_icon="🎬"
+    page_icon="🎬",
 )
 
 st.title("🎬 Khmer Auto Caption")
-st.write("បង្កើតវីដេអូ MP4 មានអក្សរខ្មែរ")
+st.write("បង្កើតវីដេអូមានចំណងជើងរងជាភាសាខ្មែរ")
 
 MODEL = "openai/whisper-small"
 
-
-
-FONT_URL = "https://cdn.jsdelivr.net/gh/notofonts/notofonts.github.io/fonts/NotoSansKhmer/full/otf/NotoSansKhmer-Regular.otf"
-
-
+FONT_URL = (
+    "https://cdn.jsdelivr.net/gh/"
+    "notofonts/notofonts.github.io/"
+    "fonts/NotoSansKhmer/full/otf/"
+    "NotoSansKhmer-Regular.otf"
+)
 
 
 @st.cache_resource
@@ -105,8 +106,40 @@ def escape_path(path):
     )
 
 
+def wrap_caption(text, max_chars=30):
+    """បំបែកអត្ថបទជាបន្ទាត់ខ្លីៗ ដោយរក្សាពាក្យតាមចន្លោះ។"""
+    text = re.sub(r"\s+", " ", text).strip()
+    words = text.split(" ")
+    lines = []
+    current = ""
+
+    for word in words:
+        candidate = (
+            word if not current
+            else current + " " + word
+        )
+
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            if current:
+                lines.append(current)
+
+            while len(word) > max_chars:
+                lines.append(word[:max_chars])
+                word = word[max_chars:]
+
+            current = word
+
+    if current:
+        lines.append(current)
+
+    # កុំឱ្យអក្សរច្រើនពេកក្នុងពេលតែមួយ
+    return "\n".join(lines)
+
+
 uploaded = st.file_uploader(
-    "ជ្រើសរើសវីដេអូរបស់អ្នក",
+    "ជ្រើសរើសវីដេអូ",
     type=["mp4", "mov", "mkv", "avi", "webm"],
 )
 
@@ -126,7 +159,7 @@ if uploaded:
                 folder, "khmer_subtitle.mp4"
             )
             font_path = os.path.join(
-                folder, "NotoSansKhmer-Regular.ttf"
+                folder, "NotoSansKhmer-Regular.otf"
             )
 
             with open(source, "wb") as f:
@@ -138,29 +171,36 @@ if uploaded:
                         FONT_URL, font_path
                     )
 
-                with st.spinner("កំពុងបំបែកសំឡេងពីវីដេអូ..."):
+                with st.spinner("កំពុងបំបែកសំឡេង..."):
                     extract_audio(source, audio_path)
                     audio = read_audio(audio_path)
 
-                with st.spinner("AI កំពុងស្គាល់សំឡេង..."):
+                with st.spinner(
+                    "AI កំពុងស្គាល់សំឡេងភាសាខ្មែរ..."
+                ):
                     model = load_model()
-                    
-result = model(
-    audio,
-    return_timestamps=True,
-    chunk_length_s=15,
-    generate_kwargs={
-        "language": "khmer",
-        "task": "transcribe",
-    },
-)
 
+                    result = model(
+                        audio,
+                        return_timestamps=True,
+                        chunk_length_s=15,
+                        generate_kwargs={
+                            "language": "khmer",
+                            "task": "transcribe",
+                        },
+                    )
 
-                transcript = result.get("text", "").strip()
+                transcript = result.get(
+                    "text", ""
+                ).strip()
+
                 chunks = result.get("chunks") or []
 
                 if not transcript:
-                    st.error("មិនអាចស្គាល់សំឡេងបានទេ។")
+                    st.error(
+                        "មិនអាចស្គាល់សំឡេងបានទេ។ "
+                        "សូមសាកល្បងវីដេអូដែលមានសំឡេងនិយាយច្បាស់។"
+                    )
                     st.stop()
 
                 entries = []
@@ -169,31 +209,36 @@ result = model(
                     text = chunk.get("text", "").strip()
                     stamps = chunk.get("timestamp") or (0, None)
 
-                    start = stamps[0] or 0
+                    start = stamps[0]
                     end = stamps[1]
 
-                    if text:
-                        if end is None:
-                            end = start + 3
+                    if start is None:
+                        start = 0
 
+                    if end is None:
+                        end = start + 3
+
+                    if text:
                         entries.append((
-                            start,
-                            max(start + 0.1, end),
+                            float(start),
+                            max(float(start) + 0.2, float(end)),
                             text,
                         ))
 
                 if not entries:
-                    entries = [(0, 10, transcript)]
+                    entries = [(0.0, 10.0, transcript)]
 
                 lines = []
 
                 for i, (start, end, text) in enumerate(
                     entries, 1
                 ):
+                    caption = wrap_caption(text)
+
                     lines.extend([
                         str(i),
                         f"{srt_time(start)} --> {srt_time(end)}",
-                        text,
+                        caption,
                         "",
                     ])
 
@@ -202,7 +247,9 @@ result = model(
                 ) as f:
                     f.write("\n".join(lines))
 
-                with st.spinner("កំពុងដាក់អក្សរខ្មែរលើវីដេអូ..."):
+                with st.spinner(
+                    "កំពុងបញ្ចូលអក្សរខ្មែរលើវីដេអូ..."
+                ):
                     subtitles = escape_path(srt_path)
                     fontsdir = escape_path(folder)
 
@@ -210,7 +257,8 @@ result = model(
                         f"subtitles=filename='{subtitles}'"
                         f":fontsdir='{fontsdir}'"
                         ":force_style='FontName=Noto Sans Khmer,"
-                        "FontSize=22,Outline=2,Shadow=1,Alignment=2'"
+                        "FontSize=20,Outline=2,Shadow=1,"
+                        "Alignment=2,MarginV=35'"
                     )
 
                     run_ffmpeg([
@@ -226,11 +274,15 @@ result = model(
 
                 with open(output_path, "rb") as f:
                     video_data = f.read()
-                st.video(video_data)
+
                 st.success("បង្កើតវីដេអូរួចរាល់!")
 
+                # បង្ហាញវីដេអូជាគំរូ
+                st.subheader("មើលវីដេអូជាគំរូ")
+                st.video(video_data)
+
                 st.download_button(
-                    "⬇️ ទាញយកវីដេអូ MP4 មានអក្សរខ្មែរ",
+                    "⬇️ ទាញយក MP4 មានអក្សរខ្មែរ",
                     data=video_data,
                     file_name="khmer_subtitle.mp4",
                     mime="video/mp4",
@@ -238,8 +290,14 @@ result = model(
                     use_container_width=True,
                 )
 
+                with st.expander("មើលអត្ថបទដែល AI ស្គាល់"):
+                    st.write(transcript)
+
             except Exception as e:
-                st.error("មានបញ្ហាក្នុងការបង្កើតវីដេអូ។")
+                st.error(
+                    "មិនអាចបង្កើតវីដេអូបានទេ។ "
+                    "សូមពិនិត្យកំហុសខាងក្រោម។"
+                )
                 st.code(str(e))
 
 else:
