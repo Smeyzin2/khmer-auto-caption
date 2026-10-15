@@ -16,10 +16,9 @@ st.set_page_config(
 )
 
 st.title("🎬 Khmer Auto Caption")
-st.write("បម្លែងសំឡេងក្នុងវីដេអូទៅជាអក្សរខ្មែរ និងបង្កើត Subtitle")
+st.write("បម្លែងសំឡេងទៅជាអក្សរខ្មែរ")
 
 MODEL_ID = "sengtha/whisper-base-khmer"
-
 
 @st.cache_resource
 def load_model():
@@ -30,150 +29,127 @@ def load_model():
         device=device
     )
 
-
-def timestamp(seconds):
+def to_srt_time(seconds):
     ms = int(max(0, seconds) * 1000)
-    hours = ms // 3600000
-    minutes = (ms % 3600000) // 60000
-    seconds_part = (ms % 60000) // 1000
-    millis = ms % 1000
-    return (
-        f"{hours:02}:{minutes:02}:"
-        f"{seconds_part:02},{millis:03}"
-    )
+    h = ms // 3600000
+    m = (ms % 3600000) // 60000
+    s = (ms % 60000) // 1000
+    ms = ms % 1000
+    return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-
-def extract_audio(input_path, output_path):
+def extract_audio(source, destination):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     subprocess.run(
         [
-            ffmpeg, "-y", "-i", input_path,
+            ffmpeg, "-y", "-i", source,
             "-vn", "-ac", "1", "-ar", "16000",
-            "-acodec", "pcm_s16le", output_path
+            destination
         ],
-        check=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE
+        stderr=subprocess.PIPE,
+        check=True
     )
 
-
 uploaded = st.file_uploader(
-    "ជ្រើសរើសវីដេអូ ឬឯកសារសំឡេង",
-    type=[
-        "mp4", "mov", "mkv", "avi", "webm",
-        "mp3", "wav", "m4a", "flac", "ogg"
-    ]
+    "📁 ជ្រើសវីដេអូ ឬសំឡេង",
+    type=["mp4", "mov", "mkv", "avi", "webm",
+          "mp3", "wav", "m4a", "flac", "ogg"]
 )
 
-if uploaded:
-    st.video(uploaded) if uploaded.type and uploaded.type.startswith("video/") else None
+if uploaded is not None:
+    st.success(f"បានបញ្ចូល៖ {uploaded.name}")
 
-    if st.button("បង្កើតអក្សរខ្មែរ", type="primary"):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            input_path = os.path.join(temp_dir, uploaded.name)
-            audio_path = os.path.join(temp_dir, "audio.wav")
+    if uploaded.type and uploaded.type.startswith("video/"):
+        st.video(uploaded.getvalue())
 
-            with open(input_path, "wb") as f:
-                f.write(uploaded.getvalue())
+    if st.button("បង្កើតអក្សរខ្មែរ", type="primary",
+                 use_container_width=True):
+        with tempfile.TemporaryDirectory() as folder:
+            safe_name = Path(uploaded.name).name
+            input_path = os.path.join(folder, safe_name)
+            audio_path = os.path.join(folder, "audio.wav")
+
+            with open(input_path, "wb") as file:
+                file.write(uploaded.getvalue())
 
             try:
-                with st.spinner("កំពុងរៀបចំសំឡេង..."):
-                    suffix = Path(uploaded.name).suffix.lower()
-
-                    if suffix in {
-                        ".mp4", ".mov", ".mkv", ".avi", ".webm"
-                    }:
+                if Path(safe_name).suffix.lower() in [
+                    ".mp4", ".mov", ".mkv", ".avi", ".webm"
+                ]:
+                    with st.spinner("កំពុងរៀបចំសំឡេង..."):
                         extract_audio(input_path, audio_path)
-                    else:
-                        audio_path = input_path
+                else:
+                    audio_path = input_path
 
                 with st.spinner(
-                    "AI កំពុងស្ដាប់សំឡេង និងបង្កើតអក្សរ... "
-                    "សូមរង់ចាំ។"
+                    "AI កំពុងស្ដាប់សំឡេង... "
+                    "ការប្រើលើកដំបូងអាចចំណាយពេល"
                 ):
                     recognizer = load_model()
                     result = recognizer(
                         audio_path,
                         return_timestamps=True,
-                        chunk_length_s=25,
-                        stride_length_s=5
+                        chunk_length_s=25
                     )
 
+                transcript = result.get("text", "").strip()
                 chunks = result.get("chunks") or []
-                text = result.get("text", "").strip()
 
-                srt_lines = []
-                plain_lines = []
-
-                for index, chunk in enumerate(chunks, start=1):
-                    caption = chunk.get("text", "").strip()
-                    times = chunk.get("timestamp") or (None, None)
-
-                    start = times[0]
-                    end = times[1]
-
-                    if not caption:
-                        continue
-
-                    plain_lines.append(caption)
-
-                    if start is None:
-                        start = 0
-                    if end is None:
-                        end = start + 3
-
-                    srt_lines.extend([
-                        str(index),
-                        f"{timestamp(start)} --> {timestamp(end)}",
-                        caption,
-                        ""
-                    ])
-
-                if not plain_lines and text:
-                    plain_lines = [text]
-                    srt_lines = [
-                        "1",
-                        "00:00:00,000 --> 00:00:10,000",
-                        text,
-                        ""
-                    ]
-
-                if not text:
-                    st.warning(
-                        "មិនអាចស្គាល់សំឡេងបានទេ។ "
-                        "សូមសាកល្បងឯកសារផ្សេង។"
-                    )
+                if not transcript:
+                    st.warning("មិនអាចស្គាល់សំឡេងបានទេ។")
                 else:
-                    st.success("បង្កើតអក្សរបានហើយ!")
-
-                    st.subheader("អត្ថបទដែលស្គាល់បាន")
+                    st.success("បង្កើតអត្ថបទបានហើយ!")
                     st.text_area(
-                        "អត្ថបទ",
-                        value="\n".join(plain_lines) or text,
+                        "អត្ថបទខ្មែរ",
+                        transcript,
                         height=220
                     )
 
+                    srt = []
+                    for i, chunk in enumerate(chunks, 1):
+                        caption = chunk.get("text", "").strip()
+                        times = chunk.get("timestamp") or (0, None)
+                        start = times[0] or 0
+                        end = times[1]
+                        if not caption:
+                            continue
+                        if end is None:
+                            end = start + 3
+                        srt.extend([
+                            str(i),
+                            f"{to_srt_time(start)} --> "
+                            f"{to_srt_time(end)}",
+                            caption,
+                            ""
+                        ])
+
+                    if not srt:
+                        srt = [
+                            "1",
+                            "00:00:00,000 --> 00:00:10,000",
+                            transcript,
+                            ""
+                        ]
+
                     st.download_button(
                         "⬇️ ទាញយក Subtitle (.srt)",
-                        data="\n".join(srt_lines),
+                        "\n".join(srt),
                         file_name="khmer_subtitles.srt",
-                        mime="text/plain"
+                        mime="text/plain",
+                        use_container_width=True
                     )
 
                     st.download_button(
                         "⬇️ ទាញយកអត្ថបទ (.txt)",
-                        data="\n".join(plain_lines) or text,
+                        transcript,
                         file_name="khmer_transcript.txt",
-                        mime="text/plain"
+                        mime="text/plain",
+                        use_container_width=True
                     )
 
             except Exception as error:
-                st.error("កម្មវិធីមិនអាចដំណើរការឯកសារនេះបានទេ។")
+                st.error("កម្មវិធីមានបញ្ហាពេលដំណើរការ។")
                 st.code(str(error))
-                st.info(
-                    "សូមពិនិត្យ Logs ប្រសិនបើបញ្ហានៅតែបន្ត។"
-                )
-else:
-    st.info("សូមបញ្ចូលវីដេអូ ឬសំឡេងជាមុនសិន។")
 
-st.caption("Khmer Auto Caption · AI Speech Recognition")
+else:
+    st.info("សូមជ្រើសវីដេអូ ឬឯកសារសំឡេងជាមុនសិន។")
