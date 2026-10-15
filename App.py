@@ -20,7 +20,8 @@ st.set_page_config(
 st.title("🎬 Khmer Auto Caption")
 st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ តាមពេលនិយាយ")
 
-MODEL = "openai/whisper-small"
+# ម៉ូដែលតូចជាងមុន ដើម្បីជួយឱ្យដំណើរការលឿន
+MODEL = "openai/whisper-tiny"
 
 FONTS = {
     "Noto Sans Khmer — ច្បាស់ងាយអាន": {
@@ -129,7 +130,6 @@ def escape_path(path):
 
 
 def split_caption(text, max_chars=26):
-    """បំបែកអត្ថបទវែងជាឃ្លាខ្លីៗ។"""
     text = re.sub(r"\s+", " ", text).strip()
     if not text:
         return []
@@ -147,7 +147,6 @@ def split_caption(text, max_chars=26):
             if current:
                 result.append(current)
 
-            # កុំទុកពាក្យវែងពេកជាឃ្លាតែមួយ
             if len(word) > max_chars:
                 for i in range(0, len(word), max_chars):
                     result.append(word[i:i + max_chars])
@@ -162,9 +161,7 @@ def split_caption(text, max_chars=26):
 
 
 def split_interval(text, start, end):
-    """ចែកពេលវេលារបស់ឃ្លាមួយទៅឃ្លាតូចៗ។"""
     pieces = split_caption(text)
-
     if not pieces:
         return []
 
@@ -190,21 +187,13 @@ def split_interval(text, start, end):
 
         piece_end = max(piece_start + 0.15, piece_end)
 
-        result.append((
-            piece_start,
-            piece_end,
-            piece,
-        ))
+        result.append((piece_start, piece_end, piece))
         cursor = piece_end
 
     return result
 
 
 def make_timed_entries(chunks, transcript, duration):
-    """
-    ប្រើ timestamps ពី AI ប្រសិនបើមាន។
-    បើមិនមាន ឬមិនត្រឹមត្រូវ ចែកអត្ថបទតាមរយៈពេលវីដេអូ។
-    """
     entries = []
 
     for chunk in chunks:
@@ -236,8 +225,7 @@ def make_timed_entries(chunks, transcript, duration):
 
         entries.extend(split_interval(text, start, end))
 
-    # បើ AI មិនផ្ដល់ពេលវេលាល្អ ត្រូវចែកអត្ថបទទាំងមូល
-    # ជាឃ្លាខ្លីៗ ហើយចែកពេលតាមប្រវែងអត្ថបទ។
+    # បើ AI មិនផ្ដល់ timestamps ប្រើការចែកពេលតាមរយៈពេលវីដេអូ
     if not entries:
         entries = split_interval(
             transcript, 0.0, max(duration, 1.0)
@@ -245,20 +233,17 @@ def make_timed_entries(chunks, transcript, duration):
 
     entries.sort(key=lambda item: item[0])
 
-    # កែពេលវេលាដែលត្រួតគ្នា ដើម្បីកុំឱ្យឃ្លាច្រើន
-    # បង្ហាញលើអេក្រង់ក្នុងពេលតែមួយ។
+    # កាត់ការត្រួតគ្នារវាងឃ្លា
     fixed = []
 
     for start, end, text in entries:
-        if fixed:
-            previous_start, previous_end, previous_text = fixed[-1]
-
-            if start < previous_end:
-                fixed[-1] = (
-                    previous_start,
-                    max(previous_start + 0.15, start),
-                    previous_text,
-                )
+        if fixed and start < fixed[-1][1]:
+            prev_start, prev_end, prev_text = fixed[-1]
+            fixed[-1] = (
+                prev_start,
+                max(prev_start + 0.15, start),
+                prev_text,
+            )
 
         if end > start:
             fixed.append((start, end, text))
@@ -336,6 +321,7 @@ if uploaded:
                         font["url"],
                         headers={"User-Agent": "Mozilla/5.0"},
                     )
+
                     with urllib.request.urlopen(
                         request, timeout=30
                     ) as response:
@@ -354,7 +340,7 @@ if uploaded:
                     audio, duration = read_audio(audio_path)
 
                 with st.spinner(
-                    "AI កំពុងស្គាល់សំឡេងខ្មែរ..."
+                    "AI Tiny កំពុងស្គាល់សំឡេងខ្មែរ..."
                 ):
                     model = load_model()
                     result = model(
@@ -417,7 +403,7 @@ if uploaded:
                     )
 
                 with st.spinner(
-                    "កំពុងដាក់អក្សរលើវីដេអូ..."
+                    "កំពុងបង្កប់អក្សរលើវីដេអូ..."
                 ):
                     subtitles = escape_path(srt_path)
                     fontsdir = escape_path(folder)
@@ -438,8 +424,9 @@ if uploaded:
                         "-vf", vf,
                         "-c:v", "libx264",
                         "-preset", "ultrafast",
-                        "-crf", "23",
+                        "-crf", "28",
                         "-c:a", "aac",
+                        "-b:a", "96k",
                         "-movflags", "+faststart",
                         output_path,
                     ])
