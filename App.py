@@ -9,12 +9,14 @@ import unicodedata
 import streamlit as st
 import imageio_ffmpeg
 from google import genai
+from google.genai import types
 
 st.set_page_config(page_title="Khmer Auto Caption", page_icon="🎬")
 st.title("🎬 Khmer Auto Caption")
 st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ ដោយ AI")
 
 PRIMARY_MODEL = "gemini-3.5-transcribe"
+REQUEST_TIMEOUT_MS = 90000  # 90 វិនាទី
 
 FONT_URL = (
     "https://raw.githubusercontent.com/google/fonts/"
@@ -132,7 +134,6 @@ def get_fallback_models(client):
     except Exception:
         pass
 
-    # ម៉ូដែលដែលមាននៅក្នុងបញ្ជី API របស់គណនី ត្រូវបានសាកមុន។
     preferred = [
         "gemini-3.8-flash",
         "gemini-3-flash",
@@ -145,11 +146,39 @@ def get_fallback_models(client):
     return ordered[:3]
 
 
+def wait_until_active(client, audio, status, max_wait=60):
+    """រង់ចាំឱ្យឯកសារសំឡេងរួចរាល់ (ACTIVE) មុនប្រើ។"""
+    waited = 0
+    while waited < max_wait:
+        state = getattr(audio, "state", None)
+        state_name = getattr(state, "name", str(state or "")).upper()
+        if "PROCESSING" not in state_name:
+            return audio
+        status.write("កំពុងរង់ចាំឯកសារសំឡេងរួចរាល់...")
+        time.sleep(2)
+        waited += 2
+        audio = client.files.get(name=audio.name)
+    return audio
+
+
+def is_timeout(message):
+    low = message.lower()
+    return (
+        "timeout" in low
+        or "timed out" in low
+        or "deadline" in low
+    )
+
+
 def transcribe(api_key, audio_path, status):
-    client = genai.Client(api_key=api_key)
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
 
     status.write("កំពុងផ្ទុកសំឡេងទៅ AI...")
     audio = client.files.upload(file=audio_path)
+    audio = wait_until_active(client, audio, status)
     errors = []
 
     # សាកម៉ូដែល Transcribe ត្រឹម 2 ដងប៉ុណ្ណោះ។
@@ -183,8 +212,11 @@ def transcribe(api_key, audio_path, status):
             message = str(e)
             errors.append(f"{PRIMARY_MODEL}: {message}")
 
-            # បើ API ប្រាប់ថាកូតាអស់ កុំរង់ចាំយូរ។
+            # កូតាអស់ ឬ timeout → ទៅម៉ូដែលបម្រុងភ្លាម
             if "429" in message or "rate limit" in message.lower():
+                break
+            if is_timeout(message):
+                status.write("Transcribe ឆ្លើយយឺតពេក សាកម៉ូដែលបម្រុង...")
                 break
 
             if attempt == 0 and (
@@ -195,7 +227,6 @@ def transcribe(api_key, audio_path, status):
 
             break
 
-    # រកម៉ូដែលបម្រុងពីបញ្ជីរបស់ API Key ជំនួសការហៅឈ្មោះចៃដន្យ។
     fallback_models = get_fallback_models(client)
 
     if not fallback_models:
@@ -220,7 +251,7 @@ def transcribe(api_key, audio_path, status):
                 model=model,
                 contents=[
                     prompt,
-                    genai.types.Part.from_uri(
+                    types.Part.from_uri(
                         file_uri=audio.uri,
                         mime_type=audio.mime_type,
                     ),
@@ -236,10 +267,7 @@ def transcribe(api_key, audio_path, status):
             errors.append(f"{model}: មិនមានអត្ថបទ")
 
         except Exception as e:
-            message = str(e)
-            errors.append(f"{model}: {message}")
-
-            # បន្តទៅម៉ូដែលបន្ទាប់ភ្លាមៗ មិនរង់ចាំយូរ។
+            errors.append(f"{model}: {e}")
             continue
 
     raise RuntimeError(
@@ -375,7 +403,7 @@ if uploaded:
                 with open(subtitle_path, "w", encoding="utf-8-sig") as f:
                     f.write("\n".join(lines))
 
-                with st.spinner("៤/۴ កំពុងបង្កប់អក្សរចូល MP4..."):
+                with st.spinner("៤/៤ កំពុងបង្កប់អក្សរចូល MP4..."):
                     vf = (
                         f"subtitles=filename='{escape_path(subtitle_path)}'"
                         f":fontsdir='{escape_path(folder)}'"
