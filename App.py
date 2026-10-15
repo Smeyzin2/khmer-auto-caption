@@ -13,12 +13,31 @@ import imageio_ffmpeg
 from google import genai
 from google.genai import types
 
-st.set_page_config(page_title="Khmer Auto Caption", page_icon="🎬")
-st.title("🎬 Khmer Auto Caption")
-st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ ដោយ AI")
+st.set_page_config(
+    page_title="Khmer Auto Caption",
+    page_icon="🎬",
+    layout="centered",
+)
+
+# លាក់ម៉ឺនុយ និងរបារបច្ចេកទេសរបស់ Streamlit
+st.markdown(
+    """
+    <style>
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    [data-testid="stToolbar"] {visibility: hidden;}
+    [data-testid="stDecoration"] {display: none;}
+    .stDeployButton {display: none;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+DEBUG = bool(st.secrets.get("DEBUG", False))
 
 REQUEST_TIMEOUT_MS = 120000  # 120 វិនាទី
 MAX_CAPTION_CHARS = 26
+MAX_DOWNLOAD_MB = 300
 
 PREFERRED_MODELS = [
     "gemini-3.8-flash",
@@ -34,6 +53,43 @@ FONT_URL = (
     "main/ofl/battambang/Battambang-Regular.ttf"
 )
 FONT_NAME = "Battambang"
+
+# ឈ្មោះ: (ទំហំអតិបរមា, CRF, preset)
+QUALITY = {
+    "⚡ លឿន": (480, 28, "ultrafast"),
+    "✨ ល្អ (ណែនាំ)": (720, 24, "veryfast"),
+    "💎 គុណភាពខ្ពស់": (0, 20, "veryfast"),
+}
+
+
+class UserError(RuntimeError):
+    """សារកំហុសដែលសមស្របនឹងបង្ហាញដល់អ្នកប្រើផ្ទាល់។"""
+
+
+def friendly_message(error):
+    if isinstance(error, UserError):
+        return str(error)
+
+    low = str(error).lower()
+
+    if "429" in low or "resource_exhausted" in low or "quota" in low:
+        return (
+            "មានអ្នកប្រើច្រើនពេកនៅពេលនេះ។ "
+            "សូមរង់ចាំមួយភ្លែត រួចសាកម្តងទៀត។"
+        )
+    if (
+        "503" in low
+        or "unavailable" in low
+        or "high demand" in low
+        or "overloaded" in low
+        or "timeout" in low
+        or "timed out" in low
+    ):
+        return "ប្រព័ន្ធ AI កំពុងរវល់។ សូមសាកម្តងទៀតក្នុងមួយភ្លែត។"
+    if "api key" in low or "api_key" in low or "permission" in low:
+        return "សេវា AI មានបញ្ហា។ សូមទាក់ទងម្ចាស់កម្មវិធី។"
+
+    return "ការបង្កើតវីដេអូមិនបានសម្រេច។ សូមសាកម្តងទៀត។"
 
 
 def fix_khmer(text):
@@ -87,7 +143,9 @@ def probe_video(path):
         err,
     )
     if not match:
-        raise RuntimeError("មិនអាចអានរយៈពេលវីដេអូបានទេ។")
+        raise UserError(
+            "មិនអាចអានវីដេអូនេះបានទេ។ សូមសាកវីដេអូ MP4 ផ្សេង។"
+        )
     h, m, s = match.groups()
     duration = int(h) * 3600 + int(m) * 60 + float(s)
 
@@ -146,6 +204,67 @@ def get_font_family(path, default):
     except Exception:
         pass
     return default
+
+
+def normalize_link(url):
+    """បំលែងតំណ Google Drive ទៅជាតំណទាញយកផ្ទាល់។"""
+    url = url.strip()
+    match = re.search(r"drive\.google\.com/file/d/([\w-]+)", url)
+    if not match:
+        match = re.search(r"drive\.google\.com/open\?id=([\w-]+)", url)
+    if match:
+        return (
+            "https://drive.google.com/uc?export=download&id="
+            + match.group(1)
+        )
+    return url
+
+
+def download_video(url, path, progress):
+    """ទាញយកវីដេអូពីតំណដោយ server (លឿនជាងការ upload ពីទូរសព្ទ)។"""
+    url = normalize_link(url)
+    limit = MAX_DOWNLOAD_MB * 1024 * 1024
+
+    try:
+        request = urllib.request.Request(
+            url,
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(request, timeout=30) as response:
+            ctype = (response.headers.get("Content-Type") or "").lower()
+            if "text/html" in ctype:
+                raise UserError(
+                    "តំណនេះមិនមែនជាវីដេអូផ្ទាល់ទេ។ "
+                    "សូមប្រើតំណ .mp4 ផ្ទាល់ ឬ Google Drive "
+                    "ដែលចែករំលែកជាសាធារណៈ។"
+                )
+
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            with open(path, "wb") as f:
+                while True:
+                    chunk = response.read(1024 * 256)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    done += len(chunk)
+                    if done > limit:
+                        raise UserError(
+                            f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។ "
+                            "សូមប្រើវីដេអូតូចជាងនេះ។"
+                        )
+                    if total:
+                        progress.progress(min(1.0, done / total))
+    except UserError:
+        raise
+    except Exception:
+        raise UserError(
+            "ទាញយកវីដេអូពីតំណមិនបានទេ។ សូមពិនិត្យតំណ ឬសាកម្តងទៀត។"
+        )
+
+    if os.path.getsize(path) < 1000:
+        raise UserError("ទាញយកវីដេអូមិនបាន។ សូមពិនិត្យតំណ។")
+    progress.progress(1.0)
 
 
 def extract_audio(video_path, audio_path):
@@ -457,6 +576,12 @@ def write_ass(path, captions, font_family, font_size, outline_size,
 
 # ---------- ហៅ Gemini ----------
 
+def dbg(status, message):
+    """បង្ហាញព័ត៌មានបច្ចេកទេស តែក្នុងមុខងារ DEBUG ប៉ុណ្ណោះ។"""
+    if DEBUG:
+        status.write(message)
+
+
 def call_with_retry(client, model, prompt, audio_bytes, config, status):
     """ហៅម៉ូដែល ហើយសាកម្តងទៀតបើ Google រវល់ (503) ឬកូតាពេញ (429)។"""
     for attempt in range(3):
@@ -490,16 +615,14 @@ def call_with_retry(client, model, prompt, audio_bytes, config, status):
 
             if busy and attempt < 2:
                 wait = 4 * (attempt + 1)
-                status.write(
-                    f"{model} រវល់ រង់ចាំ {wait} វិនាទី រួចសាកម្តងទៀត..."
-                )
+                status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
+                dbg(status, f"[{model}] busy, wait {wait}s")
                 time.sleep(wait)
                 continue
 
             if quota and attempt < 1:
-                status.write(
-                    f"{model} កូតាពេញ រង់ចាំ 20 វិនាទី រួចសាកម្តងទៀត..."
-                )
+                status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
+                dbg(status, f"[{model}] quota, wait 20s")
                 time.sleep(20)
                 continue
 
@@ -516,21 +639,17 @@ def transcribe(api_key, audio_path, duration, status):
         audio_bytes = f.read()
 
     if len(audio_bytes) > 18 * 1024 * 1024:
-        raise RuntimeError(
-            "សំឡេងធំពេក។ សូមប្រើវីដេអូខ្លីជាងនេះ (ប្រហែលក្រោម ៣០ នាទី)។"
+        raise UserError(
+            "វីដេអូវែងពេក។ សូមប្រើវីដេអូខ្លីជាងនេះ "
+            "(ប្រហែលក្រោម ៣០ នាទី)។"
         )
 
-    status.write("កំពុងរកម៉ូដែលដែលអាចប្រើបាន...")
     models = get_available_models(client)
 
     if not models:
-        raise RuntimeError(
-            "API Key នេះមើលមិនឃើញម៉ូដែលណាមួយទេ។\n"
-            "សូមបង្កើត Key ថ្មីនៅ aistudio.google.com "
-            "ហើយដាក់ក្នុង Streamlit Secrets (GEMINI_API_KEY)។"
-        )
+        raise RuntimeError("API Key មើលមិនឃើញម៉ូដែលណាមួយទេ។ api key")
 
-    status.write("ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
+    dbg(status, "ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
 
     prompt = (
         "Transcribe this audio exactly as spoken or sung. "
@@ -566,7 +685,7 @@ def transcribe(api_key, audio_path, duration, status):
 
     for model in models:
         for config in configs:
-            status.write(f"កំពុងស្គាល់សំឡេងដោយ {model}...")
+            dbg(status, f"កំពុងសាកម៉ូដែល {model}...")
 
             try:
                 response = call_with_retry(
@@ -603,18 +722,28 @@ def transcribe(api_key, audio_path, duration, status):
     )
 
 
+def build_video_filter(max_side):
+    """បង្រួមវីដេអូ (បើជ្រើស) ហើយបង្កប់អក្សរ។"""
+    ass = "ass=filename=captions.ass:fontsdir=."
+    if max_side and max_side > 0:
+        scale = (
+            f"scale=w='if(gt(iw,ih),-2,min({max_side},iw))':"
+            f"h='if(gt(iw,ih),min({max_side},ih),-2)'"
+        )
+        return f"{scale},{ass},format=yuv420p"
+    return f"{ass},format=yuv420p"
+
+
 # ---------- ចំណុចប្រទាក់ ----------
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
-if not API_KEY:
-    st.error("រកមិនឃើញ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។")
-    st.stop()
+st.title("🎬 Khmer Auto Caption")
+st.caption("បង្កើតវីដេអូមានអក្សរខ្មែរដោយស្វ័យប្រវត្តិ ដោយ AI")
 
-st.subheader("🎨 កំណត់អក្សរ")
-font_size = st.slider("ទំហំអក្សរ", 16, 36, 25)
-outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
-font_color = st.selectbox("ពណ៌អក្សរ", ["ស", "លឿង", "បៃតង", "ខៀវ"])
+if not API_KEY:
+    st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
+    st.stop()
 
 colors = {
     "ស": "&H00FFFFFF",
@@ -623,20 +752,50 @@ colors = {
     "ខៀវ": "&H00FF0000",
 }
 
-uploaded = st.file_uploader(
-    "ជ្រើសរើសវីដេអូ",
-    type=["mp4", "mov", "mkv", "avi", "webm"],
+mode = st.radio(
+    "វិធីបញ្ចូលវីដេអូ",
+    ["📁 Upload ឯកសារ", "🔗 បិទភ្ជាប់តំណ (Link)"],
+    horizontal=True,
 )
 
-if uploaded:
-    video_data = uploaded.getvalue()
-    st.video(video_data)
+uploaded = None
+video_url = ""
 
+if mode.startswith("📁"):
+    uploaded = st.file_uploader(
+        "ជ្រើសរើសវីដេអូ",
+        type=["mp4", "mov", "mkv", "avi", "webm"],
+        help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link",
+    )
+else:
+    video_url = st.text_input(
+        "តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ)",
+        placeholder="https://...",
+    )
+
+quality_label = st.selectbox(
+    "គុណភាពវីដេអូ",
+    list(QUALITY.keys()),
+    index=1,
+)
+
+with st.expander("🎨 កំណត់អក្សរ"):
+    font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
+    outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
+    font_color = st.selectbox("ពណ៌អក្សរ", list(colors.keys()))
+
+has_input = uploaded is not None or bool(video_url.strip())
+
+if not has_input:
+    st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
+else:
     if st.button(
         "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ",
         type="primary",
         use_container_width=True,
     ):
+        status = st.status("កំពុងដំណើរការ...", expanded=True)
+
         with tempfile.TemporaryDirectory() as folder:
             source = os.path.join(folder, "input.mp4")
             audio_path = os.path.join(folder, "audio.mp3")
@@ -644,37 +803,36 @@ if uploaded:
             output_path = os.path.join(folder, "output.mp4")
             font_path = os.path.join(folder, "Battambang.ttf")
 
-            with open(source, "wb") as f:
-                f.write(video_data)
-
             try:
-                with st.spinner("១/៤ កំពុងទាញយក Font ខ្មែរ..."):
-                    download_font(font_path)
-                    font_family = get_font_family(font_path, FONT_NAME)
+                if uploaded is not None:
+                    with open(source, "wb") as f:
+                        f.write(uploaded.getbuffer())
+                else:
+                    status.write("កំពុងទាញយកវីដេអូ...")
+                    bar = status.progress(0.0)
+                    download_video(video_url, source, bar)
 
-                with st.spinner("២/៤ កំពុងដកសំឡេង..."):
-                    extract_audio(source, audio_path)
-                    duration, vid_w, vid_h = probe_video(source)
+                status.write("១/៤ កំពុងរៀបចំ...")
+                download_font(font_path)
+                font_family = get_font_family(font_path, FONT_NAME)
 
-                status = st.status(
-                    "៣/៤ កំពុងស្គាល់សំឡេង...",
-                    expanded=True,
-                )
+                status.write("២/៤ កំពុងដកសំឡេង...")
+                extract_audio(source, audio_path)
+                duration, vid_w, vid_h = probe_video(source)
+
+                status.write("៣/៤ កំពុងស្តាប់សំឡេង...")
                 segments, used_model = transcribe(
                     API_KEY, audio_path, duration, status
                 )
-                status.update(
-                    label=f"បានស្គាល់សំឡេងដោយ {used_model}",
-                    state="complete",
+
+                captions, sync_mode = build_captions(
+                    segments, audio_path, duration
                 )
 
-                with st.spinner("កំពុងតម្រឹមអក្សរតាមសំឡេង..."):
-                    captions, sync_mode = build_captions(
-                        segments, audio_path, duration
-                    )
-
                 if not captions:
-                    raise RuntimeError("មិនអាចបង្កើត Subtitle បានទេ។")
+                    raise UserError(
+                        "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។"
+                    )
 
                 write_ass(
                     ass_path,
@@ -687,33 +845,37 @@ if uploaded:
                     vid_h,
                 )
 
-                with st.spinner("៤/៤ កំពុងបង្កប់អក្សរចូល MP4..."):
-                    ffmpeg_log = run_ffmpeg(
-                        [
-                            "-i", "input.mp4",
-                            "-vf", "ass=filename=captions.ass:fontsdir=.",
-                            "-c:v", "libx264",
-                            "-preset", "ultrafast",
-                            "-crf", "26",
-                            "-c:a", "aac",
-                            "-b:a", "128k",
-                            "-movflags", "+faststart",
-                            "output.mp4",
-                        ],
-                        cwd=folder,
-                        verbose=True,
-                    )
+                status.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
+                max_side, crf, preset = QUALITY[quality_label]
+                ffmpeg_log = run_ffmpeg(
+                    [
+                        "-i", "input.mp4",
+                        "-vf", build_video_filter(max_side),
+                        "-c:v", "libx264",
+                        "-preset", preset,
+                        "-crf", str(crf),
+                        "-c:a", "aac",
+                        "-b:a", "128k",
+                        "-movflags", "+faststart",
+                        "output.mp4",
+                    ],
+                    cwd=folder,
+                    verbose=DEBUG,
+                )
 
                 with open(output_path, "rb") as f:
                     result_video = f.read()
 
-                st.success(
-                    f"រួចរាល់! ម៉ូដែល៖ {used_model} | "
-                    f"ការតម្រឹម៖ {sync_mode}"
+                status.update(
+                    label="រួចរាល់!",
+                    state="complete",
+                    expanded=False,
                 )
+
+                st.success("វីដេអូរបស់អ្នករួចរាល់ហើយ 🎉")
                 st.video(result_video)
                 st.download_button(
-                    "⬇️ ទាញយកវីដេអូ MP4",
+                    "⬇️ ទាញយកវីដេអូ",
                     data=result_video,
                     file_name="khmer_caption.mp4",
                     mime="video/mp4",
@@ -721,24 +883,32 @@ if uploaded:
                     use_container_width=True,
                 )
 
-                with st.expander("អត្ថបទដែល AI ស្គាល់"):
-                    for start, end, text in captions:
-                        st.write(f"[{start:.1f}s - {end:.1f}s] {text}")
+                with st.expander("📝 មើលអត្ថបទ"):
+                    for _, _, text in captions:
+                        st.write(text)
 
-                with st.expander("ព័ត៌មាន Font (សម្រាប់ពិនិត្យ)"):
-                    st.write(f"ឈ្មោះ Font ដែលប្រើ: {font_family}")
-                    font_lines = [
-                        line
-                        for line in ffmpeg_log.splitlines()
-                        if "fontselect" in line.lower()
-                    ][:8]
-                    if font_lines:
-                        st.text("\n".join(font_lines))
-                    else:
-                        st.text("រកមិនឃើញបន្ទាត់ fontselect ក្នុង log ទេ។")
+                if DEBUG:
+                    with st.expander("🛠 DEBUG"):
+                        size_mb = len(result_video) / (1024 * 1024)
+                        st.write(f"ម៉ូដែល: {used_model}")
+                        st.write(f"ការតម្រឹម: {sync_mode}")
+                        st.write(f"Font: {font_family}")
+                        st.write(f"ទំហំលទ្ធផល: {size_mb:.1f}MB")
+                        font_lines = [
+                            line
+                            for line in ffmpeg_log.splitlines()
+                            if "fontselect" in line.lower()
+                        ][:8]
+                        st.text("\n".join(font_lines) or "no fontselect")
+                        for start, end, text in captions:
+                            st.write(f"[{start:.1f}s - {end:.1f}s] {text}")
 
             except Exception as error:
-                st.error("ការបង្កើតវីដេអូបរាជ័យ។")
-                st.text(str(error))
-else:
-    st.info("សូមជ្រើសរើសវីដេអូជាមុនសិន។")
+                status.update(
+                    label="មានបញ្ហា",
+                    state="error",
+                    expanded=False,
+                )
+                st.error(friendly_message(error))
+                if DEBUG:
+                    st.text(str(error))
