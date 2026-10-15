@@ -3,6 +3,7 @@ import re
 import json
 import time
 import shutil
+import asyncio
 import tempfile
 import subprocess
 import urllib.request
@@ -10,6 +11,7 @@ import unicodedata
 
 import streamlit as st
 import imageio_ffmpeg
+import edge_tts
 from google import genai
 from google.genai import types
 
@@ -80,6 +82,12 @@ LANGUAGES = {
     "ជប៉ុន": "Japanese",
     "កូរ៉េ": "Korean",
     "បារាំង": "French",
+}
+
+# សំឡេងអានខ្មែរ (edge-tts)
+TTS_VOICES = {
+    "ស្រី (Sreymom)": "km-KH-SreymomNeural",
+    "ប្រុស (Piseth)": "km-KH-PisethNeural",
 }
 
 
@@ -732,7 +740,7 @@ def call_with_retry(client, model, prompt, audio_bytes, config, status):
             raise
 
 
-def build_prompt(duration, source_language):
+def build_prompt(duration, source_language, concise=False):
     """បង្កើតសេចក្តីណែនាំឱ្យ AI៖ ស្តាប់ភាសាអ្វីក៏បាន ហើយចេញជាអក្សរខ្មែរ។"""
     if source_language == "Khmer":
         task = (
@@ -756,6 +764,15 @@ def build_prompt(duration, source_language):
             "script. Translate the meaning, not word for word."
         )
 
+    concise_rule = ""
+    if concise:
+        concise_rule = (
+            "Each Khmer line must be short enough to be spoken naturally "
+            "within its own time range: at most about 11 Khmer "
+            "characters per second of that segment. "
+            "Prefer concise wording. "
+        )
+
     return (
         task
         + " The text of every segment MUST be written only in Khmer "
@@ -765,7 +782,8 @@ def build_prompt(duration, source_language):
         "Put a normal space between Khmer phrases so lines can wrap. "
         "Split into short subtitle segments, each about 1.5 to 4 seconds "
         "long and at most 26 characters. "
-        "Timestamps must match exactly when each part is heard. "
+        + concise_rule
+        + "Timestamps must match exactly when each part is heard. "
         f"The audio is {duration:.1f} seconds long. "
         "Return ONLY a JSON array. Each item must be an object: "
         '{"start": <seconds as number>, "end": <seconds as number>, '
@@ -774,7 +792,8 @@ def build_prompt(duration, source_language):
     )
 
 
-def transcribe(api_key, audio_path, duration, source_language, status):
+def transcribe(api_key, audio_path, duration, source_language, status,
+               concise=False):
     client = genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
@@ -796,7 +815,7 @@ def transcribe(api_key, audio_path, duration, source_language, status):
 
     dbg(status, "ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
 
-    prompt = build_prompt(duration, source_language)
+    prompt = build_prompt(duration, source_language, concise)
 
     # ការកំណត់ពីលឿន → ងាយ → គ្មានការកំណត់
     configs = [
@@ -875,6 +894,101 @@ def transcribe(api_key, audio_path, duration, source_language, status):
     )
 
 
+# ---------- សំឡេងអានខ្មែរ (Dubbing) ----------
+
+def tts_segment(text, voice, path):
+    """បង្កើតសំឡេងអានខ្មែរមួយឃ្លា។"""
+    async def _go():
+        await edge_tts.Communicate(text, voice).save(path)
+
+    asyncio.run(_go())
+
+
+def shorten_khmer(client, model, text, max_seconds):
+    """ឱ្យ AI បង្រួមប្រយោគខ្មែរ ឱ្យអានទាន់ក្នុងពេលកំណត់។"""
+    limit = max(6, int(max_seconds * 11))
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=(
+                f"Shorten this Khmer sentence to at most {limit} "
+                "characters. Keep the meaning. Khmer script only. "
+                f"Return only the sentence.\n{text}"
+            ),
+        )
+        out = fix_khmer(getattr(response, "text", "") or "")
+        return out if has_khmer(out) else text
+    except Exception:
+        return text
+
+
+def make_dub(folder, segments, voice, duration, keep_bg, client, model):
+    """បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗ។"""
+    inputs, filters = [], []
+    n = 0
+
+    if keep_bg:
+        inputs += ["-i", "audio.mp3"]
+        filters.append("[0:a]volume=0.15[bg]")
+        n = 1
+
+    first_voice = n
+    voices = 0
+
+    for i, (s, e, t) in enumerate(segments):
+        next_s = segments[i + 1][0] if i + 1 < len(segments) else duration
+        slot = max(0.5, min(next_s - 0.05, e + 0.4) - s)
+
+        name = f"tts_{i}.mp3"
+        path = os.path.join(folder, name)
+
+        try:
+            tts_segment(t, voice, path)
+            d, _, _ = probe_video(path)
+
+            # វែងពេក → បង្រួមប្រយោគ ហើយអានម្តងទៀត
+            if d > slot * 1.25:
+                t2 = shorten_khmer(client, model, t, slot)
+                if t2 != t:
+                    tts_segment(t2, voice, path)
+                    d, _, _ = probe_video(path)
+        except Exception:
+            continue
+
+        speed = min(1.6, max(1.0, d / slot))
+        delay = int(s * 1000)
+
+        inputs += ["-i", name]
+        filters.append(
+            f"[{n}:a]atempo={speed:.3f},adelay={delay}:all=1[a{n}]"
+        )
+        n += 1
+        voices += 1
+
+    if voices == 0:
+        return False
+
+    labels = "[bg]" if keep_bg else ""
+    labels += "".join(f"[a{k}]" for k in range(first_voice, n))
+
+    fc = (
+        ";".join(filters)
+        + f";{labels}amix=inputs={n}:dropout_transition=0,"
+        f"volume={n}[out]"
+    )
+
+    run_ffmpeg(
+        inputs + [
+            "-filter_complex", fc,
+            "-map", "[out]",
+            "-t", f"{duration:.2f}",
+            "dub.wav",
+        ],
+        cwd=folder,
+    )
+    return os.path.exists(os.path.join(folder, "dub.wav"))
+
+
 # ---------- Render វីដេអូ ----------
 
 def build_video_filter(max_side):
@@ -890,7 +1004,7 @@ def build_video_filter(max_side):
 
 
 def render_with_fonts(folder, fonts, captions, font_size, outline_size,
-                      color, vid_w, vid_h, quality, status):
+                      color, vid_w, vid_h, quality, status, dub=False):
     """
     Render វីដេអូ ហើយពិនិត្យថា Font ខ្មែរត្រូវបានប្រើពិតឬទេ។
     បើមិនបាន សាកវិធី ឬ Font ផ្សេងបន្ត។
@@ -919,19 +1033,25 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
             color, vid_w, vid_h,
         )
 
+        args = ["-i", "input.mp4"]
+        if dub:
+            args += ["-i", "dub.wav"]
+        args += ["-vf", build_video_filter(max_side)]
+        if dub:
+            args += ["-map", "0:v:0", "-map", "1:a:0"]
+        args += [
+            "-c:v", "libx264",
+            "-preset", preset,
+            "-crf", str(crf),
+            "-c:a", "aac",
+            "-b:a", "128k",
+            "-movflags", "+faststart",
+            "output.mp4",
+        ]
+
         try:
             log = run_ffmpeg(
-                [
-                    "-i", "input.mp4",
-                    "-vf", build_video_filter(max_side),
-                    "-c:v", "libx264",
-                    "-preset", preset,
-                    "-crf", str(crf),
-                    "-c:a", "aac",
-                    "-b:a", "128k",
-                    "-movflags", "+faststart",
-                    "output.mp4",
-                ],
+                args,
                 cwd=folder,
                 verbose=True,
                 env=conf_env if use_conf else None,
@@ -1018,6 +1138,13 @@ quality_label = st.selectbox(
     index=1,
 )
 
+dub_on = st.checkbox("🎙 បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)")
+voice_label = list(TTS_VOICES.keys())[0]
+keep_bg = False
+if dub_on:
+    voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
+    keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
+
 with st.expander("🎨 កំណត់អក្សរ"):
     font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
     outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
@@ -1062,6 +1189,7 @@ else:
                     duration,
                     LANGUAGES[language_label],
                     status,
+                    concise=dub_on,
                 )
 
                 captions, sync_mode = build_captions(
@@ -1072,6 +1200,24 @@ else:
                     raise UserError(
                         "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។"
                     )
+
+                dub_ok = False
+                if dub_on:
+                    status.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+                    dub_ok = make_dub(
+                        folder,
+                        segments,
+                        TTS_VOICES[voice_label],
+                        duration,
+                        keep_bg,
+                        genai.Client(api_key=API_KEY),
+                        used_model,
+                    )
+                    if not dub_ok:
+                        st.warning(
+                            "បង្កើតសំឡេងអានមិនបានទេ។ "
+                            "វីដេអូនឹងមានតែអក្សរ។"
+                        )
 
                 status.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
                 result_video, used_font, ffmpeg_log, attempts = (
@@ -1086,6 +1232,7 @@ else:
                         vid_h,
                         QUALITY[quality_label],
                         status,
+                        dub=dub_ok,
                     )
                 )
 
@@ -1116,6 +1263,7 @@ else:
                         st.write(f"ម៉ូដែល: {used_model}")
                         st.write(f"ការតម្រឹម: {sync_mode}")
                         st.write(f"Font ដែលប្រើ: {used_font}")
+                        st.write(f"Dubbing: {dub_ok}")
                         st.write(f"ទំហំលទ្ធផល: {size_mb:.1f}MB")
                         st.write("ការសាក Font:")
                         st.text("\n".join(attempts))
