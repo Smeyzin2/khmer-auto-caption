@@ -1,7 +1,5 @@
+
 streamlit
-transformers
-torch
-accelerate
-sentencepiece
+google-genai
 imageio-ffmpeg
 numpy
