@@ -247,6 +247,55 @@ def fallback_captions(text, duration, max_chars=42):
     return captions
 
 
+def call_with_retry(client, model, prompt, audio_bytes, config, status):
+    """ហៅម៉ូដែល ហើយសាកម្តងទៀតបើ Google រវល់ (503) ឬកូតាពេញ (429)។"""
+    for attempt in range(3):
+        try:
+            kwargs = dict(
+                model=model,
+                contents=[
+                    prompt,
+                    types.Part.from_bytes(
+                        data=audio_bytes,
+                        mime_type="audio/mp3",
+                    ),
+                ],
+            )
+            if config is not None:
+                kwargs["config"] = config
+            return client.models.generate_content(**kwargs)
+
+        except Exception as e:
+            low = str(e).lower()
+
+            busy = (
+                "503" in low
+                or "unavailable" in low
+                or "high demand" in low
+                or "overloaded" in low
+                or "timeout" in low
+                or "timed out" in low
+            )
+            quota = "429" in low or "resource_exhausted" in low
+
+            if busy and attempt < 2:
+                wait = 4 * (attempt + 1)
+                status.write(
+                    f"{model} រវល់ រង់ចាំ {wait} វិនាទី រួចសាកម្តងទៀត..."
+                )
+                time.sleep(wait)
+                continue
+
+            if quota and attempt < 1:
+                status.write(
+                    f"{model} កូតាពេញ រង់ចាំ 20 វិនាទី រួចសាកម្តងទៀត..."
+                )
+                time.sleep(20)
+                continue
+
+            raise
+
+
 def transcribe(api_key, audio_path, duration, status):
     client = genai.Client(
         api_key=api_key,
@@ -287,76 +336,58 @@ def transcribe(api_key, audio_path, duration, status):
         "If there is no speech, return an empty array []."
     )
 
-    config_fast = types.GenerateContentConfig(
-        temperature=0,
-        response_mime_type="application/json",
-        thinking_config=types.ThinkingConfig(thinking_budget=0),
-    )
-    config_plain = types.GenerateContentConfig(
-        temperature=0,
-        response_mime_type="application/json",
-    )
+    # ការកំណត់ពីលឿន → ងាយ → គ្មានការកំណត់
+    configs = [
+        types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+        types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
+        None,
+    ]
 
     errors = []
 
     for model in models:
-        for config in (config_fast, config_plain):
+        for config in configs:
+            status.write(f"កំពុងស្គាល់សំឡេងដោយ {model}...")
+
             try:
-                status.write(f"កំពុងស្គាល់សំឡេងដោយ {model}...")
-                response = client.models.generate_content(
-                    model=model,
-                    contents=[
-                        prompt,
-                        types.Part.from_bytes(
-                            data=audio_bytes,
-                            mime_type="audio/mp3",
-                        ),
-                    ],
-                    config=config,
+                response = call_with_retry(
+                    client, model, prompt, audio_bytes, config, status
                 )
-                raw = getattr(response, "text", None) or ""
-
-                segments = parse_segments(raw, duration)
-                if segments:
-                    return segments, model
-
-                # AI មិនបានឆ្លើយជា JSON → ប្រើអត្ថបទធម្មតា
-                plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
-                if plain:
-                    return fallback_captions(plain, duration), model
-
-                errors.append(f"{model}: មិនមានអត្ថបទ")
-                break
-
             except Exception as e:
                 message = str(e)
                 low = message.lower()
+                errors.append(f"{model}: {message}")
 
-                # ម៉ូដែលមិនគាំទ្រ thinking → សាកម្តងទៀតដោយគ្មាន thinking
-                if config is config_fast and "thinking" in low:
+                # 400 → សាកការកំណត់ងាយជាងមុន
+                if "400" in message or "invalid_argument" in low:
                     continue
 
-                errors.append(f"{model}: {message[:300]}")
-
-                # 503 / timeout → សាកម្តងទៀតម្តង
-                if (
-                    config is config_fast
-                    and (
-                        "503" in message
-                        or "unavailable" in low
-                        or "timeout" in low
-                        or "timed out" in low
-                    )
-                ):
-                    time.sleep(2)
-                    continue
-
-                # 404 / 429 / កំហុសផ្សេង → ទៅម៉ូដែលបន្ទាប់
+                # 404 / 429 / 503 / ផ្សេងៗ → ទៅម៉ូដែលបន្ទាប់
                 break
 
+            raw = getattr(response, "text", None) or ""
+
+            segments = parse_segments(raw, duration)
+            if segments:
+                return segments, model
+
+            # AI មិនបានឆ្លើយជា JSON → ប្រើអត្ថបទធម្មតា
+            plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
+            if plain:
+                return fallback_captions(plain, duration), model
+
+            errors.append(f"{model}: មិនមានអត្ថបទ")
+            break
+
     raise RuntimeError(
-        "ម៉ូដែលទាំងអស់បរាជ័យ។ សូមពិនិត្យកូតា និង API Key:\n\n"
-        + "\n\n".join(errors)
+        "ម៉ូដែលទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(errors)
     )
 
 
@@ -483,6 +514,6 @@ if uploaded:
 
             except Exception as error:
                 st.error("ការបង្កើតវីដេអូបរាជ័យ។")
-                st.code(str(error))
+                st.text(str(error))
 else:
     st.info("សូមជ្រើសរើសវីដេអូជាមុនសិន។")
