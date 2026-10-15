@@ -1,5 +1,7 @@
-gradio
+
+streamlit
 transformers
 torch
 accelerate
 sentencepiece
+imageio-ffmpeg
