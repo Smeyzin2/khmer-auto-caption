@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import time
 import tempfile
 import subprocess
@@ -15,8 +16,8 @@ st.set_page_config(page_title="Khmer Auto Caption", page_icon="🎬")
 st.title("🎬 Khmer Auto Caption")
 st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ ដោយ AI")
 
-PRIMARY_MODEL = "gemini-3.5-transcribe"
-REQUEST_TIMEOUT_MS = 90000  # 90 វិនាទី
+MODELS = ["gemini-2.5-flash", "gemini-2.5-flash-lite"]
+REQUEST_TIMEOUT_MS = 120000  # 120 វិនាទី
 
 FONT_URL = (
     "https://raw.githubusercontent.com/google/fonts/"
@@ -42,12 +43,16 @@ def fix_khmer(text):
 
 def run_ffmpeg(args):
     exe = imageio_ffmpeg.get_ffmpeg_exe()
-    return subprocess.run(
-        [exe, "-y"] + args,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        check=True,
-    )
+    try:
+        return subprocess.run(
+            [exe, "-y"] + args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        err = (e.stderr or b"").decode("utf-8", "ignore")[-1500:]
+        raise RuntimeError("FFmpeg បរាជ័យ:\n" + err)
 
 
 def escape_path(path):
@@ -112,172 +117,56 @@ def extract_audio(video_path, audio_path):
     ])
 
 
-def get_fallback_models(client):
-    """រកម៉ូដែល GenerateContent ដែល API Key អាចមើលឃើញ។"""
-    found = []
+def parse_segments(raw, duration):
+    """បំលែងចម្លើយ JSON ពី AI ទៅជាបញ្ជី (start, end, text)។"""
+    raw = (raw or "").strip()
+    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+
     try:
-        for model in client.models.list():
-            name = getattr(model, "name", "") or ""
-            name = name.replace("models/", "")
-            methods = getattr(model, "supported_actions", None) or []
-
-            if not name or "generateContent" not in methods:
-                continue
-
-            low = name.lower()
-            if "flash" not in low:
-                continue
-            if "tts" in low or "live" in low or "embedding" in low:
-                continue
-
-            found.append(name)
+        data = json.loads(raw)
     except Exception:
-        pass
-
-    preferred = [
-        "gemini-3.8-flash",
-        "gemini-3-flash",
-        "gemini-2.5-flash",
-        "gemini-2.5-flash-lite",
-    ]
-
-    ordered = [m for m in preferred if m in found]
-    ordered += [m for m in found if m not in ordered]
-    return ordered[:3]
-
-
-def wait_until_active(client, audio, status, max_wait=60):
-    """រង់ចាំឱ្យឯកសារសំឡេងរួចរាល់ (ACTIVE) មុនប្រើ។"""
-    waited = 0
-    while waited < max_wait:
-        state = getattr(audio, "state", None)
-        state_name = getattr(state, "name", str(state or "")).upper()
-        if "PROCESSING" not in state_name:
-            return audio
-        status.write("កំពុងរង់ចាំឯកសារសំឡេងរួចរាល់...")
-        time.sleep(2)
-        waited += 2
-        audio = client.files.get(name=audio.name)
-    return audio
-
-
-def is_timeout(message):
-    low = message.lower()
-    return (
-        "timeout" in low
-        or "timed out" in low
-        or "deadline" in low
-    )
-
-
-def transcribe(api_key, audio_path, status):
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
-    )
-
-    status.write("កំពុងផ្ទុកសំឡេងទៅ AI...")
-    audio = client.files.upload(file=audio_path)
-    audio = wait_until_active(client, audio, status)
-    errors = []
-
-    # សាកម៉ូដែល Transcribe ត្រឹម 2 ដងប៉ុណ្ណោះ។
-    for attempt in range(2):
+        match = re.search(r"\[.*\]", raw, re.S)
+        if not match:
+            return []
         try:
-            status.write("កំពុងស្គាល់សំឡេងដោយ Gemini Transcribe...")
+            data = json.loads(match.group(0))
+        except Exception:
+            return []
 
-            result = client.interactions.create(
-                model=PRIMARY_MODEL,
-                input=[{
-                    "type": "audio",
-                    "uri": audio.uri,
-                    "mime_type": audio.mime_type,
-                }],
-                generation_config={
-                    "transcription_config": {
-                        "language_codes": ["km-KH"],
-                    }
-                },
-            )
+    if isinstance(data, dict):
+        data = data.get("segments") or data.get("captions") or []
 
-            transcript = fix_khmer(
-                getattr(result, "output_text", None) or ""
-            )
-            if transcript:
-                return transcript, PRIMARY_MODEL
-
-            errors.append("Transcribe មិនបានផ្ដល់អត្ថបទ")
-
-        except Exception as e:
-            message = str(e)
-            errors.append(f"{PRIMARY_MODEL}: {message}")
-
-            # កូតាអស់ ឬ timeout → ទៅម៉ូដែលបម្រុងភ្លាម
-            if "429" in message or "rate limit" in message.lower():
-                break
-            if is_timeout(message):
-                status.write("Transcribe ឆ្លើយយឺតពេក សាកម៉ូដែលបម្រុង...")
-                break
-
-            if attempt == 0 and (
-                "503" in message or "UNAVAILABLE" in message.upper()
-            ):
-                time.sleep(1)
-                continue
-
-            break
-
-    fallback_models = get_fallback_models(client)
-
-    if not fallback_models:
-        raise RuntimeError(
-            "រកមិនឃើញម៉ូដែល Flash ដែលអាចប្រើបានសម្រាប់ API Key នេះ។\n"
-            + "\n".join(errors)
-        )
-
-    prompt = (
-        "Transcribe the audio exactly as spoken. "
-        "The speech is primarily Khmer. Write in Khmer script. "
-        "Do not translate, summarize, or explain. "
-        "Preserve complete Khmer words and correct Khmer spelling. "
-        "Return only the transcript."
-    )
-
-    for model in fallback_models:
-        try:
-            status.write(f"កំពុងសាកម៉ូដែលបម្រុង {model}...")
-
-            response = client.models.generate_content(
-                model=model,
-                contents=[
-                    prompt,
-                    types.Part.from_uri(
-                        file_uri=audio.uri,
-                        mime_type=audio.mime_type,
-                    ),
-                ],
-            )
-
-            transcript = fix_khmer(
-                getattr(response, "text", None) or ""
-            )
-            if transcript:
-                return transcript, model
-
-            errors.append(f"{model}: មិនមានអត្ថបទ")
-
-        except Exception as e:
-            errors.append(f"{model}: {e}")
+    segments = []
+    for item in data:
+        if not isinstance(item, dict):
             continue
+        text = fix_khmer(item.get("text", ""))
+        try:
+            start = float(item.get("start", 0))
+            end = float(item.get("end", 0))
+        except Exception:
+            continue
+        if not text:
+            continue
+        start = min(max(0.0, start), duration)
+        end = min(max(end, start + 0.4), duration + 0.5)
+        segments.append([start, end, text])
 
-    raise RuntimeError(
-        "ម៉ូដែលទាំងអស់បរាជ័យ។ សូមពិនិត្យកូតា និងសិទ្ធិ API Key:\n\n"
-        + "\n\n".join(errors)
-    )
+    segments.sort(key=lambda s: s[0])
+
+    # កុំឱ្យអក្សរជាន់គ្នា
+    for i in range(len(segments) - 1):
+        if segments[i][1] > segments[i + 1][0]:
+            segments[i][1] = max(
+                segments[i][0] + 0.2, segments[i + 1][0] - 0.02
+            )
+
+    return [(s, e, t) for s, e, t in segments]
 
 
-def make_captions(transcript, duration, max_chars=42):
-    text = fix_khmer(transcript)
+def fallback_captions(text, duration, max_chars=42):
+    """បែងចែកម៉ោងតាមប្រវែងអក្សរ ប្រើពេល AI មិនផ្តល់ម៉ោង។"""
+    text = fix_khmer(text)
     if not text:
         return []
 
@@ -292,7 +181,6 @@ def make_captions(transcript, duration, max_chars=42):
         if len(sentence) <= max_chars:
             pieces.append(sentence)
             continue
-
         current = ""
         for word in sentence.split():
             candidate = f"{current} {word}".strip()
@@ -310,17 +198,99 @@ def make_captions(transcript, duration, max_chars=42):
     total = sum(max(1, len(p)) for p in pieces)
     cursor = 0.0
     captions = []
-
     for i, piece in enumerate(pieces):
         if i == len(pieces) - 1:
             end = max(duration, cursor + 0.2)
         else:
             end = cursor + duration * max(1, len(piece)) / total
-
-        captions.append((cursor, end, fix_khmer(piece)))
+        captions.append((cursor, end, piece))
         cursor = end
-
     return captions
+
+
+def transcribe(api_key, audio_path, duration, status):
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
+
+    with open(audio_path, "rb") as f:
+        audio_bytes = f.read()
+
+    if len(audio_bytes) > 18 * 1024 * 1024:
+        raise RuntimeError(
+            "សំឡេងធំពេក។ សូមប្រើវីដេអូខ្លីជាងនេះ (ប្រហែលក្រោម ៣០ នាទី)។"
+        )
+
+    prompt = (
+        "Transcribe this audio exactly as spoken. "
+        "The speech is primarily Khmer. Write in Khmer script. "
+        "Do not translate, summarize, or explain. "
+        "Preserve complete Khmer words and correct Khmer spelling. "
+        "Split the speech into short subtitle segments, each about "
+        "2 to 6 seconds long and under 40 characters. "
+        f"The audio is {duration:.1f} seconds long. "
+        "Return ONLY a JSON array. Each item must be an object: "
+        '{"start": <seconds as number>, "end": <seconds as number>, '
+        '"text": "<Khmer text>"}. '
+        "If there is no speech, return an empty array []."
+    )
+
+    config = types.GenerateContentConfig(
+        temperature=0,
+        response_mime_type="application/json",
+        thinking_config=types.ThinkingConfig(thinking_budget=0),
+    )
+
+    errors = []
+
+    for model in MODELS:
+        for attempt in range(2):
+            try:
+                status.write(f"កំពុងស្គាល់សំឡេងដោយ {model}...")
+                response = client.models.generate_content(
+                    model=model,
+                    contents=[
+                        prompt,
+                        types.Part.from_bytes(
+                            data=audio_bytes,
+                            mime_type="audio/mp3",
+                        ),
+                    ],
+                    config=config,
+                )
+                raw = getattr(response, "text", None) or ""
+
+                segments = parse_segments(raw, duration)
+                if segments:
+                    return segments, model
+
+                # AI មិនបានឆ្លើយជា JSON → ប្រើអត្ថបទធម្មតា
+                plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
+                if plain:
+                    return fallback_captions(plain, duration), model
+
+                errors.append(f"{model}: មិនមានអត្ថបទ")
+                break
+
+            except Exception as e:
+                message = str(e)
+                errors.append(f"{model}: {message}")
+                retryable = (
+                    "503" in message
+                    or "UNAVAILABLE" in message.upper()
+                    or "timeout" in message.lower()
+                    or "timed out" in message.lower()
+                )
+                if attempt == 0 and retryable:
+                    time.sleep(2)
+                    continue
+                break
+
+    raise RuntimeError(
+        "ម៉ូដែលទាំងអស់បរាជ័យ។ សូមពិនិត្យកូតា និង API Key:\n\n"
+        + "\n\n".join(errors)
+    )
 
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
@@ -377,15 +347,14 @@ if uploaded:
                     "៣/៤ កំពុងស្គាល់សំឡេង...",
                     expanded=True,
                 )
-                transcript, used_model = transcribe(
-                    API_KEY, audio_path, status
+                captions, used_model = transcribe(
+                    API_KEY, audio_path, duration, status
                 )
                 status.update(
                     label=f"បានស្គាល់សំឡេងដោយ {used_model}",
                     state="complete",
                 )
 
-                captions = make_captions(transcript, duration)
                 if not captions:
                     raise RuntimeError("មិនអាចបង្កើត Subtitle បានទេ។")
 
@@ -412,7 +381,7 @@ if uploaded:
                         f"PrimaryColour={colors[font_color]},"
                         f"Outline={outline_size},"
                         "OutlineColour=&H00000000,"
-                        "Shadow=1,Alignment=2,MarginV=35,WrapStyle=2'"
+                        "Shadow=1,Alignment=2,MarginV=35,WrapStyle=0'"
                     )
 
                     run_ffmpeg([
@@ -442,7 +411,8 @@ if uploaded:
                 )
 
                 with st.expander("អត្ថបទដែល AI ស្គាល់"):
-                    st.write(transcript)
+                    for start, end, text in captions:
+                        st.write(f"[{start:.1f}s - {end:.1f}s] {text}")
 
             except Exception as error:
                 st.error("ការបង្កើតវីដេអូបរាជ័យ។")
