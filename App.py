@@ -2,6 +2,7 @@ import os
 import re
 import json
 import time
+import shutil
 import tempfile
 import subprocess
 import urllib.request
@@ -17,6 +18,7 @@ st.title("🎬 Khmer Auto Caption")
 st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ ដោយ AI")
 
 REQUEST_TIMEOUT_MS = 120000  # 120 វិនាទី
+MAX_CAPTION_CHARS = 26
 
 PREFERRED_MODELS = [
     "gemini-3.8-flash",
@@ -49,33 +51,28 @@ def fix_khmer(text):
     return text.strip()
 
 
-def run_ffmpeg(args):
+def run_ffmpeg(args, cwd=None, verbose=False):
     exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [exe, "-y"]
+    if verbose:
+        cmd += ["-loglevel", "verbose"]
+    cmd += args
     try:
-        return subprocess.run(
-            [exe, "-y"] + args,
+        result = subprocess.run(
+            cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=True,
+            cwd=cwd,
         )
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", "ignore")[-1500:]
         raise RuntimeError("FFmpeg បរាជ័យ:\n" + err)
+    return (result.stderr or b"").decode("utf-8", "ignore")
 
 
-def escape_path(path):
-    return (
-        os.path.abspath(path)
-        .replace("\\", "\\\\")
-        .replace(":", "\\:")
-        .replace("'", "\\'")
-        .replace(",", "\\,")
-        .replace("[", "\\[")
-        .replace("]", "\\]")
-    )
-
-
-def get_duration(path):
+def probe_video(path):
+    """អានរយៈពេល និងទំហំវីដេអូ។"""
     exe = imageio_ffmpeg.get_ffmpeg_exe()
     result = subprocess.run(
         [exe, "-i", path],
@@ -83,22 +80,35 @@ def get_duration(path):
         stderr=subprocess.PIPE,
         text=True,
     )
+    err = result.stderr
+
     match = re.search(
         r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
-        result.stderr,
+        err,
     )
     if not match:
         raise RuntimeError("មិនអាចអានរយៈពេលវីដេអូបានទេ។")
     h, m, s = match.groups()
-    return int(h) * 3600 + int(m) * 60 + float(s)
+    duration = int(h) * 3600 + int(m) * 60 + float(s)
+
+    width, height = 16, 9
+    size = re.search(r"Video:.*?,\s*(\d{2,5})x(\d{2,5})", err)
+    if size:
+        width, height = int(size.group(1)), int(size.group(2))
+
+    rot = re.search(r"rotation of (-?\d+(?:\.\d+)?)", err)
+    if rot and abs(float(rot.group(1))) % 180 == 90:
+        width, height = height, width
+
+    return duration, width, height
 
 
-def time_srt(seconds):
-    ms = max(0, int(float(seconds) * 1000))
-    h, ms = divmod(ms, 3600000)
-    m, ms = divmod(ms, 60000)
-    s, ms = divmod(ms, 1000)
-    return f"{h:02}:{m:02}:{s:02},{ms:03}"
+def time_ass(seconds):
+    cs = max(0, int(round(float(seconds) * 100)))
+    h, cs = divmod(cs, 360000)
+    m, cs = divmod(cs, 6000)
+    s, cs = divmod(cs, 100)
+    return f"{h}:{m:02}:{s:02}.{cs:02}"
 
 
 def download_font(path):
@@ -112,6 +122,30 @@ def download_font(path):
         raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
     with open(path, "wb") as f:
         f.write(data)
+
+    # ចម្លងទៅ ~/.fonts ដើម្បីឱ្យប្រព័ន្ធរកឃើញបន្ថែម
+    try:
+        home_fonts = os.path.expanduser("~/.fonts")
+        os.makedirs(home_fonts, exist_ok=True)
+        shutil.copy(path, os.path.join(home_fonts, "Battambang-Regular.ttf"))
+    except Exception:
+        pass
+
+
+def get_font_family(path, default):
+    """អានឈ្មោះ Font ពិតពីឯកសារ Font។"""
+    try:
+        from fontTools.ttLib import TTFont
+
+        font = TTFont(path)
+        for record in font["name"].names:
+            if record.nameID == 1:
+                name = record.toUnicode().strip()
+                if name:
+                    return name
+    except Exception:
+        pass
+    return default
 
 
 def extract_audio(video_path, audio_path):
@@ -203,7 +237,7 @@ def parse_segments(raw, duration):
     return [(s, e, t) for s, e, t in segments]
 
 
-def fallback_captions(text, duration, max_chars=42):
+def plain_to_segments(text, duration):
     """បែងចែកម៉ោងតាមប្រវែងអក្សរ ប្រើពេល AI មិនផ្តល់ម៉ោង។"""
     text = fix_khmer(text)
     if not text:
@@ -214,38 +248,214 @@ def fallback_captions(text, duration, max_chars=42):
         for p in re.split(r"(?<=[។.!?])\s+|\n+", text)
         if fix_khmer(p)
     ]
+    if not sentences:
+        return [(0.0, max(duration, 0.4), text)]
 
-    pieces = []
-    for sentence in sentences:
-        if len(sentence) <= max_chars:
-            pieces.append(sentence)
-            continue
-        current = ""
-        for word in sentence.split():
-            candidate = f"{current} {word}".strip()
-            if current and len(candidate) > max_chars:
-                pieces.append(fix_khmer(current))
-                current = word
-            else:
-                current = candidate
-        if current:
-            pieces.append(fix_khmer(current))
-
-    if not pieces:
-        return [(0.0, max(duration, 0.2), text)]
-
-    total = sum(max(1, len(p)) for p in pieces)
+    total = sum(max(1, len(p)) for p in sentences)
     cursor = 0.0
-    captions = []
-    for i, piece in enumerate(pieces):
-        if i == len(pieces) - 1:
-            end = max(duration, cursor + 0.2)
+    out = []
+    for i, piece in enumerate(sentences):
+        if i == len(sentences) - 1:
+            end = max(duration, cursor + 0.4)
         else:
             end = cursor + duration * max(1, len(piece)) / total
-        captions.append((cursor, end, piece))
+        out.append((cursor, end, piece))
         cursor = end
-    return captions
+    return out
 
+
+# ---------- បែងចែកអក្សរ និងតម្រឹមតាមសំឡេង ----------
+
+def safe_split(word, n):
+    """កាត់ពាក្យវែងដោយមិនបំបែកព្យញ្ជនៈជើង ឬស្រៈ។"""
+    chunks = []
+    while len(word) > n:
+        cut = n
+        while cut > 1 and (
+            "\u17B6" <= word[cut] <= "\u17D3" or word[cut - 1] == "\u17D2"
+        ):
+            cut -= 1
+        if cut <= 1:
+            cut = n
+        chunks.append(word[:cut])
+        word = word[cut:]
+    if word:
+        chunks.append(word)
+    return chunks
+
+
+def split_display(text, max_chars=MAX_CAPTION_CHARS):
+    text = fix_khmer(text)
+    if not text:
+        return []
+
+    pieces = []
+    current = ""
+    for word in text.split():
+        if len(word) > max_chars:
+            if current:
+                pieces.append(current)
+                current = ""
+            pieces.extend(safe_split(word, max_chars))
+            continue
+
+        candidate = f"{current} {word}".strip()
+        if current and len(candidate) > max_chars:
+            pieces.append(current)
+            current = word
+        else:
+            current = candidate
+    if current:
+        pieces.append(current)
+
+    return [fix_khmer(p) for p in pieces if fix_khmer(p)]
+
+
+def detect_speech(audio_path, duration):
+    """រកចន្លោះដែលមានសំឡេង (ផ្ទុយពីចន្លោះស្ងាត់)។"""
+    try:
+        exe = imageio_ffmpeg.get_ffmpeg_exe()
+        result = subprocess.run(
+            [
+                exe, "-i", audio_path,
+                "-af", "silencedetect=noise=-32dB:d=0.35",
+                "-f", "null", "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        err = result.stderr
+        starts = [
+            max(0.0, float(x))
+            for x in re.findall(r"silence_start:\s*(-?[\d.]+)", err)
+        ]
+        ends = [
+            float(x) for x in re.findall(r"silence_end:\s*([\d.]+)", err)
+        ]
+
+        silences = []
+        for i, s in enumerate(starts):
+            e = ends[i] if i < len(ends) else duration
+            silences.append((s, min(e, duration)))
+
+        speech = []
+        cursor = 0.0
+        for s, e in silences:
+            if s - cursor >= 0.2:
+                speech.append((cursor, s))
+            cursor = max(cursor, e)
+        if duration - cursor >= 0.2:
+            speech.append((cursor, duration))
+        return speech
+    except Exception:
+        return []
+
+
+def align_to_speech(pieces, speech):
+    """ដាក់អក្សរតាមចន្លោះដែលមានសំឡេង តាមសមាមាត្រប្រវែងអក្សរ។"""
+    total_len = sum(max(1, len(p)) for p in pieces)
+    total_speech = sum(b - a for a, b in speech)
+
+    idx = 0
+    offset = 0.0
+    out = []
+
+    for p in pieces:
+        d = total_speech * max(1, len(p)) / total_len
+
+        a, b = speech[idx]
+        if (b - (a + offset)) <= 0.001 and idx < len(speech) - 1:
+            idx += 1
+            offset = 0.0
+            a, b = speech[idx]
+
+        start = a + offset
+        remaining = d
+
+        while True:
+            a, b = speech[idx]
+            avail = b - (a + offset)
+            if remaining <= avail + 1e-6 or idx == len(speech) - 1:
+                offset += remaining
+                end = a + offset
+                break
+            remaining -= avail
+            idx += 1
+            offset = 0.0
+
+        out.append((start, max(end, start + 0.25), p))
+
+    return out
+
+
+def build_captions(segments, audio_path, duration):
+    items = []
+    for s, e, t in segments:
+        parts = split_display(t)
+        if not parts:
+            continue
+        total = sum(max(1, len(p)) for p in parts)
+        cur = s
+        for p in parts:
+            d = (e - s) * max(1, len(p)) / total
+            items.append((cur, cur + d, p))
+            cur += d
+
+    if not items:
+        return [], ""
+
+    speech = detect_speech(audio_path, duration)
+    total_speech = sum(b - a for a, b in speech)
+
+    if speech and total_speech > 0.5 and total_speech / duration < 0.92:
+        pieces = [p for _, _, p in items]
+        return align_to_speech(pieces, speech), "តាមសំឡេងពិត"
+
+    return items, "តាមម៉ោងពី AI"
+
+
+def write_ass(path, captions, font_family, font_size, outline_size,
+              primary_color, width, height):
+    play_res_y = 288
+    play_res_x = max(100, int(round(play_res_y * width / max(1, height))))
+
+    header = [
+        "[Script Info]",
+        "ScriptType: v4.00+",
+        f"PlayResX: {play_res_x}",
+        f"PlayResY: {play_res_y}",
+        "WrapStyle: 0",
+        "ScaledBorderAndShadow: yes",
+        "",
+        "[V4+ Styles]",
+        "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
+        "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
+        "ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, "
+        "Alignment, MarginL, MarginR, MarginV, Encoding",
+        f"Style: Default,{font_family},{font_size},{primary_color},"
+        f"&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,"
+        f"{outline_size},1,2,20,20,35,1",
+        "",
+        "[Events]",
+        "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
+        "MarginV, Effect, Text",
+    ]
+
+    events = []
+    for start, end, text in captions:
+        clean = fix_khmer(text).replace("{", "").replace("}", "")
+        clean = clean.replace("\n", " ")
+        events.append(
+            f"Dialogue: 0,{time_ass(start)},"
+            f"{time_ass(max(start + 0.25, end))},Default,,0,0,0,,{clean}"
+        )
+
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(header + events) + "\n")
+
+
+# ---------- ហៅ Gemini ----------
 
 def call_with_retry(client, model, prompt, audio_bytes, config, status):
     """ហៅម៉ូដែល ហើយសាកម្តងទៀតបើ Google រវល់ (503) ឬកូតាពេញ (429)។"""
@@ -323,12 +533,14 @@ def transcribe(api_key, audio_path, duration, status):
     status.write("ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
 
     prompt = (
-        "Transcribe this audio exactly as spoken. "
+        "Transcribe this audio exactly as spoken or sung. "
         "The speech is primarily Khmer. Write in Khmer script. "
         "Do not translate, summarize, or explain. "
         "Preserve complete Khmer words and correct Khmer spelling. "
+        "Put a normal space between Khmer phrases so lines can wrap. "
         "Split the speech into short subtitle segments, each about "
-        "2 to 6 seconds long and under 40 characters. "
+        "1.5 to 4 seconds long and at most 26 characters. "
+        "Timestamps must match exactly when each segment is heard. "
         f"The audio is {duration:.1f} seconds long. "
         "Return ONLY a JSON array. Each item must be an object: "
         '{"start": <seconds as number>, "end": <seconds as number>, '
@@ -381,7 +593,7 @@ def transcribe(api_key, audio_path, duration, status):
             # AI មិនបានឆ្លើយជា JSON → ប្រើអត្ថបទធម្មតា
             plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
             if plain:
-                return fallback_captions(plain, duration), model
+                return plain_to_segments(plain, duration), model
 
             errors.append(f"{model}: មិនមានអត្ថបទ")
             break
@@ -390,6 +602,8 @@ def transcribe(api_key, audio_path, duration, status):
         "ម៉ូដែលទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(errors)
     )
 
+
+# ---------- ចំណុចប្រទាក់ ----------
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
@@ -426,7 +640,7 @@ if uploaded:
         with tempfile.TemporaryDirectory() as folder:
             source = os.path.join(folder, "input.mp4")
             audio_path = os.path.join(folder, "audio.mp3")
-            subtitle_path = os.path.join(folder, "captions.srt")
+            ass_path = os.path.join(folder, "captions.ass")
             output_path = os.path.join(folder, "output.mp4")
             font_path = os.path.join(folder, "Battambang.ttf")
 
@@ -436,16 +650,17 @@ if uploaded:
             try:
                 with st.spinner("១/៤ កំពុងទាញយក Font ខ្មែរ..."):
                     download_font(font_path)
+                    font_family = get_font_family(font_path, FONT_NAME)
 
                 with st.spinner("២/៤ កំពុងដកសំឡេង..."):
                     extract_audio(source, audio_path)
-                    duration = get_duration(source)
+                    duration, vid_w, vid_h = probe_video(source)
 
                 status = st.status(
                     "៣/៤ កំពុងស្គាល់សំឡេង...",
                     expanded=True,
                 )
-                captions, used_model = transcribe(
+                segments, used_model = transcribe(
                     API_KEY, audio_path, duration, status
                 )
                 status.update(
@@ -453,51 +668,49 @@ if uploaded:
                     state="complete",
                 )
 
+                with st.spinner("កំពុងតម្រឹមអក្សរតាមសំឡេង..."):
+                    captions, sync_mode = build_captions(
+                        segments, audio_path, duration
+                    )
+
                 if not captions:
                     raise RuntimeError("មិនអាចបង្កើត Subtitle បានទេ។")
 
-                lines = []
-                for i, (start, end, caption_text) in enumerate(
-                    captions, start=1
-                ):
-                    lines.extend([
-                        str(i),
-                        f"{time_srt(start)} --> {time_srt(max(start + 0.2, end))}",
-                        fix_khmer(caption_text),
-                        "",
-                    ])
-
-                with open(subtitle_path, "w", encoding="utf-8-sig") as f:
-                    f.write("\n".join(lines))
+                write_ass(
+                    ass_path,
+                    captions,
+                    font_family,
+                    font_size,
+                    outline_size,
+                    colors[font_color],
+                    vid_w,
+                    vid_h,
+                )
 
                 with st.spinner("៤/៤ កំពុងបង្កប់អក្សរចូល MP4..."):
-                    vf = (
-                        f"subtitles=filename='{escape_path(subtitle_path)}'"
-                        f":fontsdir='{escape_path(folder)}'"
-                        f":force_style='FontName={FONT_NAME},"
-                        f"FontSize={font_size},"
-                        f"PrimaryColour={colors[font_color]},"
-                        f"Outline={outline_size},"
-                        "OutlineColour=&H00000000,"
-                        "Shadow=1,Alignment=2,MarginV=35,WrapStyle=0'"
+                    ffmpeg_log = run_ffmpeg(
+                        [
+                            "-i", "input.mp4",
+                            "-vf", "ass=filename=captions.ass:fontsdir=.",
+                            "-c:v", "libx264",
+                            "-preset", "ultrafast",
+                            "-crf", "26",
+                            "-c:a", "aac",
+                            "-b:a", "128k",
+                            "-movflags", "+faststart",
+                            "output.mp4",
+                        ],
+                        cwd=folder,
+                        verbose=True,
                     )
-
-                    run_ffmpeg([
-                        "-i", source,
-                        "-vf", vf,
-                        "-c:v", "libx264",
-                        "-preset", "ultrafast",
-                        "-crf", "26",
-                        "-c:a", "aac",
-                        "-b:a", "128k",
-                        "-movflags", "+faststart",
-                        output_path,
-                    ])
 
                 with open(output_path, "rb") as f:
                     result_video = f.read()
 
-                st.success(f"រួចរាល់! ម៉ូដែល៖ {used_model}")
+                st.success(
+                    f"រួចរាល់! ម៉ូដែល៖ {used_model} | "
+                    f"ការតម្រឹម៖ {sync_mode}"
+                )
                 st.video(result_video)
                 st.download_button(
                     "⬇️ ទាញយកវីដេអូ MP4",
@@ -511,6 +724,18 @@ if uploaded:
                 with st.expander("អត្ថបទដែល AI ស្គាល់"):
                     for start, end, text in captions:
                         st.write(f"[{start:.1f}s - {end:.1f}s] {text}")
+
+                with st.expander("ព័ត៌មាន Font (សម្រាប់ពិនិត្យ)"):
+                    st.write(f"ឈ្មោះ Font ដែលប្រើ: {font_family}")
+                    font_lines = [
+                        line
+                        for line in ffmpeg_log.splitlines()
+                        if "fontselect" in line.lower()
+                    ][:8]
+                    if font_lines:
+                        st.text("\n".join(font_lines))
+                    else:
+                        st.text("រកមិនឃើញបន្ទាត់ fontselect ក្នុង log ទេ។")
 
             except Exception as error:
                 st.error("ការបង្កើតវីដេអូបរាជ័យ។")
