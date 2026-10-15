@@ -15,11 +15,6 @@ st.title("🎬 Khmer Auto Caption")
 st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ ដោយ AI")
 
 PRIMARY_MODEL = "gemini-3.5-transcribe"
-FALLBACK_MODELS = [
-    "gemini-3.8-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash",
-]
 
 FONT_URL = (
     "https://raw.githubusercontent.com/google/fonts/"
@@ -31,10 +26,7 @@ FONT_NAME = "Battambang"
 def fix_khmer(text):
     if not text:
         return ""
-
     text = unicodedata.normalize("NFC", str(text))
-
-    # កុំឱ្យដកឃ្លាបំបែកជើងអក្សរខ្មែរ
     text = re.sub(r"(\u17D2)\s+", r"\1", text)
     text = re.sub(r"\s+([\u17B6-\u17D3])", r"\1", text)
     text = re.sub(
@@ -42,13 +34,8 @@ def fix_khmer(text):
         r"\1\2",
         text,
     )
-    text = re.sub(
-        r"(\u17D2)\s+([\u1780-\u17A2])",
-        r"\1\2",
-        text,
-    )
-
-    return re.sub(r"[ \t]+", " ", text).strip()
+    text = re.sub(r"[ \t]+", " ", text)
+    return text.strip()
 
 
 def run_ffmpeg(args):
@@ -81,15 +68,12 @@ def get_duration(path):
         stderr=subprocess.PIPE,
         text=True,
     )
-
     match = re.search(
         r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)",
         result.stderr,
     )
-
     if not match:
         raise RuntimeError("មិនអាចអានរយៈពេលវីដេអូបានទេ។")
-
     h, m, s = match.groups()
     return int(h) * 3600 + int(m) * 60 + float(s)
 
@@ -102,29 +86,15 @@ def time_srt(seconds):
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
 
-def parse_time(value):
-    if value is None:
-        return None
-
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    match = re.search(r"(\d+(?:\.\d+)?)", str(value))
-    return float(match.group(1)) if match else None
-
-
 def download_font(path):
     request = urllib.request.Request(
         FONT_URL,
         headers={"User-Agent": "Mozilla/5.0"},
     )
-
-    with urllib.request.urlopen(request, timeout=30) as response:
+    with urllib.request.urlopen(request, timeout=25) as response:
         data = response.read()
-
     if len(data) < 1000:
-        raise RuntimeError("ទាញយក Font ខ្មែរមិនបានត្រឹមត្រូវ។")
-
+        raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
     with open(path, "wb") as f:
         f.write(data)
 
@@ -140,6 +110,41 @@ def extract_audio(video_path, audio_path):
     ])
 
 
+def get_fallback_models(client):
+    """រកម៉ូដែល GenerateContent ដែល API Key អាចមើលឃើញ។"""
+    found = []
+    try:
+        for model in client.models.list():
+            name = getattr(model, "name", "") or ""
+            name = name.replace("models/", "")
+            methods = getattr(model, "supported_actions", None) or []
+
+            if not name or "generateContent" not in methods:
+                continue
+
+            low = name.lower()
+            if "flash" not in low:
+                continue
+            if "tts" in low or "live" in low or "embedding" in low:
+                continue
+
+            found.append(name)
+    except Exception:
+        pass
+
+    # ម៉ូដែលដែលមាននៅក្នុងបញ្ជី API របស់គណនី ត្រូវបានសាកមុន។
+    preferred = [
+        "gemini-3.8-flash",
+        "gemini-3-flash",
+        "gemini-2.5-flash",
+        "gemini-2.5-flash-lite",
+    ]
+
+    ordered = [m for m in preferred if m in found]
+    ordered += [m for m in found if m not in ordered]
+    return ordered[:3]
+
+
 def transcribe(api_key, audio_path, status):
     client = genai.Client(api_key=api_key)
 
@@ -147,9 +152,10 @@ def transcribe(api_key, audio_path, status):
     audio = client.files.upload(file=audio_path)
     errors = []
 
+    # សាកម៉ូដែល Transcribe ត្រឹម 2 ដងប៉ុណ្ណោះ។
     for attempt in range(2):
         try:
-            status.write("កំពុងសាក Gemini Transcribe...")
+            status.write("កំពុងស្គាល់សំឡេងដោយ Gemini Transcribe...")
 
             result = client.interactions.create(
                 model=PRIMARY_MODEL,
@@ -161,10 +167,6 @@ def transcribe(api_key, audio_path, status):
                 generation_config={
                     "transcription_config": {
                         "language_codes": ["km-KH"],
-                        "mode": {
-                            "type": "verbatim",
-                            "timestamp_granularities": ["word"],
-                        },
                     }
                 },
             )
@@ -172,31 +174,47 @@ def transcribe(api_key, audio_path, status):
             transcript = fix_khmer(
                 getattr(result, "output_text", None) or ""
             )
-
             if transcript:
-                status.write("បានស្គាល់សំឡេងដោយ Gemini Transcribe")
                 return transcript, PRIMARY_MODEL
 
-            errors.append("Gemini Transcribe មិនបានផ្ដល់អត្ថបទ")
+            errors.append("Transcribe មិនបានផ្ដល់អត្ថបទ")
 
         except Exception as e:
-            errors.append(f"{PRIMARY_MODEL}: {e}")
+            message = str(e)
+            errors.append(f"{PRIMARY_MODEL}: {message}")
 
-        if attempt == 0:
-            time.sleep(2)
+            # បើ API ប្រាប់ថាកូតាអស់ កុំរង់ចាំយូរ។
+            if "429" in message or "rate limit" in message.lower():
+                break
 
-    for model in FALLBACK_MODELS:
+            if attempt == 0 and (
+                "503" in message or "UNAVAILABLE" in message.upper()
+            ):
+                time.sleep(1)
+                continue
+
+            break
+
+    # រកម៉ូដែលបម្រុងពីបញ្ជីរបស់ API Key ជំនួសការហៅឈ្មោះចៃដន្យ។
+    fallback_models = get_fallback_models(client)
+
+    if not fallback_models:
+        raise RuntimeError(
+            "រកមិនឃើញម៉ូដែល Flash ដែលអាចប្រើបានសម្រាប់ API Key នេះ។\n"
+            + "\n".join(errors)
+        )
+
+    prompt = (
+        "Transcribe the audio exactly as spoken. "
+        "The speech is primarily Khmer. Write in Khmer script. "
+        "Do not translate, summarize, or explain. "
+        "Preserve complete Khmer words and correct Khmer spelling. "
+        "Return only the transcript."
+    )
+
+    for model in fallback_models:
         try:
             status.write(f"កំពុងសាកម៉ូដែលបម្រុង {model}...")
-
-            prompt = (
-                "Transcribe the audio exactly as spoken. "
-                "The speech is primarily Khmer. Write in Khmer script. "
-                "Do not translate, summarize, invent, or explain. "
-                "Preserve complete Khmer words and correct Khmer spelling. "
-                "Do not split Khmer consonant clusters or words into fragments. "
-                "Return only the transcript."
-            )
 
             response = client.models.generate_content(
                 model=model,
@@ -212,65 +230,61 @@ def transcribe(api_key, audio_path, status):
             transcript = fix_khmer(
                 getattr(response, "text", None) or ""
             )
-
             if transcript:
-                status.write(f"បានស្គាល់សំឡេងដោយ {model}")
                 return transcript, model
 
-            errors.append(f"{model}: មិនបានផ្ដល់អត្ថបទ")
+            errors.append(f"{model}: មិនមានអត្ថបទ")
 
         except Exception as e:
-            errors.append(f"{model}: {e}")
+            message = str(e)
+            errors.append(f"{model}: {message}")
+
+            # បន្តទៅម៉ូដែលបន្ទាប់ភ្លាមៗ មិនរង់ចាំយូរ។
+            continue
 
     raise RuntimeError(
-        "ម៉ូដែលទាំងអស់បរាជ័យ:\n\n" + "\n\n".join(errors)
+        "ម៉ូដែលទាំងអស់បរាជ័យ។ សូមពិនិត្យកូតា និងសិទ្ធិ API Key:\n\n"
+        + "\n\n".join(errors)
     )
 
 
 def make_captions(transcript, duration, max_chars=42):
     text = fix_khmer(transcript)
-
     if not text:
         return []
 
-    # បំបែកតាមប្រយោគជាមុន
     sentences = [
-        fix_khmer(part)
-        for part in re.split(r"(?<=[។.!?])\s+|\n+", text)
-        if fix_khmer(part)
+        fix_khmer(p)
+        for p in re.split(r"(?<=[។.!?])\s+|\n+", text)
+        if fix_khmer(p)
     ]
 
     pieces = []
-
     for sentence in sentences:
         if len(sentence) <= max_chars:
             pieces.append(sentence)
             continue
 
-        # បំបែកតាមចន្លោះដែលមានស្រាប់ មិនកាត់ពាក់កណ្ដាលពាក្យ
         current = ""
-
         for word in sentence.split():
             candidate = f"{current} {word}".strip()
-
             if current and len(candidate) > max_chars:
                 pieces.append(fix_khmer(current))
                 current = word
             else:
                 current = candidate
-
         if current:
             pieces.append(fix_khmer(current))
 
     if not pieces:
         return [(0.0, max(duration, 0.2), text)]
 
-    total = sum(max(1, len(piece)) for piece in pieces)
+    total = sum(max(1, len(p)) for p in pieces)
     cursor = 0.0
     captions = []
 
-    for index, piece in enumerate(pieces):
-        if index == len(pieces) - 1:
+    for i, piece in enumerate(pieces):
+        if i == len(pieces) - 1:
             end = max(duration, cursor + 0.2)
         else:
             end = cursor + duration * max(1, len(piece)) / total
@@ -287,16 +301,10 @@ if not API_KEY:
     st.error("រកមិនឃើញ GEMINI_API_KEY ក្នុង Streamlit Secrets ទេ។")
     st.stop()
 
-
 st.subheader("🎨 កំណត់អក្សរ")
-
 font_size = st.slider("ទំហំអក្សរ", 16, 36, 25)
 outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
-
-font_color = st.selectbox(
-    "ពណ៌អក្សរ",
-    ["ស", "លឿង", "បៃតង", "ខៀវ"],
-)
+font_color = st.selectbox("ពណ៌អក្សរ", ["ស", "លឿង", "បៃតង", "ខៀវ"])
 
 colors = {
     "ស": "&H00FFFFFF",
@@ -304,7 +312,6 @@ colors = {
     "បៃតង": "&H0000FF00",
     "ខៀវ": "&H00FF0000",
 }
-
 
 uploaded = st.file_uploader(
     "ជ្រើសរើសវីដេអូ",
@@ -342,67 +349,47 @@ if uploaded:
                     "៣/៤ កំពុងស្គាល់សំឡេង...",
                     expanded=True,
                 )
-
                 transcript, used_model = transcribe(
-                    API_KEY,
-                    audio_path,
-                    status,
+                    API_KEY, audio_path, status
                 )
-
                 status.update(
                     label=f"បានស្គាល់សំឡេងដោយ {used_model}",
                     state="complete",
                 )
 
                 captions = make_captions(transcript, duration)
-
                 if not captions:
                     raise RuntimeError("មិនអាចបង្កើត Subtitle បានទេ។")
 
-                srt_lines = []
-
-                for index, (start, end, caption_text) in enumerate(
+                lines = []
+                for i, (start, end, caption_text) in enumerate(
                     captions, start=1
                 ):
-                    caption_text = fix_khmer(caption_text)
-                    start = max(0.0, start)
-                    end = max(start + 0.2, end)
-
-                    srt_lines.extend([
-                        str(index),
-                        f"{time_srt(start)} --> {time_srt(end)}",
-                        caption_text,
+                    lines.extend([
+                        str(i),
+                        f"{time_srt(start)} --> {time_srt(max(start + 0.2, end))}",
+                        fix_khmer(caption_text),
                         "",
                     ])
 
-                with open(
-                    subtitle_path,
-                    "w",
-                    encoding="utf-8-sig",
-                ) as f:
-                    f.write("\n".join(srt_lines))
+                with open(subtitle_path, "w", encoding="utf-8-sig") as f:
+                    f.write("\n".join(lines))
 
-                with st.spinner("៤/៤ កំពុងបង្កប់អក្សរចូល MP4..."):
-                    sub = escape_path(subtitle_path)
-                    fonts = escape_path(folder)
-
-                    video_filter = (
-                        f"subtitles=filename='{sub}'"
-                        f":fontsdir='{fonts}'"
+                with st.spinner("៤/۴ កំពុងបង្កប់អក្សរចូល MP4..."):
+                    vf = (
+                        f"subtitles=filename='{escape_path(subtitle_path)}'"
+                        f":fontsdir='{escape_path(folder)}'"
                         f":force_style='FontName={FONT_NAME},"
                         f"FontSize={font_size},"
                         f"PrimaryColour={colors[font_color]},"
                         f"Outline={outline_size},"
                         "OutlineColour=&H00000000,"
-                        "Shadow=1,"
-                        "Alignment=2,"
-                        "MarginV=35,"
-                        "WrapStyle=2'"
+                        "Shadow=1,Alignment=2,MarginV=35,WrapStyle=2'"
                     )
 
                     run_ffmpeg([
                         "-i", source,
-                        "-vf", video_filter,
+                        "-vf", vf,
                         "-c:v", "libx264",
                         "-preset", "ultrafast",
                         "-crf", "26",
@@ -415,12 +402,8 @@ if uploaded:
                 with open(output_path, "rb") as f:
                     result_video = f.read()
 
-                st.success(
-                    f"បង្កើតវីដេអូរួចរាល់! ម៉ូដែល៖ {used_model}"
-                )
-
+                st.success(f"រួចរាល់! ម៉ូដែល៖ {used_model}")
                 st.video(result_video)
-
                 st.download_button(
                     "⬇️ ទាញយកវីដេអូ MP4",
                     data=result_video,
@@ -436,6 +419,5 @@ if uploaded:
             except Exception as error:
                 st.error("ការបង្កើតវីដេអូបរាជ័យ។")
                 st.code(str(error))
-
 else:
     st.info("សូមជ្រើសរើសវីដេអូជាមុនសិន។")
