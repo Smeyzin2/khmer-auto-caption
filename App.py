@@ -17,16 +17,42 @@ st.set_page_config(
 )
 
 st.title("🎬 Khmer Auto Caption")
-st.write("បង្កើតវីដេអូមានចំណងជើងរងជាភាសាខ្មែរ")
+st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ និងជ្រើសរើស Font")
 
 MODEL = "openai/whisper-small"
 
-FONT_URL = (
-    "https://cdn.jsdelivr.net/gh/"
-    "notofonts/notofonts.github.io/"
-    "fonts/NotoSansKhmer/full/otf/"
-    "NotoSansKhmer-Regular.otf"
-)
+FONTS = {
+    "Noto Sans Khmer — ច្បាស់ងាយអាន": {
+        "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notosanskhmer/NotoSansKhmer%5Bwdth%2Cwght%5D.ttf",
+        "file": "NotoSansKhmer.ttf",
+        "name": "Noto Sans Khmer",
+    },
+    "Noto Serif Khmer — បែបបុរាណ": {
+        "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/notoserifkhmer/NotoSerifKhmer%5Bwdth%2Cwght%5D.ttf",
+        "file": "NotoSerifKhmer.ttf",
+        "name": "Noto Serif Khmer",
+    },
+    "Battambang — ទន់ភ្នែក": {
+        "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/battambang/Battambang-Regular.ttf",
+        "file": "Battambang.ttf",
+        "name": "Battambang",
+    },
+    "Moul — សម្រាប់ចំណងជើង": {
+        "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/moul/Moul-Regular.ttf",
+        "file": "Moul.ttf",
+        "name": "Moul",
+    },
+    "Kantumruy Pro — បែបទំនើប": {
+        "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/kantumruypro/KantumruyPro%5Bwght%5D.ttf",
+        "file": "KantumruyPro.ttf",
+        "name": "Kantumruy Pro",
+    },
+    "Khmer — ស្ទីលសាមញ្ញ": {
+        "url": "https://raw.githubusercontent.com/google/fonts/main/ofl/khmer/Khmer.ttf",
+        "file": "Khmer.ttf",
+        "name": "Khmer",
+    },
+}
 
 
 @st.cache_resource
@@ -106,10 +132,9 @@ def escape_path(path):
     )
 
 
-def wrap_caption(text, max_chars=30):
-    """បំបែកអត្ថបទជាបន្ទាត់ខ្លីៗ ដោយរក្សាពាក្យតាមចន្លោះ។"""
+def wrap_caption(text, max_chars=28):
     text = re.sub(r"\s+", " ", text).strip()
-    words = text.split(" ")
+    words = text.split()
     lines = []
     current = ""
 
@@ -124,19 +149,46 @@ def wrap_caption(text, max_chars=30):
         else:
             if current:
                 lines.append(current)
-
-            while len(word) > max_chars:
-                lines.append(word[:max_chars])
-                word = word[max_chars:]
-
             current = word
 
     if current:
         lines.append(current)
 
-    # កុំឱ្យអក្សរច្រើនពេកក្នុងពេលតែមួយ
     return "\n".join(lines)
 
+
+st.subheader("🎨 កំណត់រចនាប័ទ្មអក្សរ")
+
+font_choice = st.selectbox(
+    "ជ្រើសរើស Font ខ្មែរ",
+    list(FONTS.keys()),
+)
+
+font_size = st.slider(
+    "ទំហំអក្សរ",
+    min_value=16,
+    max_value=36,
+    value=24,
+)
+
+outline_size = st.slider(
+    "កម្រាស់គែមអក្សរ",
+    min_value=1,
+    max_value=5,
+    value=2,
+)
+
+font_color = st.selectbox(
+    "ពណ៌អក្សរ",
+    ["ស", "លឿង", "បៃតង", "ខៀវ"],
+)
+
+color_codes = {
+    "ស": "&H00FFFFFF",
+    "លឿង": "&H0000FFFF",
+    "បៃតង": "&H0000FF00",
+    "ខៀវ": "&H00FF0000",
+}
 
 uploaded = st.file_uploader(
     "ជ្រើសរើសវីដេអូ",
@@ -158,28 +210,26 @@ if uploaded:
             output_path = os.path.join(
                 folder, "khmer_subtitle.mp4"
             )
+            font = FONTS[font_choice]
             font_path = os.path.join(
-                folder, "NotoSansKhmer-Regular.otf"
+                folder, font["file"]
             )
 
             with open(source, "wb") as f:
                 f.write(uploaded.getvalue())
 
             try:
-                with st.spinner("កំពុងទាញយកពុម្ពអក្សរខ្មែរ..."):
+                with st.spinner("កំពុងទាញយក Font..."):
                     urllib.request.urlretrieve(
-                        FONT_URL, font_path
+                        font["url"], font_path
                     )
 
                 with st.spinner("កំពុងបំបែកសំឡេង..."):
                     extract_audio(source, audio_path)
                     audio = read_audio(audio_path)
 
-                with st.spinner(
-                    "AI កំពុងស្គាល់សំឡេងភាសាខ្មែរ..."
-                ):
+                with st.spinner("AI កំពុងស្គាល់សំឡេងខ្មែរ..."):
                     model = load_model()
-
                     result = model(
                         audio,
                         return_timestamps=True,
@@ -193,14 +243,10 @@ if uploaded:
                 transcript = result.get(
                     "text", ""
                 ).strip()
-
                 chunks = result.get("chunks") or []
 
                 if not transcript:
-                    st.error(
-                        "មិនអាចស្គាល់សំឡេងបានទេ។ "
-                        "សូមសាកល្បងវីដេអូដែលមានសំឡេងនិយាយច្បាស់។"
-                    )
+                    st.error("មិនអាចស្គាល់សំឡេងបានទេ។")
                     st.stop()
 
                 entries = []
@@ -214,7 +260,6 @@ if uploaded:
 
                     if start is None:
                         start = 0
-
                     if end is None:
                         end = start + 3
 
@@ -233,12 +278,10 @@ if uploaded:
                 for i, (start, end, text) in enumerate(
                     entries, 1
                 ):
-                    caption = wrap_caption(text)
-
                     lines.extend([
                         str(i),
                         f"{srt_time(start)} --> {srt_time(end)}",
-                        caption,
+                        wrap_caption(text),
                         "",
                     ])
 
@@ -247,18 +290,19 @@ if uploaded:
                 ) as f:
                     f.write("\n".join(lines))
 
-                with st.spinner(
-                    "កំពុងបញ្ចូលអក្សរខ្មែរលើវីដេអូ..."
-                ):
+                with st.spinner("កំពុងដាក់អក្សរលើវីដេអូ..."):
                     subtitles = escape_path(srt_path)
                     fontsdir = escape_path(folder)
 
                     vf = (
                         f"subtitles=filename='{subtitles}'"
                         f":fontsdir='{fontsdir}'"
-                        ":force_style='FontName=Noto Sans Khmer,"
-                        "FontSize=20,Outline=2,Shadow=1,"
-                        "Alignment=2,MarginV=35'"
+                        f":force_style='FontName={font['name']},"
+                        f"FontSize={font_size},"
+                        f"PrimaryColour={color_codes[font_color]},"
+                        f"Outline={outline_size},"
+                        "OutlineColour=&H00000000,"
+                        "Shadow=1,Alignment=2,MarginV=35'"
                     )
 
                     run_ffmpeg([
@@ -276,13 +320,11 @@ if uploaded:
                     video_data = f.read()
 
                 st.success("បង្កើតវីដេអូរួចរាល់!")
-
-                # បង្ហាញវីដេអូជាគំរូ
                 st.subheader("មើលវីដេអូជាគំរូ")
                 st.video(video_data)
 
                 st.download_button(
-                    "⬇️ ទាញយក MP4 មានអក្សរខ្មែរ",
+                    "⬇️ ទាញយក MP4",
                     data=video_data,
                     file_name="khmer_subtitle.mp4",
                     mime="video/mp4",
@@ -295,8 +337,7 @@ if uploaded:
 
             except Exception as e:
                 st.error(
-                    "មិនអាចបង្កើតវីដេអូបានទេ។ "
-                    "សូមពិនិត្យកំហុសខាងក្រោម។"
+                    "មានបញ្ហាក្នុងការបង្កើតវីដេអូ។"
                 )
                 st.code(str(e))
 
