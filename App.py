@@ -220,7 +220,7 @@ if uploaded:
 
                 with open(output_path, "rb") as f:
                     video_data = f.read()
-
+                st.video(video_data)
                 st.success("បង្កើតវីដេអូរួចរាល់!")
 
                 st.download_button(
