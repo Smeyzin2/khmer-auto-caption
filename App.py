@@ -14,10 +14,11 @@ from transformers import pipeline
 st.set_page_config(
     page_title="Khmer Auto Caption",
     page_icon="🎬",
+    layout="centered",
 )
 
 st.title("🎬 Khmer Auto Caption")
-st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ និងជ្រើសរើស Font")
+st.write("បង្កើតវីដេអូមានអក្សរខ្មែរ តាមពេលនិយាយ")
 
 MODEL = "openai/whisper-small"
 
@@ -87,9 +88,9 @@ def extract_audio(video_path, audio_path):
 
 def read_audio(path):
     with wave.open(path, "rb") as wav:
-        channels = wav.getnchannels()
         rate = wav.getframerate()
-        data = wav.readframes(wav.getnframes())
+        frames = wav.getnframes()
+        data = wav.readframes(frames)
 
     samples = np.frombuffer(
         data, dtype=np.int16
@@ -97,15 +98,10 @@ def read_audio(path):
 
     samples /= 32768.0
 
-    if channels > 1:
-        samples = samples.reshape(
-            -1, channels
-        ).mean(axis=1)
-
     return {
         "raw": samples,
         "sampling_rate": rate,
-    }
+    }, frames / rate
 
 
 def srt_time(seconds):
@@ -132,29 +128,145 @@ def escape_path(path):
     )
 
 
-def wrap_caption(text, max_chars=28):
+def split_caption(text, max_chars=26):
+    """បំបែកអត្ថបទវែងជាឃ្លាខ្លីៗ។"""
     text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        return []
+
     words = text.split()
-    lines = []
+    result = []
     current = ""
 
     for word in words:
-        candidate = (
-            word if not current
-            else current + " " + word
-        )
+        candidate = word if not current else current + " " + word
 
         if len(candidate) <= max_chars:
             current = candidate
         else:
             if current:
-                lines.append(current)
-            current = word
+                result.append(current)
+
+            # កុំទុកពាក្យវែងពេកជាឃ្លាតែមួយ
+            if len(word) > max_chars:
+                for i in range(0, len(word), max_chars):
+                    result.append(word[i:i + max_chars])
+                current = ""
+            else:
+                current = word
 
     if current:
-        lines.append(current)
+        result.append(current)
 
-    return "\n".join(lines)
+    return result
+
+
+def split_interval(text, start, end):
+    """ចែកពេលវេលារបស់ឃ្លាមួយទៅឃ្លាតូចៗ។"""
+    pieces = split_caption(text)
+
+    if not pieces:
+        return []
+
+    start = max(0.0, float(start))
+    end = max(start + 0.25, float(end))
+
+    weights = [max(1, len(piece)) for piece in pieces]
+    total_weight = sum(weights)
+    duration = end - start
+
+    result = []
+    cursor = start
+
+    for i, piece in enumerate(pieces):
+        piece_start = cursor
+
+        if i == len(pieces) - 1:
+            piece_end = end
+        else:
+            piece_end = cursor + duration * (
+                weights[i] / total_weight
+            )
+
+        piece_end = max(piece_start + 0.15, piece_end)
+
+        result.append((
+            piece_start,
+            piece_end,
+            piece,
+        ))
+        cursor = piece_end
+
+    return result
+
+
+def make_timed_entries(chunks, transcript, duration):
+    """
+    ប្រើ timestamps ពី AI ប្រសិនបើមាន។
+    បើមិនមាន ឬមិនត្រឹមត្រូវ ចែកអត្ថបទតាមរយៈពេលវីដេអូ។
+    """
+    entries = []
+
+    for chunk in chunks:
+        text = (chunk.get("text") or "").strip()
+        stamp = chunk.get("timestamp")
+
+        if not text or not stamp or len(stamp) < 2:
+            continue
+
+        start, end = stamp[0], stamp[1]
+
+        if start is None or end is None:
+            continue
+
+        try:
+            start = float(start)
+            end = float(end)
+        except (TypeError, ValueError):
+            continue
+
+        if start < 0 or end <= start:
+            continue
+
+        start = min(start, duration)
+        end = min(end, duration)
+
+        if end <= start:
+            continue
+
+        entries.extend(split_interval(text, start, end))
+
+    # បើ AI មិនផ្ដល់ពេលវេលាល្អ ត្រូវចែកអត្ថបទទាំងមូល
+    # ជាឃ្លាខ្លីៗ ហើយចែកពេលតាមប្រវែងអត្ថបទ។
+    if not entries:
+        entries = split_interval(
+            transcript, 0.0, max(duration, 1.0)
+        )
+
+    entries.sort(key=lambda item: item[0])
+
+    # កែពេលវេលាដែលត្រួតគ្នា ដើម្បីកុំឱ្យឃ្លាច្រើន
+    # បង្ហាញលើអេក្រង់ក្នុងពេលតែមួយ។
+    fixed = []
+
+    for start, end, text in entries:
+        if fixed:
+            previous_start, previous_end, previous_text = fixed[-1]
+
+            if start < previous_end:
+                fixed[-1] = (
+                    previous_start,
+                    max(previous_start + 0.15, start),
+                    previous_text,
+                )
+
+        if end > start:
+            fixed.append((start, end, text))
+
+    return [
+        item for item in fixed
+        if item[1] > item[0] and item[2].strip()
+    ]
 
 
 st.subheader("🎨 កំណត់រចនាប័ទ្មអក្សរ")
@@ -196,7 +308,8 @@ uploaded = st.file_uploader(
 )
 
 if uploaded:
-    st.video(uploaded.getvalue())
+    video_bytes = uploaded.getvalue()
+    st.video(video_bytes)
 
     if st.button(
         "បង្កើតវីដេអូមានអក្សរខ្មែរ",
@@ -210,25 +323,39 @@ if uploaded:
             output_path = os.path.join(
                 folder, "khmer_subtitle.mp4"
             )
+
             font = FONTS[font_choice]
-            font_path = os.path.join(
-                folder, font["file"]
-            )
+            font_path = os.path.join(folder, font["file"])
 
             with open(source, "wb") as f:
-                f.write(uploaded.getvalue())
+                f.write(video_bytes)
 
             try:
                 with st.spinner("កំពុងទាញយក Font..."):
-                    urllib.request.urlretrieve(
-                        font["url"], font_path
+                    request = urllib.request.Request(
+                        font["url"],
+                        headers={"User-Agent": "Mozilla/5.0"},
                     )
+                    with urllib.request.urlopen(
+                        request, timeout=30
+                    ) as response:
+                        font_data = response.read()
+
+                    if len(font_data) < 1000:
+                        raise RuntimeError(
+                            "ឯកសារ Font មិនត្រឹមត្រូវទេ។"
+                        )
+
+                    with open(font_path, "wb") as f:
+                        f.write(font_data)
 
                 with st.spinner("កំពុងបំបែកសំឡេង..."):
                     extract_audio(source, audio_path)
-                    audio = read_audio(audio_path)
+                    audio, duration = read_audio(audio_path)
 
-                with st.spinner("AI កំពុងស្គាល់សំឡេងខ្មែរ..."):
+                with st.spinner(
+                    "AI កំពុងស្គាល់សំឡេងខ្មែរ..."
+                ):
                     model = load_model()
                     result = model(
                         audio,
@@ -240,57 +367,58 @@ if uploaded:
                         },
                     )
 
-                transcript = result.get(
-                    "text", ""
+                transcript = (
+                    result.get("text") or ""
                 ).strip()
                 chunks = result.get("chunks") or []
 
                 if not transcript:
-                    st.error("មិនអាចស្គាល់សំឡេងបានទេ។")
+                    st.error(
+                        "AI មិនអាចស្គាល់សំឡេងបានទេ។"
+                    )
                     st.stop()
 
-                entries = []
-
-                for chunk in chunks:
-                    text = chunk.get("text", "").strip()
-                    stamps = chunk.get("timestamp") or (0, None)
-
-                    start = stamps[0]
-                    end = stamps[1]
-
-                    if start is None:
-                        start = 0
-                    if end is None:
-                        end = start + 3
-
-                    if text:
-                        entries.append((
-                            float(start),
-                            max(float(start) + 0.2, float(end)),
-                            text,
-                        ))
+                entries = make_timed_entries(
+                    chunks, transcript, duration
+                )
 
                 if not entries:
-                    entries = [(0.0, 10.0, transcript)]
+                    st.error(
+                        "មិនអាចបង្កើតពេលវេលាអក្សរបានទេ។"
+                    )
+                    st.stop()
 
-                lines = []
+                srt_lines = []
 
-                for i, (start, end, text) in enumerate(
-                    entries, 1
+                for index, (start, end, text) in enumerate(
+                    entries, start=1
                 ):
-                    lines.extend([
-                        str(i),
+                    srt_lines.extend([
+                        str(index),
                         f"{srt_time(start)} --> {srt_time(end)}",
-                        wrap_caption(text),
+                        text,
                         "",
                     ])
 
                 with open(
                     srt_path, "w", encoding="utf-8-sig"
                 ) as f:
-                    f.write("\n".join(lines))
+                    f.write("\n".join(srt_lines))
 
-                with st.spinner("កំពុងដាក់អក្សរលើវីដេអូ..."):
+                with st.expander("ពិនិត្យពេលវេលាអក្សរ"):
+                    st.write(
+                        f"ចំនួនឃ្លាអក្សរ៖ {len(entries)}"
+                    )
+                    st.code(
+                        "\n".join(
+                            f"{srt_time(a)} - {srt_time(b)}  {t}"
+                            for a, b, t in entries[:30]
+                        )
+                    )
+
+                with st.spinner(
+                    "កំពុងដាក់អក្សរលើវីដេអូ..."
+                ):
                     subtitles = escape_path(srt_path)
                     fontsdir = escape_path(folder)
 
@@ -317,15 +445,15 @@ if uploaded:
                     ])
 
                 with open(output_path, "rb") as f:
-                    video_data = f.read()
+                    output_data = f.read()
 
                 st.success("បង្កើតវីដេអូរួចរាល់!")
-                st.subheader("មើលវីដេអូជាគំរូ")
-                st.video(video_data)
+                st.subheader("មើលវីដេអូដែលបានដាក់អក្សរ")
+                st.video(output_data)
 
                 st.download_button(
                     "⬇️ ទាញយក MP4",
-                    data=video_data,
+                    data=output_data,
                     file_name="khmer_subtitle.mp4",
                     mime="video/mp4",
                     type="primary",
@@ -336,9 +464,7 @@ if uploaded:
                     st.write(transcript)
 
             except Exception as e:
-                st.error(
-                    "មានបញ្ហាក្នុងការបង្កើតវីដេអូ។"
-                )
+                st.error("មានបញ្ហាក្នុងការបង្កើតវីដេអូ។")
                 st.code(str(e))
 
 else:
