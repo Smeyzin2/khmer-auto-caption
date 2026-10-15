@@ -22,7 +22,9 @@ st.write("បង្កើតវីដេអូ MP4 មានអក្សរខ�
 MODEL = "sengtha/whisper-base-khmer"
 
 
-FONT_URL = "https://raw.githubusercontent.com/notofonts/khmer/main/fonts/NotoSansKhmer/hinted/ttf/NotoSansKhmer-Regular.ttf"
+
+FONT_URL = "https://cdn.jsdelivr.net/gh/notofonts/notofonts.github.io/fonts/NotoSansKhmer/full/otf/NotoSansKhmer-Regular.otf"
+
 
 
 
