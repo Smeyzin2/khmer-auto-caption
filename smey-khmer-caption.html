@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="km">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Smey Khmer Caption</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#f4f6fb;color:#172033;font-family:system-ui,sans-serif}
+main{max-width:720px;margin:20px auto;padding:16px}section{background:white;border-radius:18px;padding:20px;box-shadow:0 6px 24px #14213d12}
+h1{font-size:26px;margin:0 0 8px}.tag{display:inline-block;background:#e4f8ed;color:#137344;border-radius:20px;padding:5px 10px;font-size:13px}
+p{line-height:1.65;color:#586174}.warning{background:#fff6df;padding:12px;border-radius:10px;color:#754c00}
+input,button,textarea{width:100%;margin:10px 0;padding:13px;border:1px solid #d7dce7;border-radius:10px;font:inherit}
+button{background:#2563eb;color:white;border:0;font-weight:700}button:disabled{opacity:.5}textarea{min-height:160px}
+small{color:#64748b}
+</style>
+</head>
+<body><main><section>
+<span class="tag">Smey Khmer Caption • កំណែសាកល្បង</span>
+<h1>បង្កើតអត្ថបទខ្មែរពីសំឡេង</h1>
+<p>ជ្រើសឯកសារសំឡេង រួចចុចប៊ូតុងដំណើរការ។</p>
+<div class="warning">ចំណាំ៖ ម៉ូដែល AI ត្រូវទាញយកពីអ៊ីនធឺណិតលើកដំបូង ហើយអាចប្រើទិន្នន័យច្រើន និងដំណើរការយឺតលើទូរស័ព្ទ។ កំណែនេះបង្កើតអត្ថបទធម្មតា (TXT) មិនទាន់មានពេលវេលា SRT ឬដាក់អក្សរលើវីដេអូទេ។</div>
+<label for="audio"><b>ជ្រើសឯកសារសំឡេង</b></label>
+<input id="audio" type="file" accept="audio/*">
+<button id="go">ស្ដាប់សំឡេង និងបង្កើតអត្ថបទ</button>
+<p id="status" role="status">ត្រៀមរួច។ សូមជ្រើសឯកសារសំឡេងជាមុន។</p>
+<textarea id="result" placeholder="អត្ថបទដែល AI ស្គាល់នឹងបង្ហាញនៅទីនេះ..."></textarea>
+<button id="download" disabled>ទាញយកអត្ថបទជា TXT</button>
+<p><small>លទ្ធផល AI អាចមានពាក្យខុស។ សូមពិនិត្យអត្ថបទមុនប្រើ។ ឯកសារវីដេអូត្រូវស្រង់សំឡេងជាមុន។</small></p>
+</section></main>
+<script type="module">
+const fileInput=document.querySelector('#audio'),go=document.querySelector('#go'),status=document.querySelector('#status'),out=document.querySelector('#result'),dl=document.querySelector('#download');
+let transcriber=null;
+go.addEventListener('click',async()=>{
+ const file=fileInput.files?.[0];
+ if(!file){status.textContent='សូមជ្រើសឯកសារសំឡេងជាមុន។';return}
+ go.disabled=true;
+ try{
+  status.textContent='កំពុងផ្ទុកម៉ូដែល AI។ សូមរង់ចាំ និងកុំបិទទំព័រ...';
+  const {pipeline,env}=await import('https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2');
+  env.allowLocalModels=false; env.useBrowserCache=true;
+  if(!transcriber) transcriber=await pipeline('automatic-speech-recognition','Xenova/whisper-base',{progress_callback:p=>{
+   if(p.status==='progress') status.textContent='កំពុងទាញយកម៉ូដែល AI '+Math.round(p.progress||0)+'%';
+  }});
+  status.textContent='កំពុងស្ដាប់សំឡេង...';
+  const url=URL.createObjectURL(file);
+  try {
+   const result=await transcriber(url,{language:'khmer',task:'transcribe'});
+   out.value=result.text||'';
+   dl.disabled=!out.value;
+   status.textContent=out.value?'រួចរាល់។ សូមពិនិត្យអត្ថបទ ព្រោះ AI អាចស្គាល់ពាក្យខុសខ្លះ។':'មិនមានអត្ថបទត្រឡប់មកទេ។ សូមសាកល្បងឯកសារផ្សេង។';
+  } finally {URL.revokeObjectURL(url)}
+ }catch(e){status.textContent='មិនអាចដំណើរការបាន៖ '+(e?.message||e)+'។ សូមសាកល្បងឯកសារសំឡេងខ្លី ឬកម្មវិធីរុករកផ្សេង។'}
+ finally{go.disabled=false}
+});
+dl.addEventListener('click',()=>{
+ const a=document.createElement('a');
+ a.href=URL.createObjectURL(new Blob([out.value],{type:'text/plain;charset=utf-8'}));
+ a.download='khmer-transcript.txt';a.click();URL.revokeObjectURL(a.href);
+});
+</script></body></html>
