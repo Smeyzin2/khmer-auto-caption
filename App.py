@@ -19,7 +19,7 @@ st.set_page_config(
 st.title("🎬 Khmer Auto Caption")
 st.write("បង្កើតវីដេអូ MP4 មានអក្សរខ្មែរ")
 
-MODEL = "sengtha/whisper-base-khmer"
+MODEL = "openai/whisper-small"
 
 
 
@@ -144,11 +144,17 @@ if uploaded:
 
                 with st.spinner("AI កំពុងស្គាល់សំឡេង..."):
                     model = load_model()
-                    result = model(
-                        audio,
-                        return_timestamps=True,
-                        chunk_length_s=25,
-                    )
+                    
+result = model(
+    audio,
+    return_timestamps=True,
+    chunk_length_s=15,
+    generate_kwargs={
+        "language": "khmer",
+        "task": "transcribe",
+    },
+)
+
 
                 transcript = result.get("text", "").strip()
                 chunks = result.get("chunks") or []
