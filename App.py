@@ -48,11 +48,19 @@ PREFERRED_MODELS = [
     "gemini-2.5-flash-lite",
 ]
 
-FONT_URL = (
-    "https://raw.githubusercontent.com/google/fonts/"
-    "main/ofl/battambang/Battambang-Regular.ttf"
-)
-FONT_NAME = "Battambang"
+GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
+
+# (ឈ្មោះឯកសារ, តំណ, ឈ្មោះ Font លំនាំដើម)
+FONT_SOURCES = [
+    (
+        "Battambang.ttf",
+        GF + "battambang/Battambang-Regular.ttf",
+        "Battambang",
+    ),
+    ("Content.ttf", GF + "content/Content-Regular.ttf", "Content"),
+    ("Siemreap.ttf", GF + "siemreap/Siemreap-Regular.ttf", "Siemreap"),
+    ("Bokor.ttf", GF + "bokor/Bokor-Regular.ttf", "Bokor"),
+]
 
 # ឈ្មោះ: (ទំហំអតិបរមា, CRF, preset)
 QUALITY = {
@@ -107,12 +115,18 @@ def fix_khmer(text):
     return text.strip()
 
 
-def run_ffmpeg(args, cwd=None, verbose=False):
+def run_ffmpeg(args, cwd=None, verbose=False, env=None):
     exe = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [exe, "-y"]
     if verbose:
         cmd += ["-loglevel", "verbose"]
     cmd += args
+
+    full_env = None
+    if env:
+        full_env = os.environ.copy()
+        full_env.update(env)
+
     try:
         result = subprocess.run(
             cmd,
@@ -120,6 +134,7 @@ def run_ffmpeg(args, cwd=None, verbose=False):
             stderr=subprocess.PIPE,
             check=True,
             cwd=cwd,
+            env=full_env,
         )
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", "ignore")[-1500:]
@@ -169,9 +184,11 @@ def time_ass(seconds):
     return f"{h}:{m:02}:{s:02}.{cs:02}"
 
 
-def download_font(path):
+# ---------- Font ----------
+
+def fetch_font(url, path):
     request = urllib.request.Request(
-        FONT_URL,
+        url,
         headers={"User-Agent": "Mozilla/5.0"},
     )
     with urllib.request.urlopen(request, timeout=25) as response:
@@ -181,13 +198,32 @@ def download_font(path):
     with open(path, "wb") as f:
         f.write(data)
 
-    # ចម្លងទៅ ~/.fonts ដើម្បីឱ្យប្រព័ន្ធរកឃើញបន្ថែម
+
+def download_fonts(folder):
+    """ទាញយក Font ខ្មែរ។ Font ទីមួយចាំបាច់ ដែលនៅសល់ជាជម្រើសបម្រុង។"""
+    fonts = []
+    for i, (filename, url, default_name) in enumerate(FONT_SOURCES):
+        path = os.path.join(folder, filename)
+        try:
+            fetch_font(url, path)
+        except Exception:
+            if i == 0:
+                raise
+            continue
+        fonts.append((path, default_name))
+
+    # ចម្លង Font ទីមួយទៅ ~/.fonts ដើម្បីឱ្យប្រព័ន្ធរកឃើញបន្ថែម
     try:
         home_fonts = os.path.expanduser("~/.fonts")
         os.makedirs(home_fonts, exist_ok=True)
-        shutil.copy(path, os.path.join(home_fonts, "Battambang-Regular.ttf"))
+        shutil.copy(
+            fonts[0][0],
+            os.path.join(home_fonts, "Battambang-Regular.ttf"),
+        )
     except Exception:
         pass
+
+    return fonts
 
 
 def get_font_family(path, default):
@@ -205,6 +241,46 @@ def get_font_family(path, default):
         pass
     return default
 
+
+def make_fontconfig_env(folder):
+    """បង្កើត fontconfig ផ្ទាល់ខ្លួន ដើម្បីបង្ខំឱ្យរក Font ក្នុងថតនេះឃើញ។"""
+    cache_dir = os.path.join(folder, "fc-cache")
+    os.makedirs(cache_dir, exist_ok=True)
+    conf_path = os.path.join(folder, "fonts.conf")
+
+    conf = (
+        '<?xml version="1.0"?>\n'
+        '<!DOCTYPE fontconfig SYSTEM "fonts.dtd">\n'
+        "<fontconfig>\n"
+        '  <include ignore_missing="yes">/etc/fonts/fonts.conf</include>\n'
+        f"  <dir>{folder}</dir>\n"
+        "  <dir>~/.fonts</dir>\n"
+        f"  <cachedir>{cache_dir}</cachedir>\n"
+        "</fontconfig>\n"
+    )
+    with open(conf_path, "w", encoding="utf-8") as f:
+        f.write(conf)
+
+    return {
+        "FONTCONFIG_FILE": conf_path,
+        "FONTCONFIG_PATH": folder,
+    }
+
+
+def font_was_used(log, keys):
+    """ពិនិត្យ log របស់ FFmpeg ថា Font ខ្មែរត្រូវបានប្រើពិតឬទេ។"""
+    lines = [l for l in log.splitlines() if "fontselect" in l.lower()]
+    if not lines:
+        return True  # មិនដឹង → ទទួលយក
+
+    for line in lines:
+        right = line.split("->", 1)[-1].lower()
+        if any(k in right for k in keys):
+            return True
+    return False
+
+
+# ---------- ទាញយកវីដេអូ និងសំឡេង ----------
 
 def normalize_link(url):
     """បំលែងតំណ Google Drive ទៅជាតំណទាញយកផ្ទាល់។"""
@@ -277,6 +353,8 @@ def extract_audio(video_path, audio_path):
         audio_path,
     ])
 
+
+# ---------- Gemini ----------
 
 def get_available_models(client):
     """សួរ API ថាម៉ូដែលណាអាចប្រើ generateContent បាន។"""
@@ -722,6 +800,8 @@ def transcribe(api_key, audio_path, duration, status):
     )
 
 
+# ---------- Render វីដេអូ ----------
+
 def build_video_filter(max_side):
     """បង្រួមវីដេអូ (បើជ្រើស) ហើយបង្កប់អក្សរ។"""
     ass = "ass=filename=captions.ass:fontsdir=."
@@ -732,6 +812,78 @@ def build_video_filter(max_side):
         )
         return f"{scale},{ass},format=yuv420p"
     return f"{ass},format=yuv420p"
+
+
+def render_with_fonts(folder, fonts, captions, font_size, outline_size,
+                      color, vid_w, vid_h, quality, status):
+    """
+    Render វីដេអូ ហើយពិនិត្យថា Font ខ្មែរត្រូវបានប្រើពិតឬទេ។
+    បើមិនបាន សាកវិធី ឬ Font ផ្សេងបន្ត។
+    """
+    ass_path = os.path.join(folder, "captions.ass")
+    output_path = os.path.join(folder, "output.mp4")
+    max_side, crf, preset = quality
+
+    conf_env = make_fontconfig_env(folder)
+
+    # (លេខ Font, ប្រើ fontconfig ផ្ទាល់ខ្លួនឬទេ)
+    plan = [(0, False), (0, True)]
+    plan += [(i, True) for i in range(1, len(fonts))]
+
+    attempts = []
+    have_output = False
+    best = None
+
+    for font_index, use_conf in plan:
+        font_path, default_name = fonts[font_index]
+        family = get_font_family(font_path, default_name)
+        keys = [family.lower(), default_name.lower()]
+
+        write_ass(
+            ass_path, captions, family, font_size, outline_size,
+            color, vid_w, vid_h,
+        )
+
+        try:
+            log = run_ffmpeg(
+                [
+                    "-i", "input.mp4",
+                    "-vf", build_video_filter(max_side),
+                    "-c:v", "libx264",
+                    "-preset", preset,
+                    "-crf", str(crf),
+                    "-c:a", "aac",
+                    "-b:a", "128k",
+                    "-movflags", "+faststart",
+                    "output.mp4",
+                ],
+                cwd=folder,
+                verbose=True,
+                env=conf_env if use_conf else None,
+            )
+        except RuntimeError as e:
+            attempts.append(f"{family} conf={use_conf}: ffmpeg error")
+            if not have_output and font_index == plan[-1][0]:
+                raise
+            continue
+
+        ok = font_was_used(log, keys)
+        attempts.append(f"{family} conf={use_conf}: ok={ok}")
+
+        have_output = True
+        best = (family, log)
+
+        if ok:
+            break
+        dbg(status, f"Font {family} មិនត្រូវបានប្រើ កំពុងសាកវិធីផ្សេង...")
+
+    if not have_output:
+        raise RuntimeError("Render មិនបាន។\n" + "\n".join(attempts))
+
+    with open(output_path, "rb") as f:
+        data = f.read()
+
+    return data, best[0], best[1], attempts
 
 
 # ---------- ចំណុចប្រទាក់ ----------
@@ -799,9 +951,6 @@ else:
         with tempfile.TemporaryDirectory() as folder:
             source = os.path.join(folder, "input.mp4")
             audio_path = os.path.join(folder, "audio.mp3")
-            ass_path = os.path.join(folder, "captions.ass")
-            output_path = os.path.join(folder, "output.mp4")
-            font_path = os.path.join(folder, "Battambang.ttf")
 
             try:
                 if uploaded is not None:
@@ -813,8 +962,7 @@ else:
                     download_video(video_url, source, bar)
 
                 status.write("១/៤ កំពុងរៀបចំ...")
-                download_font(font_path)
-                font_family = get_font_family(font_path, FONT_NAME)
+                fonts = download_fonts(folder)
 
                 status.write("២/៤ កំពុងដកសំឡេង...")
                 extract_audio(source, audio_path)
@@ -834,37 +982,21 @@ else:
                         "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។"
                     )
 
-                write_ass(
-                    ass_path,
-                    captions,
-                    font_family,
-                    font_size,
-                    outline_size,
-                    colors[font_color],
-                    vid_w,
-                    vid_h,
-                )
-
                 status.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
-                max_side, crf, preset = QUALITY[quality_label]
-                ffmpeg_log = run_ffmpeg(
-                    [
-                        "-i", "input.mp4",
-                        "-vf", build_video_filter(max_side),
-                        "-c:v", "libx264",
-                        "-preset", preset,
-                        "-crf", str(crf),
-                        "-c:a", "aac",
-                        "-b:a", "128k",
-                        "-movflags", "+faststart",
-                        "output.mp4",
-                    ],
-                    cwd=folder,
-                    verbose=DEBUG,
+                result_video, used_font, ffmpeg_log, attempts = (
+                    render_with_fonts(
+                        folder,
+                        fonts,
+                        captions,
+                        font_size,
+                        outline_size,
+                        colors[font_color],
+                        vid_w,
+                        vid_h,
+                        QUALITY[quality_label],
+                        status,
+                    )
                 )
-
-                with open(output_path, "rb") as f:
-                    result_video = f.read()
 
                 status.update(
                     label="រួចរាល់!",
@@ -892,8 +1024,10 @@ else:
                         size_mb = len(result_video) / (1024 * 1024)
                         st.write(f"ម៉ូដែល: {used_model}")
                         st.write(f"ការតម្រឹម: {sync_mode}")
-                        st.write(f"Font: {font_family}")
+                        st.write(f"Font ដែលប្រើ: {used_font}")
                         st.write(f"ទំហំលទ្ធផល: {size_mb:.1f}MB")
+                        st.write("ការសាក Font:")
+                        st.text("\n".join(attempts))
                         font_lines = [
                             line
                             for line in ffmpeg_log.splitlines()
