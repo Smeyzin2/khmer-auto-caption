@@ -13,7 +13,7 @@ from transformers import pipeline
 
 st.set_page_config(page_title="Khmer Auto Caption", page_icon="🎬")
 st.title("🎬 Khmer Auto Caption")
-st.write("បម្លែងសំឡេងទៅជាអក្សរខ្មែរ")
+st.write("បង្កើត Subtitle ខ្មែរ និងទាញយកវីដេអូមានអក្សរខ្មែរ")
 
 @st.cache_resource
 def load_model():
@@ -23,23 +23,27 @@ def load_model():
         device=-1,
     )
 
-def to_srt_time(seconds):
+def srt_time(seconds):
     ms = int(max(0, seconds) * 1000)
     h, ms = divmod(ms, 3600000)
     m, ms = divmod(ms, 60000)
     s, ms = divmod(ms, 1000)
     return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-def extract_audio(source, output):
+def run_ffmpeg(args):
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    subprocess.run(
-        [ffmpeg, "-y", "-i", source, "-vn",
-         "-ac", "1", "-ar", "16000",
-         "-acodec", "pcm_s16le", output],
-        check=True,
+    return subprocess.run(
+        [ffmpeg, "-y"] + args,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
+        check=True,
     )
+
+def extract_audio(source, destination):
+    run_ffmpeg([
+        "-i", source, "-vn", "-ac", "1", "-ar", "16000",
+        "-acodec", "pcm_s16le", destination
+    ])
 
 def read_audio(path):
     with wave.open(path, "rb") as wav:
@@ -49,7 +53,7 @@ def read_audio(path):
         frames = wav.readframes(wav.getnframes())
 
     if width != 2:
-        raise ValueError("សំឡេងមិនមែនជា WAV 16-bit PCM ទេ")
+        raise ValueError("ទម្រង់សំឡេងមិនត្រឹមត្រូវ")
 
     audio = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
     if channels > 1:
@@ -58,35 +62,33 @@ def read_audio(path):
     return {"raw": audio, "sampling_rate": rate}
 
 uploaded = st.file_uploader(
-    "ជ្រើសរើសវីដេអូ ឬសំឡេង",
-    type=["mp4", "mov", "mkv", "avi", "webm",
-          "mp3", "wav", "m4a", "flac", "ogg"],
+    "ជ្រើសរើសវីដេអូ",
+    type=["mp4", "mov", "mkv", "avi", "webm"],
 )
 
 if uploaded:
-    st.success(f"បានជ្រើសរើស៖ {uploaded.name}")
+    st.video(uploaded.getvalue())
 
-    if uploaded.type and uploaded.type.startswith("video/"):
-        st.video(uploaded.getvalue())
-
-    if st.button("បង្កើតអក្សរខ្មែរ", type="primary",
+    if st.button("បង្កើត Subtitle ខ្មែរ", type="primary",
                  use_container_width=True):
         with tempfile.TemporaryDirectory() as folder:
-            source = os.path.join(folder, Path(uploaded.name).name)
+            video_path = os.path.join(folder, "input.mp4")
             audio_path = os.path.join(folder, "audio.wav")
+            srt_path = os.path.join(folder, "khmer.srt")
+            output_path = os.path.join(folder, "khmer_subtitle_video.mp4")
 
-            with open(source, "wb") as f:
+            with open(video_path, "wb") as f:
                 f.write(uploaded.getvalue())
 
             try:
-                with st.spinner("កំពុងរៀបចំសំឡេង..."):
-                    extract_audio(source, audio_path)
-                    audio_data = read_audio(audio_path)
+                with st.spinner("កំពុងបម្លែងសំឡេង..."):
+                    extract_audio(video_path, audio_path)
+                    audio = read_audio(audio_path)
 
                 with st.spinner("AI កំពុងស្ដាប់សំឡេង..."):
                     model = load_model()
                     result = model(
-                        audio_data,
+                        audio,
                         return_timestamps=True,
                         chunk_length_s=25,
                     )
@@ -95,51 +97,71 @@ if uploaded:
                 chunks = result.get("chunks") or []
 
                 if not transcript:
-                    st.warning("មិនអាចស្គាល់សំឡេងបានទេ។")
-                else:
-                    st.success("បានបង្កើតអត្ថបទ!")
-                    st.text_area("អត្ថបទខ្មែរ", transcript, height=220)
+                    st.error("មិនអាចស្គាល់សំឡេងបានទេ។")
+                    st.stop()
 
-                    lines = []
-                    for i, chunk in enumerate(chunks, 1):
-                        text = chunk.get("text", "").strip()
-                        stamp = chunk.get("timestamp") or (0, None)
-                        start = stamp[0] or 0
-                        end = stamp[1] if stamp[1] is not None else start + 3
-
-                        if text:
-                            lines.extend([
-                                str(i),
-                                f"{to_srt_time(start)} --> {to_srt_time(end)}",
-                                text,
-                                "",
-                            ])
-
-                    if not lines:
-                        lines = [
-                            "1",
-                            "00:00:00,000 --> 00:00:10,000",
-                            transcript,
+                lines = []
+                for i, chunk in enumerate(chunks, 1):
+                    text = chunk.get("text", "").strip()
+                    times = chunk.get("timestamp") or (0, None)
+                    start = times[0] or 0
+                    end = times[1] if times[1] is not None else start + 3
+                    if text:
+                        lines.extend([
+                            str(i),
+                            f"{srt_time(start)} --> {srt_time(end)}",
+                            text,
                             "",
-                        ]
+                        ])
 
-                    st.download_button(
-                        "ទាញយក Subtitle (.srt)",
-                        "\n".join(lines),
-                        file_name="khmer_subtitles.srt",
-                        mime="text/plain",
-                        use_container_width=True,
-                    )
-                    st.download_button(
-                        "ទាញយកអត្ថបទ (.txt)",
-                        transcript,
-                        file_name="khmer_transcript.txt",
-                        mime="text/plain",
-                        use_container_width=True,
-                    )
+                if not lines:
+                    lines = [
+                        "1", "00:00:00,000 --> 00:00:10,000",
+                        transcript, ""
+                    ]
+
+                with open(srt_path, "w", encoding="utf-8-sig") as f:
+                    f.write("\n".join(lines))
+
+                st.success("បានបង្កើត Subtitle ខ្មែរ!")
+                st.text_area("អត្ថបទខ្មែរ", transcript, height=180)
+
+                st.download_button(
+                    "ទាញយក Subtitle (.srt)",
+                    "\n".join(lines),
+                    file_name="khmer_subtitles.srt",
+                    mime="text/plain",
+                    use_container_width=True,
+                )
+
+                with st.spinner("កំពុងបង្កប់ Subtitle ក្នុងវីដេអូ..."):
+                    # Use a subtitle filter that supports Khmer Unicode.
+                    escaped = srt_path.replace("\\", "/").replace(":", "\\:")
+                    run_ffmpeg([
+                        "-i", video_path,
+                        "-vf", f"subtitles='{escaped}':charenc=UTF-8",
+                        "-c:v", "libx264", "-preset", "ultrafast",
+                        "-crf", "23", "-c:a", "aac",
+                        "-movflags", "+faststart",
+                        output_path,
+                    ])
+
+                with open(output_path, "rb") as f:
+                    video_bytes = f.read()
+
+                st.success("វីដេអូមាន Subtitle រួចរាល់!")
+                st.video(video_bytes)
+                st.download_button(
+                    "⬇️ ទាញយកវីដេអូ MP4 មាន Subtitle ខ្មែរ",
+                    video_bytes,
+                    file_name="khmer_subtitle_video.mp4",
+                    mime="video/mp4",
+                    type="primary",
+                    use_container_width=True,
+                )
 
             except Exception as e:
                 st.error("កម្មវិធីមានបញ្ហា៖")
                 st.code(str(e))
 else:
-    st.info("សូមជ្រើសរើសវីដេអូ ឬសំឡេងជាមុនសិន។")
+    st.info("សូមជ្រើសរើសវីដេអូ MP4 ជាមុនសិន។")
