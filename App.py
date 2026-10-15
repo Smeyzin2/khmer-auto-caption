@@ -69,6 +69,19 @@ QUALITY = {
     "💎 គុណភាពខ្ពស់": (0, 20, "veryfast"),
 }
 
+# ភាសាក្នុងវីដេអូ: ឈ្មោះអង់គ្លេសសម្រាប់ប្រាប់ AI (None = ស្វ័យប្រវត្តិ)
+LANGUAGES = {
+    "🌐 ស្វ័យប្រវត្តិ (ភាសាអ្វីក៏បាន)": None,
+    "ខ្មែរ": "Khmer",
+    "អង់គ្លេស": "English",
+    "ថៃ": "Thai",
+    "វៀតណាម": "Vietnamese",
+    "ចិន": "Chinese",
+    "ជប៉ុន": "Japanese",
+    "កូរ៉េ": "Korean",
+    "បារាំង": "French",
+}
+
 
 class UserError(RuntimeError):
     """សារកំហុសដែលសមស្របនឹងបង្ហាញដល់អ្នកប្រើផ្ទាល់។"""
@@ -113,6 +126,18 @@ def fix_khmer(text):
     )
     text = re.sub(r"[ \t]+", " ", text)
     return text.strip()
+
+
+def has_khmer(text):
+    return bool(re.search(r"[\u1780-\u17FF]", text or ""))
+
+
+def khmer_ratio(segments):
+    """សមាមាត្រនៃអត្ថបទដែលមានអក្សរខ្មែរ។"""
+    if not segments:
+        return 0.0
+    good = sum(1 for _, _, t in segments if has_khmer(t))
+    return good / len(segments)
 
 
 def run_ffmpeg(args, cwd=None, verbose=False, env=None):
@@ -707,7 +732,49 @@ def call_with_retry(client, model, prompt, audio_bytes, config, status):
             raise
 
 
-def transcribe(api_key, audio_path, duration, status):
+def build_prompt(duration, source_language):
+    """បង្កើតសេចក្តីណែនាំឱ្យ AI៖ ស្តាប់ភាសាអ្វីក៏បាន ហើយចេញជាអក្សរខ្មែរ។"""
+    if source_language == "Khmer":
+        task = (
+            "The speech or singing is in Khmer. Transcribe it exactly as "
+            "spoken, in Khmer script, with correct Khmer spelling. "
+            "Do not translate or summarize."
+        )
+    elif source_language:
+        task = (
+            f"The speech or singing is in {source_language}. "
+            "Listen carefully and translate everything into natural, "
+            "fluent, easy-to-understand Khmer, written in Khmer script. "
+            "Translate the meaning, not word for word."
+        )
+    else:
+        task = (
+            "First detect the spoken or sung language. "
+            "If it is Khmer, transcribe it exactly in Khmer script. "
+            "If it is any other language, translate everything into "
+            "natural, fluent, easy-to-understand Khmer written in Khmer "
+            "script. Translate the meaning, not word for word."
+        )
+
+    return (
+        task
+        + " The text of every segment MUST be written only in Khmer "
+        "script (names of people, places, brands may stay as they are or "
+        "be transliterated into Khmer). Never output the original "
+        "language, romanization, or explanations. "
+        "Put a normal space between Khmer phrases so lines can wrap. "
+        "Split into short subtitle segments, each about 1.5 to 4 seconds "
+        "long and at most 26 characters. "
+        "Timestamps must match exactly when each part is heard. "
+        f"The audio is {duration:.1f} seconds long. "
+        "Return ONLY a JSON array. Each item must be an object: "
+        '{"start": <seconds as number>, "end": <seconds as number>, '
+        '"text": "<Khmer text>"}. '
+        "If there is no speech or singing, return an empty array []."
+    )
+
+
+def transcribe(api_key, audio_path, duration, source_language, status):
     client = genai.Client(
         api_key=api_key,
         http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
@@ -729,21 +796,7 @@ def transcribe(api_key, audio_path, duration, status):
 
     dbg(status, "ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
 
-    prompt = (
-        "Transcribe this audio exactly as spoken or sung. "
-        "The speech is primarily Khmer. Write in Khmer script. "
-        "Do not translate, summarize, or explain. "
-        "Preserve complete Khmer words and correct Khmer spelling. "
-        "Put a normal space between Khmer phrases so lines can wrap. "
-        "Split the speech into short subtitle segments, each about "
-        "1.5 to 4 seconds long and at most 26 characters. "
-        "Timestamps must match exactly when each segment is heard. "
-        f"The audio is {duration:.1f} seconds long. "
-        "Return ONLY a JSON array. Each item must be an object: "
-        '{"start": <seconds as number>, "end": <seconds as number>, '
-        '"text": "<Khmer text>"}. '
-        "If there is no speech, return an empty array []."
-    )
+    prompt = build_prompt(duration, source_language)
 
     # ការកំណត់ពីលឿន → ងាយ → គ្មានការកំណត់
     configs = [
@@ -760,6 +813,7 @@ def transcribe(api_key, audio_path, duration, status):
     ]
 
     errors = []
+    weak = None  # លទ្ធផលមិនសូវល្អ ទុកជាជម្រើសចុងក្រោយ
 
     for model in models:
         for config in configs:
@@ -785,15 +839,36 @@ def transcribe(api_key, audio_path, duration, status):
 
             segments = parse_segments(raw, duration)
             if segments:
-                return segments, model
+                ratio = khmer_ratio(segments)
+                dbg(status, f"[{model}] khmer ratio = {ratio:.2f}")
+
+                if ratio >= 0.6:
+                    return segments, model
+
+                # មិនមែនខ្មែរគ្រប់គ្រាន់ → ទុកជាបម្រុង ហើយសាកម្តងទៀត
+                kept = [s for s in segments if has_khmer(s[2])]
+                if kept and (weak is None or len(kept) > len(weak[0])):
+                    weak = (kept, model)
+                errors.append(f"{model}: មិនមែនអក្សរខ្មែរ")
+                break
 
             # AI មិនបានឆ្លើយជា JSON → ប្រើអត្ថបទធម្មតា
             plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
-            if plain:
+            if plain and has_khmer(plain):
                 return plain_to_segments(plain, duration), model
 
             errors.append(f"{model}: មិនមានអត្ថបទ")
             break
+
+    if weak:
+        return weak
+
+    # គ្មានអត្ថបទ → ទំនងគ្មានសំឡេងនិយាយ
+    if not any("429" in e or "503" in e or "404" in e for e in errors):
+        raise UserError(
+            "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។ "
+            "សូមសាកវីដេអូដែលមានសំឡេងនិយាយច្បាស់។"
+        )
 
     raise RuntimeError(
         "ម៉ូដែលទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(errors)
@@ -861,9 +936,9 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
                 verbose=True,
                 env=conf_env if use_conf else None,
             )
-        except RuntimeError as e:
+        except RuntimeError:
             attempts.append(f"{family} conf={use_conf}: ffmpeg error")
-            if not have_output and font_index == plan[-1][0]:
+            if not have_output and (font_index, use_conf) == plan[-1]:
                 raise
             continue
 
@@ -891,7 +966,9 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 st.title("🎬 Khmer Auto Caption")
-st.caption("បង្កើតវីដេអូមានអក្សរខ្មែរដោយស្វ័យប្រវត្តិ ដោយ AI")
+st.caption(
+    "ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ"
+)
 
 if not API_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
@@ -924,6 +1001,16 @@ else:
         "តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ)",
         placeholder="https://...",
     )
+
+language_label = st.selectbox(
+    "ភាសាក្នុងវីដេអូ",
+    list(LANGUAGES.keys()),
+    index=0,
+    help=(
+        "ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ "
+        "បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់។"
+    ),
+)
 
 quality_label = st.selectbox(
     "គុណភាពវីដេអូ",
@@ -968,9 +1055,13 @@ else:
                 extract_audio(source, audio_path)
                 duration, vid_w, vid_h = probe_video(source)
 
-                status.write("៣/៤ កំពុងស្តាប់សំឡេង...")
+                status.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
                 segments, used_model = transcribe(
-                    API_KEY, audio_path, duration, status
+                    API_KEY,
+                    audio_path,
+                    duration,
+                    LANGUAGES[language_label],
+                    status,
                 )
 
                 captions, sync_mode = build_captions(
@@ -1015,7 +1106,7 @@ else:
                     use_container_width=True,
                 )
 
-                with st.expander("📝 មើលអត្ថបទ"):
+                with st.expander("📝 មើលអត្ថបទខ្មែរ"):
                     for _, _, text in captions:
                         st.write(text)
 
