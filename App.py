@@ -64,6 +64,10 @@ MAX_CHUNK_WORKERS = 3
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
 
+# Groq LLM សម្រាប់បកប្រែបម្រុង (ពេល Google Translate ត្រូវបានរារាំង)
+GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
+
 # លេខកូដភាសាសម្រាប់ Whisper
 WHISPER_LANG = {
     "Khmer": "km",
@@ -1204,8 +1208,8 @@ def groq_transcribe(api_key, audio_path, language, status):
     raise last or RuntimeError("Groq បរាជ័យ")
 
 
-def google_translate_request(text):
-    """ហៅ Google Translate ផ្ទាល់ (POST) → អត្ថបទខ្មែរ។"""
+def _google_once(text):
+    """ហៅ Google Translate ផ្ទាល់ម្តង (POST) → អត្ថបទខ្មែរ។"""
     query = urllib.parse.urlencode(
         {"client": "gtx", "sl": "auto", "tl": "km", "dt": "t"}
     )
@@ -1231,6 +1235,18 @@ def google_translate_request(text):
     )
 
 
+def google_translate_request(text, retries=3):
+    """ហៅ Google Translate ហើយរង់ចាំបន្តិចបើជួប 429។"""
+    for attempt in range(retries):
+        try:
+            return _google_once(text)
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < retries - 1:
+                time.sleep(3 * (attempt + 1))
+                continue
+            raise
+
+
 def clean_translation(out):
     """សម្អាតលទ្ធផលបកប្រែ (លុបអក្សរចិនដែលនៅសល់)។"""
     out = str(out or "")
@@ -1239,77 +1255,106 @@ def clean_translation(out):
     return out or None
 
 
-def translate_texts(texts):
+def groq_translate_chunk(api_key, texts):
+    """បកប្រែជាក្រុមដោយ Groq LLM (ម៉ាស៊ីនបម្រុង ពេល Google ត្រូវបានរារាំង)។"""
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+    body = json.dumps({
+        "model": GROQ_CHAT_MODEL,
+        "temperature": 0.2,
+        "response_format": {"type": "json_object"},
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You translate subtitles into natural, fluent Khmer "
+                    "(Khmer script only). Translate meaning, not word for "
+                    "word. Return JSON: {\"translations\": [...]} with "
+                    "exactly the same number of items, in the same order."
+                ),
+            },
+            {"role": "user", "content": numbered},
+        ],
+    }).encode("utf-8")
+
+    for attempt in range(3):
+        request = urllib.request.Request(
+            GROQ_CHAT_URL,
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+            items = json.loads(content).get("translations") or []
+            if len(items) == len(texts):
+                return [clean_translation(x) for x in items]
+            raise RuntimeError("ចំនួនបន្ទាត់មិនត្រូវគ្នា")
+        except urllib.error.HTTPError as e:
+            if e.code == 429 and attempt < 2:
+                time.sleep(5 * (attempt + 1))
+                continue
+            raise
+    return [None] * len(texts)
+
+
+def translate_texts(texts, groq_key=None):
     """
     បកប្រែអត្ថបទជាភាសាខ្មែរ (ឥតគិតថ្លៃ)។
-    ផ្ញើជាក្រុមធំៗ ដើម្បីកុំឱ្យ Google រារាំង។
+    ១) Google Translate ម្តងមួយក្រុម (បើជួប 429 ឈប់ភ្លាម)
+    ២) ឃ្លាដែលនៅខ្វះ → Groq LLM
     ត្រឡប់ (លទ្ធផល, បញ្ជីមូលហេតុបរាជ័យ)។
     """
     errors = []
     outs = [None] * len(texts)
-
-    def single(text):
-        last = "មិនស្គាល់"
-        for attempt in range(3):
-            try:
-                out = clean_translation(google_translate_request(text))
-                if out:
-                    return out
-                last = "លទ្ធផលទទេ"
-            except Exception as e:
-                last = f"google: {e}"
-
-            try:
-                from deep_translator import GoogleTranslator
-
-                out = clean_translation(
-                    GoogleTranslator(source="auto", target="km").translate(
-                        text
-                    )
-                )
-                if out:
-                    return out
-            except Exception as e:
-                last = f"deep-translator: {e}"
-
-            time.sleep(1.0 * (attempt + 1))
-
-        errors.append(str(last)[:200])
-        return None
+    google_blocked = False
 
     # បែងជាក្រុម (~1200 តួអក្សរ ក្នុងមួយសំណើ)
-    batches = []
-    cur = []
-    size = 0
+    batches, cur, size = [], [], 0
     for i, t in enumerate(texts):
         flat = str(t).replace("\n", " ").strip()
         if cur and size + len(flat) > 1200:
             batches.append(cur)
-            cur = []
-            size = 0
+            cur, size = [], 0
         cur.append((i, flat))
         size += len(flat) + 1
     if cur:
         batches.append(cur)
 
-    def run_batch(batch):
-        joined = "\n".join(t for _, t in batch)
+    # ១) Google ម្តងមួយក្រុម (មិនស្មើគ្នា)
+    for batch in batches:
+        if google_blocked:
+            break
         try:
-            raw = google_translate_request(joined)
-            lines = raw.strip("\n").split("\n")
+            raw = google_translate_request("\n".join(t for _, t in batch))
+            lines = (raw or "").strip("\n").split("\n")
             if len(lines) == len(batch):
                 for (i, _), line in zip(batch, lines):
                     outs[i] = clean_translation(line)
         except Exception as e:
-            errors.append(f"batch: {e}"[:200])
+            errors.append(f"google: {e}"[:200])
+            google_blocked = True
+        time.sleep(0.5)
 
-        # ឃ្លាណាមិនបាន → បកម្តងមួយៗ
-        for i, t in batch:
-            if outs[i] is None:
-                outs[i] = single(t)
-
-    with ThreadPoolExecutor(max_workers=2) as ex:
-        list(ex.map(run_batch, batches))
+    # ២) ឃ្លាដែលនៅទទេ → Groq LLM
+    missing = [i for i, o in enumerate(outs) if o is None]
+    if missing and groq_key:
+        for k in range(0, len(missing), 20):
+            idxs = missing[k:k + 20]
+            try:
+                res = groq_translate_chunk(
+                    groq_key, [str(texts[i]).strip() for i in idxs]
+                )
+                for i, r in zip(idxs, res):
+                    outs[i] = r
+            except Exception as e:
+                errors.append(f"groq-llm: {e}"[:200])
+            time.sleep(1)
 
     return outs, errors
 
@@ -1317,7 +1362,7 @@ def translate_texts(texts):
 def transcribe_free(groq_key, audio_path, duration, source_language,
                     status):
     """
-    ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate។
+    ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Groq LLM)។
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
     """
     code = WHISPER_LANG.get(source_language) if source_language else None
@@ -1360,7 +1405,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
         ]
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        outs, errs = translate_texts([t for _, _, t in keep])
+        outs, errs = translate_texts([t for _, _, t in keep], groq_key)
         segs = []
         for (s, e, _), out in zip(keep, outs):
             if out:
@@ -1371,7 +1416,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
         if not segs or failed > len(keep) * 0.5:
             reason = " | ".join(errs[:2]) or "មិនស្គាល់មូលហេតុ"
             raise RuntimeError(
-                "Google Translate បរាជ័យ។ "
+                "ការបកប្រែបរាជ័យ។ "
                 f"(ស្តាប់បាន {len(keep)} ឃ្លា បកបាន {len(segs)}) "
                 f"មូលហេតុ: {reason}"
             )
@@ -1380,7 +1425,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
         raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
 
     segs.sort(key=lambda x: x[0])
-    return segs, f"Groq {model} + Google Translate", failed
+    return segs, f"Groq {model} + Translate", failed
 
 
 # ---------- សំឡេងអានខ្មែរ (Dubbing) ----------
