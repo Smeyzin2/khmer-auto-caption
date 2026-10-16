@@ -66,7 +66,16 @@ GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
 
 # Groq LLM សម្រាប់បកប្រែបម្រុង (ពេល Google Translate ត្រូវបានរារាំង)
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-GROQ_CHAT_MODEL = "llama-3.3-70b-versatile"
+GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
+GROQ_CHAT_PREFERRED = [
+    "llama-3.3-70b-versatile",
+    "openai/gpt-oss-120b",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+    "openai/gpt-oss-20b",
+    "qwen/qwen3-32b",
+    "llama-3.1-8b-instant",
+]
+_groq_chat_cache = {"models": None, "good": None}
 
 # លេខកូដភាសាសម្រាប់ Whisper
 WHISPER_LANG = {
@@ -1255,52 +1264,120 @@ def clean_translation(out):
     return out or None
 
 
-def groq_translate_chunk(api_key, texts):
-    """បកប្រែជាក្រុមដោយ Groq LLM (ម៉ាស៊ីនបម្រុង ពេល Google ត្រូវបានរារាំង)។"""
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-    body = json.dumps({
-        "model": GROQ_CHAT_MODEL,
-        "temperature": 0.2,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "You translate subtitles into natural, fluent Khmer "
-                    "(Khmer script only). Translate meaning, not word for "
-                    "word. Return JSON: {\"translations\": [...]} with "
-                    "exactly the same number of items, in the same order."
-                ),
-            },
-            {"role": "user", "content": numbered},
-        ],
-    }).encode("utf-8")
+def http_detail(e):
+    """អានមូលហេតុលម្អិតពី HTTPError។"""
+    try:
+        body = e.read().decode("utf-8", "ignore")[:200]
+    except Exception:
+        body = ""
+    return f"HTTP {e.code}: {body}".strip()
 
-    for attempt in range(3):
+
+def groq_chat_models(api_key):
+    """សួរ Groq ថាម៉ូដែលអក្សរណាអាចប្រើបាន (ដាក់ម៉ូដែលល្អមុន)។"""
+    if _groq_chat_cache["models"]:
+        return _groq_chat_cache["models"]
+
+    found = []
+    try:
         request = urllib.request.Request(
-            GROQ_CHAT_URL,
-            data=body,
-            method="POST",
+            GROQ_MODELS_URL,
             headers={
                 "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
                 "User-Agent": "Mozilla/5.0",
             },
         )
-        try:
-            with urllib.request.urlopen(request, timeout=60) as r:
-                data = json.loads(r.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"]
-            items = json.loads(content).get("translations") or []
-            if len(items) == len(texts):
-                return [clean_translation(x) for x in items]
-            raise RuntimeError("ចំនួនបន្ទាត់មិនត្រូវគ្នា")
-        except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < 2:
-                time.sleep(5 * (attempt + 1))
+        with urllib.request.urlopen(request, timeout=20) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        for m in data.get("data") or []:
+            mid = str(m.get("id", ""))
+            low = mid.lower()
+            if not mid or m.get("active") is False:
                 continue
-            raise
-    return [None] * len(texts)
+            if any(
+                x in low
+                for x in ("whisper", "tts", "guard", "prompt", "orpheus")
+            ):
+                continue
+            found.append(mid)
+    except Exception:
+        pass
+
+    if found:
+        ordered = [m for m in GROQ_CHAT_PREFERRED if m in found]
+        ordered += [m for m in found if m not in ordered]
+    else:
+        ordered = list(GROQ_CHAT_PREFERRED)
+
+    _groq_chat_cache["models"] = ordered
+    return ordered
+
+
+def groq_translate_chunk(api_key, texts):
+    """បកប្រែជាក្រុមដោយ Groq LLM (ម៉ាស៊ីនបម្រុង ពេល Google ត្រូវបានរារាំង)។"""
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+
+    models = groq_chat_models(api_key)
+    good = _groq_chat_cache["good"]
+    if good in models:
+        models = [good] + [m for m in models if m != good]
+
+    last = "មិនមានម៉ូដែល"
+    for model in models[:6]:
+        body = json.dumps({
+            "model": model,
+            "temperature": 0.2,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You translate subtitles into natural, fluent "
+                        "Khmer (Khmer script only). Translate meaning, "
+                        "not word for word. Return JSON: "
+                        "{\"translations\": [...]} with exactly the "
+                        "same number of items, in the same order."
+                    ),
+                },
+                {"role": "user", "content": numbered},
+            ],
+        }).encode("utf-8")
+
+        for attempt in range(2):
+            request = urllib.request.Request(
+                GROQ_CHAT_URL,
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=60) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                content = data["choices"][0]["message"]["content"]
+                content = re.sub(
+                    r"<think>.*?</think>", "", content, flags=re.S
+                )
+                items = json.loads(content).get("translations") or []
+                if len(items) == len(texts):
+                    _groq_chat_cache["good"] = model
+                    return [clean_translation(x) for x in items]
+                last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                break
+            except urllib.error.HTTPError as e:
+                last = f"{model}: {http_detail(e)}"
+                if e.code == 429 and attempt == 0:
+                    time.sleep(6)
+                    continue
+                break  # 404/400/ផ្សេងៗ → ម៉ូដែលបន្ទាប់
+            except Exception as e:
+                last = f"{model}: {e}"
+                break
+
+    raise RuntimeError(last[:300])
 
 
 def translate_texts(texts, groq_key=None):
