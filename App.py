@@ -3,14 +3,18 @@ import io
 import re
 import json
 import time
+import uuid
 import shutil
 import asyncio
 import zipfile
 import tempfile
+import threading
 import subprocess
 import urllib.parse
 import urllib.request
 import unicodedata
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -46,13 +50,28 @@ MAX_CAPTION_CHARS = 26
 MAX_DOWNLOAD_MB = 300
 MAX_VIDEOS = 5  # ចំនួនវីដេអូអតិបរមាក្នុងមួយដង
 MAX_ZIP_MB = 250
+REFRESH_SECONDS = 2  # ល្បឿនធ្វើបច្ចុប្បន្នភាពអេក្រង់
+MAX_RENDER_AT_ONCE = 3  # ដាក់អក្សរចូលវីដេអូស្មើគ្នាបានអតិបរមា
+MAX_DURATION_MIN = 15  # វីដេអូវែងអតិបរមា (នាទី)
 
+# ការកាត់សំឡេងជាផ្នែកៗ ដើម្បីឱ្យម៉ោងត្រឹមត្រូវ
+CHUNK_TARGET = 20.0  # វិនាទី
+CHUNK_MAX = 28.0
+MAX_CHUNK_WORKERS = 3
+
+try:
+    ST_VER = tuple(int(x) for x in re.findall(r"\d+", st.__version__)[:2])
+except Exception:
+    ST_VER = (1, 0)
+
+# ម៉ូដែលខ្លាំងមុន ម៉ូដែល lite ទុកចុងក្រោយ
 PREFERRED_MODELS = [
     "gemini-3.8-flash",
     "gemini-3-flash",
     "gemini-flash-latest",
-    "gemini-flash-lite-latest",
     "gemini-2.5-flash",
+    "gemini-2.5-pro",
+    "gemini-flash-lite-latest",
     "gemini-2.5-flash-lite",
 ]
 
@@ -253,25 +272,27 @@ def load_font_bytes():
     return out
 
 
-def install_fonts(folder):
-    """ដាក់ Font ចូលថតរបស់វីដេអូនីមួយៗ។"""
-    fonts = []
-    for filename, data, default_name in load_font_bytes():
-        path = os.path.join(folder, filename)
-        with open(path, "wb") as f:
-            f.write(data)
-        fonts.append((path, default_name))
-
-    # ចម្លង Font ទីមួយទៅ ~/.fonts ដើម្បីឱ្យប្រព័ន្ធរកឃើញបន្ថែម
+def prepare_home_font(fonts_data):
+    """ដាក់ Font ទីមួយក្នុង ~/.fonts តែម្តង (ធ្វើក្នុង thread មេ)។"""
     try:
         home_fonts = os.path.expanduser("~/.fonts")
         os.makedirs(home_fonts, exist_ok=True)
         dst = os.path.join(home_fonts, "Battambang-Regular.ttf")
         if not os.path.exists(dst):
-            shutil.copy(fonts[0][0], dst)
+            with open(dst, "wb") as f:
+                f.write(fonts_data[0][1])
     except Exception:
         pass
 
+
+def install_fonts(folder, fonts_data):
+    """ដាក់ Font ចូលថតរបស់វីដេអូនីមួយៗ។"""
+    fonts = []
+    for filename, data, default_name in fonts_data:
+        path = os.path.join(folder, filename)
+        with open(path, "wb") as f:
+            f.write(data)
+        fonts.append((path, default_name))
     return fonts
 
 
@@ -392,21 +413,30 @@ def download_video(url, path, progress):
     progress.progress(1.0)
 
 
-def extract_audio(video_path, audio_path):
-    run_ffmpeg([
-        "-i", video_path,
-        "-vn",
-        "-ac", "1",
-        "-ar", "16000",
-        "-b:a", "64k",
-        audio_path,
-    ])
+def extract_audio(video_path, audio_path, master_path):
+    """
+    ដកសំឡេងពីរបែប៖
+    - audio.mp3 (ស្រាល) សម្រាប់លាយសំឡេងពេល Dubbing
+    - master.flac (គ្មានការបាត់បង់គុណភាព) សម្រាប់ឱ្យ AI ស្តាប់
+    """
+    try:
+        run_ffmpeg([
+            "-i", video_path,
+            "-vn", "-ac", "1", "-ar", "16000", "-b:a", "64k",
+            audio_path,
+            "-vn", "-ac", "1", "-ar", "16000", "-c:a", "flac",
+            master_path,
+        ])
+    except RuntimeError:
+        raise UserError(
+            "មិនអាចដកសំឡេងពីវីដេអូនេះបានទេ។ វីដេអូអាចគ្មានសំឡេង។"
+        )
 
 
 # ---------- Gemini ----------
 
 def get_available_models(client):
-    """សួរ API ថាម៉ូដែលណាអាចប្រើ generateContent បាន។"""
+    """សួរ API ថាម៉ូដែលណាអាចប្រើ generateContent បាន (lite ទុកចុងក្រោយ)។"""
     found = []
     try:
         for m in client.models.list():
@@ -431,9 +461,18 @@ def get_available_models(client):
         pass
 
     ordered = [m for m in PREFERRED_MODELS if m in found]
-    ordered += [m for m in found if m not in ordered and "flash" in m.lower()]
-    ordered += [m for m in found if m not in ordered]
-    return ordered[:5]
+    rest = [m for m in found if m not in ordered]
+    rest.sort(
+        key=lambda m: ("lite" in m.lower(), "flash" not in m.lower())
+    )
+    ordered += rest
+
+    # ម៉ូដែល lite ទុកចុងក្រោយ (ភាសាខ្មែរខ្សោយជាង)
+    ordered = (
+        [m for m in ordered if "lite" not in m.lower()]
+        + [m for m in ordered if "lite" in m.lower()]
+    )
+    return ordered[:6]
 
 
 def parse_segments(raw, duration):
@@ -510,7 +549,7 @@ def plain_to_segments(text, duration):
     return out
 
 
-# ---------- បែងចែកអក្សរ និងតម្រឹមតាមសំឡេង ----------
+# ---------- បែងចែកអក្សរ និងតម្រឹមម៉ោង ----------
 
 def safe_split(word, n):
     """កាត់ពាក្យវែងដោយមិនបំបែកព្យញ្ជនៈជើង ឬស្រៈ។"""
@@ -598,44 +637,48 @@ def detect_speech(audio_path, duration):
         return []
 
 
-def align_to_speech(pieces, speech):
-    """ដាក់អក្សរតាមចន្លោះដែលមានសំឡេង តាមសមាមាត្រប្រវែងអក្សរ។"""
-    total_len = sum(max(1, len(p)) for p in pieces)
+def snap_segments(segments, speech, duration):
+    """
+    ចាប់ម៉ោងចាប់ផ្តើម/បញ្ចប់ពី AI ឱ្យជិតសំឡេងពិត (បើអាចរកសំឡេងបាន)។
+    បើសំឡេងមានជាប់ជានិច្ច (ភ្លេងខ្លាំង) វាទុកម៉ោងពី AI ដដែល។
+    """
+    segs = sorted(
+        [[s, e, t] for s, e, t in segments], key=lambda x: x[0]
+    )
+
     total_speech = sum(b - a for a, b in speech)
+    if speech and duration > 0 and total_speech / duration < 0.9:
+        for sg in segs:
+            s, e = sg[0], sg[1]
 
-    idx = 0
-    offset = 0.0
+            near = [a for a, b in speech if abs(a - s) <= 0.8]
+            ns = min(near, key=lambda a: abs(a - s)) if near else s
+
+            near = [
+                b for a, b in speech
+                if abs(b - e) <= 0.8 and b > ns + 0.3
+            ]
+            ne = min(near, key=lambda b: abs(b - e)) if near else e
+
+            sg[0], sg[1] = ns, max(ne, ns + 0.4)
+
+    segs.sort(key=lambda x: x[0])
+
+    # កុំឱ្យអក្សរជាន់គ្នា
+    for i in range(len(segs) - 1):
+        if segs[i][1] > segs[i + 1][0]:
+            segs[i][1] = max(segs[i][0] + 0.2, segs[i + 1][0] - 0.02)
+
     out = []
-
-    for p in pieces:
-        d = total_speech * max(1, len(p)) / total_len
-
-        a, b = speech[idx]
-        if (b - (a + offset)) <= 0.001 and idx < len(speech) - 1:
-            idx += 1
-            offset = 0.0
-            a, b = speech[idx]
-
-        start = a + offset
-        remaining = d
-
-        while True:
-            a, b = speech[idx]
-            avail = b - (a + offset)
-            if remaining <= avail + 1e-6 or idx == len(speech) - 1:
-                offset += remaining
-                end = a + offset
-                break
-            remaining -= avail
-            idx += 1
-            offset = 0.0
-
-        out.append((start, max(end, start + 0.25), p))
-
+    for s, e, t in segs:
+        s = min(max(0.0, s), duration)
+        e = max(min(e, duration), s + 0.2)
+        out.append((s, e, t))
     return out
 
 
-def build_captions(segments, audio_path, duration):
+def build_captions(segments, duration):
+    """ចែកអត្ថបទវែងជាបន្ទាត់ខ្លីៗ ក្នុងចន្លោះម៉ោងរបស់វា។"""
     items = []
     for s, e, t in segments:
         parts = split_display(t)
@@ -651,14 +694,7 @@ def build_captions(segments, audio_path, duration):
     if not items:
         return [], ""
 
-    speech = detect_speech(audio_path, duration)
-    total_speech = sum(b - a for a, b in speech)
-
-    if speech and total_speech > 0.5 and total_speech / duration < 0.92:
-        pieces = [p for _, _, p in items]
-        return align_to_speech(pieces, speech), "តាមសំឡេងពិត"
-
-    return items, "តាមម៉ោងពី AI"
+    return items, "តាមម៉ោងពី AI (កែតម្រឹមតាមសំឡេង)"
 
 
 def write_ass(path, captions, font_family, font_size, outline_size,
@@ -703,13 +739,28 @@ def write_ass(path, captions, font_family, font_size, outline_size,
 
 # ---------- ហៅ Gemini ----------
 
+class Reporter:
+    """ផ្ញើស្ថានភាពពី thread ធ្វើការ ទៅឱ្យអេក្រង់ (មិនប្រើ st ក្នុង thread)។"""
+
+    def __init__(self, item):
+        self.item = item
+
+    def write(self, message):
+        self.item["stage"] = message
+        self.item["log"].append(message)
+
+    def progress(self, value):
+        self.item["pct"] = 0.03 + 0.09 * max(0.0, min(1.0, value))
+
+
 def dbg(status, message):
-    """បង្ហាញព័ត៌មានបច្ចេកទេស តែក្នុងមុខងារ DEBUG ប៉ុណ្ណោះ។"""
+    """កត់ត្រាព័ត៌មានបច្ចេកទេស តែក្នុងមុខងារ DEBUG ប៉ុណ្ណោះ។"""
     if DEBUG:
         status.write(message)
 
 
-def call_with_retry(client, model, prompt, audio_bytes, config, status):
+def call_with_retry(client, model, prompt, audio_bytes, mime, config,
+                    status):
     """ហៅម៉ូដែល ហើយសាកម្តងទៀតបើ Google រវល់ (503) ឬកូតាពេញ (429)។"""
     for attempt in range(3):
         try:
@@ -719,7 +770,7 @@ def call_with_retry(client, model, prompt, audio_bytes, config, status):
                     prompt,
                     types.Part.from_bytes(
                         data=audio_bytes,
-                        mime_type="audio/mp3",
+                        mime_type=mime,
                     ),
                 ],
             )
@@ -756,28 +807,35 @@ def call_with_retry(client, model, prompt, audio_bytes, config, status):
             raise
 
 
-def build_prompt(duration, source_language, concise=False):
-    """បង្កើតសេចក្តីណែនាំឱ្យ AI៖ ស្តាប់ភាសាអ្វីក៏បាន ហើយចេញជាអក្សរខ្មែរ។"""
+def build_prompt(clip_duration, source_language, concise=False):
+    """បង្កើតសេចក្តីណែនាំឱ្យ AI៖ ស្តាប់ឱ្យច្បាស់ ហើយចេញជាអក្សរខ្មែរ។"""
     if source_language == "Khmer":
         task = (
-            "The speech or singing is in Khmer. Transcribe it exactly as "
-            "spoken, in Khmer script, with correct Khmer spelling. "
-            "Do not translate or summarize."
+            "The speech or singing is in Khmer (Cambodian). Transcribe it "
+            "faithfully, word for word, in Khmer script with correct "
+            "standard Khmer spelling. Do not translate, summarize or "
+            "paraphrase. Do not confuse Khmer with Thai or Lao. "
+            "If a word is unclear, choose the most likely Khmer word "
+            "from the context."
         )
     elif source_language:
         task = (
             f"The speech or singing is in {source_language}. "
-            "Listen carefully and translate everything into natural, "
-            "fluent, easy-to-understand Khmer, written in Khmer script. "
-            "Translate the meaning, not word for word."
+            "Listen very carefully. First write exactly what is said in "
+            "the original language, then translate the meaning into "
+            "natural, fluent, easy-to-understand Khmer, written in Khmer "
+            "script. Translate the meaning, not word for word."
         )
     else:
         task = (
             "First detect the spoken or sung language. "
-            "If it is Khmer, transcribe it exactly in Khmer script. "
-            "If it is any other language, translate everything into "
-            "natural, fluent, easy-to-understand Khmer written in Khmer "
-            "script. Translate the meaning, not word for word."
+            "If it is Khmer (Cambodian), transcribe it faithfully, word "
+            "for word, in Khmer script with correct standard Khmer "
+            "spelling, and do not confuse it with Thai or Lao. "
+            "If it is any other language, first write exactly what is "
+            "said in the original language, then translate the meaning "
+            "into natural, fluent, easy-to-understand Khmer written in "
+            "Khmer script."
         )
 
     concise_rule = ""
@@ -791,64 +849,83 @@ def build_prompt(duration, source_language, concise=False):
 
     return (
         task
-        + " The text of every segment MUST be written only in Khmer "
-        "script (names of people, places, brands may stay as they are or "
-        "be transliterated into Khmer). Never output the original "
-        "language, romanization, or explanations. "
+        + " The field \"text\" of every segment MUST be written only in "
+        "Khmer script (names of people, places, brands may stay as they "
+        "are or be transliterated into Khmer). Never put romanization or "
+        "explanations in \"text\". "
         "Put a normal space between Khmer phrases so lines can wrap. "
         "Split into short subtitle segments, each about 1.5 to 4 seconds "
-        "long and at most 26 characters. "
+        "long, and the Khmer \"text\" of each segment at most 26 "
+        "characters. "
         + concise_rule
-        + "Timestamps must match exactly when each part is heard. "
-        f"The audio is {duration:.1f} seconds long. "
+        + "Timestamps are in seconds, measured from the very beginning "
+        "of THIS audio clip (0 to "
+        f"{clip_duration:.1f}). "
+        "Each segment must start exactly when its first word is heard "
+        "and end exactly when its last word ends. "
         "Return ONLY a JSON array. Each item must be an object: "
         '{"start": <seconds as number>, "end": <seconds as number>, '
+        '"original": "<what was said in the original language>", '
         '"text": "<Khmer text>"}. '
         "If there is no speech or singing, return an empty array []."
     )
 
 
-def transcribe(api_key, audio_path, duration, source_language, status,
-               concise=False):
-    client = genai.Client(
-        api_key=api_key,
-        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+def plan_chunks(duration, speech):
+    """
+    កាត់សំឡេងជាផ្នែកៗ ~20 វិនាទី ត្រង់ចន្លោះស្ងាត់ (កុំឱ្យដាច់ពាក្យ)។
+    ផ្នែកខ្លីៗ ធ្វើឱ្យម៉ោងពី AI ត្រឹមត្រូវជាង។
+    """
+    if duration <= CHUNK_MAX:
+        return [(0.0, duration)]
+
+    cuts = []
+    for (a1, b1), (a2, b2) in zip(speech, speech[1:]):
+        if a2 - b1 >= 0.15:
+            cuts.append((b1 + a2) / 2.0)
+
+    chunks = []
+    start = 0.0
+    while duration - start > CHUNK_MAX:
+        target = start + CHUNK_TARGET
+        limit = start + CHUNK_MAX
+        cands = [c for c in cuts if start + 8.0 <= c <= limit]
+        cut = min(cands, key=lambda c: abs(c - target)) if cands else target
+        chunks.append((start, cut))
+        start = cut
+    chunks.append((start, duration))
+    return chunks
+
+
+def is_empty_json(raw):
+    return bool(
+        re.fullmatch(
+            r"\s*(```(?:json)?)?\s*\[\s*\]\s*(```)?\s*", raw or ""
+        )
     )
 
-    with open(audio_path, "rb") as f:
-        audio_bytes = f.read()
 
-    if len(audio_bytes) > 18 * 1024 * 1024:
-        raise UserError(
-            "វីដេអូវែងពេក។ សូមប្រើវីដេអូខ្លីជាងនេះ "
-            "(ប្រហែលក្រោម ៣០ នាទី)។"
-        )
+def transcribe_clip(client, models, audio_bytes, mime, clip_duration,
+                    source_language, concise, status):
+    """ស្តាប់សំឡេងមួយផ្នែក។ ត្រឡប់ (segments, model, errors)។"""
+    prompt = build_prompt(clip_duration, source_language, concise)
 
-    models = get_available_models(client)
-
-    if not models:
-        raise RuntimeError("API Key មើលមិនឃើញម៉ូដែលណាមួយទេ។ api key")
-
-    dbg(status, "ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
-
-    prompt = build_prompt(duration, source_language, concise)
-
-    # ការកំណត់ពីលឿន → ងាយ → គ្មានការកំណត់
+    # ឱ្យ AI គិតមុនឆ្លើយ (ច្បាស់ជាង) → ការកំណត់ងាយ → គ្មានការកំណត់
     configs = [
+        types.GenerateContentConfig(
+            temperature=0,
+            response_mime_type="application/json",
+        ),
         types.GenerateContentConfig(
             temperature=0,
             response_mime_type="application/json",
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
-        types.GenerateContentConfig(
-            temperature=0,
-            response_mime_type="application/json",
-        ),
         None,
     ]
 
     errors = []
-    weak = None  # លទ្ធផលមិនសូវល្អ ទុកជាជម្រើសចុងក្រោយ
+    weak = None
 
     for model in models:
         for config in configs:
@@ -856,7 +933,8 @@ def transcribe(api_key, audio_path, duration, source_language, status,
 
             try:
                 response = call_with_retry(
-                    client, model, prompt, audio_bytes, config, status
+                    client, model, prompt, audio_bytes, mime, config,
+                    status,
                 )
             except Exception as e:
                 message = str(e)
@@ -872,42 +950,148 @@ def transcribe(api_key, audio_path, duration, source_language, status,
 
             raw = getattr(response, "text", None) or ""
 
-            segments = parse_segments(raw, duration)
+            segments = parse_segments(raw, clip_duration)
             if segments:
                 ratio = khmer_ratio(segments)
                 dbg(status, f"[{model}] khmer ratio = {ratio:.2f}")
 
                 if ratio >= 0.6:
-                    return segments, model
+                    return segments, model, errors
 
-                # មិនមែនខ្មែរគ្រប់គ្រាន់ → ទុកជាបម្រុង ហើយសាកម្តងទៀត
                 kept = [s for s in segments if has_khmer(s[2])]
                 if kept and (weak is None or len(kept) > len(weak[0])):
                     weak = (kept, model)
                 errors.append(f"{model}: មិនមែនអក្សរខ្មែរ")
                 break
 
+            # AI ឆ្លើយថាគ្មានសំឡេងនិយាយ (ត្រឹមត្រូវ) → ឈប់សាក
+            if is_empty_json(raw):
+                return [], model, []
+
             # AI មិនបានឆ្លើយជា JSON → ប្រើអត្ថបទធម្មតា
             plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
             if plain and has_khmer(plain):
-                return plain_to_segments(plain, duration), model
+                return plain_to_segments(plain, clip_duration), model, errors
 
             errors.append(f"{model}: មិនមានអត្ថបទ")
             break
 
     if weak:
-        return weak
+        return weak[0], weak[1], errors
 
-    # គ្មានអត្ថបទ → ទំនងគ្មានសំឡេងនិយាយ
-    if not any("429" in e or "503" in e or "404" in e for e in errors):
+    return [], None, errors
+
+
+def transcribe(api_key, audio_path, duration, source_language, status,
+               concise=False, speech=None):
+    """
+    ស្តាប់សំឡេងទាំងមូលដោយកាត់ជាផ្នែកៗ ហើយស្តាប់ស្មើគ្នា។
+    ត្រឡប់ (segments, model, ចំនួនផ្នែកបរាជ័យ)។
+    """
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
+
+    models = get_available_models(client)
+    if not models:
+        raise RuntimeError("API Key មើលមិនឃើញម៉ូដែលណាមួយទេ។ api key")
+
+    dbg(status, "ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
+
+    chunks = plan_chunks(duration, speech or [])
+    total = len(chunks)
+    folder = os.path.dirname(audio_path)
+    base = os.path.basename(audio_path)
+    done_counter = {"n": 0}
+
+    dbg(status, f"បែងចែកជា {total} ផ្នែក")
+
+    def work(i, start, end):
+        out_name = f"chunk_{i}.flac"
+        run_ffmpeg(
+            [
+                "-ss", f"{start:.3f}",
+                "-t", f"{end - start:.3f}",
+                "-i", base,
+                "-c:a", "flac",
+                out_name,
+            ],
+            cwd=folder,
+        )
+        with open(os.path.join(folder, out_name), "rb") as f:
+            data = f.read()
+
+        if len(data) > 15 * 1024 * 1024:
+            raise UserError("សំឡេងធំពេក។ សូមប្រើវីដេអូខ្លីជាងនេះ។")
+
+        segs, model, errors = transcribe_clip(
+            client,
+            models,
+            data,
+            "audio/flac",
+            end - start,
+            source_language,
+            concise,
+            status,
+        )
+
+        done_counter["n"] += 1
+        if total > 1:
+            status.write(
+                f"៣/៤ កំពុងស្តាប់ និងបកប្រែ... "
+                f"({done_counter['n']}/{total})"
+            )
+        return start, segs, model, errors
+
+    all_segments = []
+    used_models = []
+    failed = 0
+    fatal_errors = []
+    fatal_keys = ("429", "503", "404", "500", "resource_exhausted")
+
+    workers = max(1, min(MAX_CHUNK_WORKERS, total))
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        futures = [
+            ex.submit(work, i, s, e) for i, (s, e) in enumerate(chunks)
+        ]
+        for fut in futures:
+            try:
+                start, segs, model, errors = fut.result()
+            except UserError:
+                raise
+            except Exception as e:
+                failed += 1
+                fatal_errors.append(str(e))
+                continue
+
+            if segs:
+                used_models.append(model)
+                for s, e, t in segs:
+                    all_segments.append(
+                        (
+                            min(s + start, duration),
+                            min(e + start, duration + 0.5),
+                            t,
+                        )
+                    )
+            elif any(k in err.lower() for err in errors for k in fatal_keys):
+                failed += 1
+                fatal_errors.extend(errors)
+
+    if not all_segments:
+        if fatal_errors:
+            raise RuntimeError(
+                "ម៉ូដែលទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(fatal_errors)
+            )
         raise UserError(
             "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។ "
             "សូមសាកវីដេអូដែលមានសំឡេងនិយាយច្បាស់។"
         )
 
-    raise RuntimeError(
-        "ម៉ូដែលទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(errors)
-    )
+    all_segments.sort(key=lambda x: x[0])
+    main_model = Counter(used_models).most_common(1)[0][0]
+    return all_segments, main_model, failed
 
 
 # ---------- សំឡេងអានខ្មែរ (Dubbing) ----------
@@ -1097,85 +1281,129 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
     return data, best[0], best[1], attempts
 
 
-# ---------- ដំណើរការវីដេអូមួយៗ (កន្លែងធ្វើការ) ----------
+# ---------- ការងារ (Job) ដំណើរការស្មើគ្នា ----------
 
-def process_one(index, total, item, settings, box):
-    """ធ្វើវីដេអូមួយ នៅក្នុងប្រអប់ផ្ទាល់ខ្លួនរបស់វា។"""
-    name = item["name"]
-    result = {
+def new_item(name, path=None, url=None):
+    return {
         "name": name,
+        "path": path,
+        "url": url,
+        "state": "queued",  # queued / running / done / error
+        "stage": "ក្នុងជួររង់ចាំ...",
+        "pct": 0.0,
+        "warn": [],
+        "log": [],
         "video": None,
         "captions": [],
         "error": None,
         "raw_error": "",
         "debug": {},
+        "t0": None,
+        "elapsed": None,
     }
 
-    with box:
-        st.markdown(f"**🎞️ វីដេអូទី {index}/{total}៖ {name}**")
-        status = st.status("កំពុងដំណើរការ...", expanded=True)
 
+class Job:
+    def __init__(self, items, folder):
+        self.id = uuid.uuid4().hex[:8]
+        self.items = items
+        self.folder = folder
+        self.render_slots = threading.Semaphore(MAX_RENDER_AT_ONCE)
+        self.zip = None
+        self.zip_done = False
+        self.scrolled = False
+
+    def running(self):
+        return any(it["state"] in ("queued", "running") for it in self.items)
+
+
+def run_worker(job, item, settings, api_key, fonts_data):
+    """ដំណើរការវីដេអូមួយ ក្នុង thread ផ្ទាល់ខ្លួន (គ្មានការហៅ st)។"""
+    rep = Reporter(item)
+    item["t0"] = time.time()
+    item["state"] = "running"
+
+    try:
         with tempfile.TemporaryDirectory() as folder:
             source = os.path.join(folder, "input.mp4")
             audio_path = os.path.join(folder, "audio.mp3")
+            master_path = os.path.join(folder, "master.flac")
 
-            try:
-                if item.get("file") is not None:
-                    with open(source, "wb") as f:
-                        f.write(item["file"].getbuffer())
-                else:
-                    status.write("កំពុងទាញយកវីដេអូ...")
-                    bar = status.progress(0.0)
-                    download_video(item["url"], source, bar)
+            if item.get("path"):
+                shutil.move(item["path"], source)
+                item["path"] = None
+            else:
+                item["pct"] = 0.03
+                rep.write("កំពុងទាញយកវីដេអូ...")
+                download_video(item["url"], source, rep)
 
-                status.write("១/៤ កំពុងរៀបចំ...")
-                fonts = install_fonts(folder)
+            item["pct"] = 0.12
+            rep.write("១/៤ កំពុងរៀបចំ...")
+            fonts = install_fonts(folder, fonts_data)
 
-                status.write("២/៤ កំពុងដកសំឡេង...")
-                extract_audio(source, audio_path)
-                duration, vid_w, vid_h = probe_video(source)
+            item["pct"] = 0.18
+            rep.write("២/៤ កំពុងដកសំឡេង...")
+            extract_audio(source, audio_path, master_path)
+            duration, vid_w, vid_h = probe_video(source)
 
-                status.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
-                segments, used_model = transcribe(
-                    API_KEY,
-                    audio_path,
-                    duration,
-                    settings["language"],
-                    status,
-                    concise=settings["dub_on"],
+            if duration > MAX_DURATION_MIN * 60:
+                raise UserError(
+                    f"វីដេអូវែងពេក។ សូមប្រើវីដេអូខ្លីជាង "
+                    f"{MAX_DURATION_MIN} នាទី។"
                 )
 
-                captions, sync_mode = build_captions(
-                    segments, audio_path, duration
+            speech = detect_speech(master_path, duration)
+
+            item["pct"] = 0.25
+            rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
+            segments, used_model, failed_chunks = transcribe(
+                api_key,
+                master_path,
+                duration,
+                settings["language"],
+                rep,
+                concise=settings["dub_on"],
+                speech=speech,
+            )
+
+            if failed_chunks:
+                item["warn"].append(
+                    "ផ្នែកខ្លះនៃវីដេអូមិនអាចស្តាប់បាន ដូច្នេះអក្សរអាចខ្វះ។ "
+                    "សូមសាកម្តងទៀតពេលក្រោយ។"
                 )
 
-                if not captions:
-                    raise UserError(
-                        "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។"
+            item["pct"] = 0.55
+            segments = snap_segments(segments, speech, duration)
+            captions, sync_mode = build_captions(segments, duration)
+            if not captions:
+                raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
+
+            dub_ok = False
+            if settings["dub_on"]:
+                item["pct"] = 0.6
+                rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+                try:
+                    dub_ok = make_dub(
+                        folder,
+                        segments,
+                        settings["voice"],
+                        duration,
+                        settings["keep_bg"],
+                        genai.Client(api_key=api_key),
+                        used_model,
+                    )
+                except Exception:
+                    dub_ok = False
+                if not dub_ok:
+                    item["warn"].append(
+                        "បង្កើតសំឡេងអានមិនបានទេ។ វីដេអូមានតែអក្សរ។"
                     )
 
-                dub_ok = False
-                if settings["dub_on"]:
-                    status.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
-                    try:
-                        dub_ok = make_dub(
-                            folder,
-                            segments,
-                            settings["voice"],
-                            duration,
-                            settings["keep_bg"],
-                            genai.Client(api_key=API_KEY),
-                            used_model,
-                        )
-                    except Exception:
-                        dub_ok = False
-                    if not dub_ok:
-                        st.warning(
-                            "បង្កើតសំឡេងអានមិនបានទេ។ "
-                            "វីដេអូនឹងមានតែអក្សរ។"
-                        )
-
-                status.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
+            item["pct"] = 0.75
+            rep.write("៤/៤ កំពុងរង់ចាំដាក់អក្សរចូលវីដេអូ...")
+            with job.render_slots:
+                item["pct"] = 0.82
+                rep.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
                 video, used_font, ffmpeg_log, attempts = render_with_fonts(
                     folder,
                     fonts,
@@ -1186,119 +1414,192 @@ def process_one(index, total, item, settings, box):
                     vid_w,
                     vid_h,
                     settings["quality"],
-                    status,
+                    rep,
                     dub=dub_ok,
                 )
 
-                result["video"] = video
-                result["captions"] = [t for _, _, t in captions]
-                result["debug"] = {
-                    "ម៉ូដែល": used_model,
-                    "ការតម្រឹម": sync_mode,
-                    "Font ដែលប្រើ": used_font,
-                    "Dubbing": dub_ok,
-                    "ទំហំលទ្ធផល": f"{len(video) / (1024 * 1024):.1f}MB",
-                    "ការសាក Font": "\n".join(attempts),
-                    "fontselect": "\n".join(
-                        line
-                        for line in ffmpeg_log.splitlines()
-                        if "fontselect" in line.lower()
-                    )[:1500],
-                }
+            item["video"] = video
+            item["captions"] = [t for _, _, t in captions]
+            item["debug"] = {
+                "ម៉ូដែល": used_model,
+                "ការតម្រឹម": sync_mode,
+                "ផ្នែកបរាជ័យ": failed_chunks,
+                "Font ដែលប្រើ": used_font,
+                "Dubbing": dub_ok,
+                "ទំហំលទ្ធផល": f"{len(video) / (1024 * 1024):.1f}MB",
+                "ការសាក Font": "\n".join(attempts),
+                "fontselect": "\n".join(
+                    line
+                    for line in ffmpeg_log.splitlines()
+                    if "fontselect" in line.lower()
+                )[:1500],
+                "ម៉ោងអក្សរ": "\n".join(
+                    f"[{s:.1f}-{e:.1f}] {t}" for s, e, t in captions
+                ),
+            }
+            item["pct"] = 1.0
+            item["stage"] = "រួចរាល់"
+            item["elapsed"] = time.time() - item["t0"]
+            item["state"] = "done"
 
-                status.update(
-                    label=f"✅ រួចរាល់៖ {name}",
-                    state="complete",
-                    expanded=False,
-                )
+    except Exception as error:
+        item["error"] = friendly_message(error)
+        item["raw_error"] = str(error)
+        item["elapsed"] = time.time() - (item["t0"] or time.time())
+        item["state"] = "error"
 
-            except Exception as error:
-                msg = friendly_message(error)
-                result["error"] = msg
-                result["raw_error"] = str(error)
-                status.update(
-                    label=f"❌ មានបញ្ហា៖ {name}",
-                    state="error",
-                    expanded=False,
-                )
-                st.error(msg)
-                if DEBUG:
-                    st.text(str(error))
-
-    return result
+    finally:
+        if item["state"] == "running":
+            item["error"] = "ការបង្កើតវីដេអូមិនបានសម្រេច។ សូមសាកម្តងទៀត។"
+            item["state"] = "error"
+        # លុបឯកសារ upload ដែលនៅសល់ (បើមាន)
+        try:
+            if item.get("path") and os.path.exists(item["path"]):
+                os.remove(item["path"])
+        except Exception:
+            pass
 
 
-# ---------- កន្លែងទាញយក ----------
-
-def build_zip(results):
-    ok = [r for r in results if r.get("video")]
+def build_zip(items):
+    ok = [it for it in items if it["state"] == "done" and it["video"]]
     if len(ok) < 2:
         return None
-    total = sum(len(r["video"]) for r in ok)
+    total = sum(len(it["video"]) for it in ok)
     if total > MAX_ZIP_MB * 1024 * 1024:
         return None
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
-        for i, r in enumerate(ok, start=1):
+        for i, it in enumerate(ok, start=1):
             z.writestr(
-                f"{i:02d}_{safe_filename(r['name'])}_khmer.mp4",
-                r["video"],
+                f"{i:02d}_{safe_filename(it['name'])}_khmer.mp4",
+                it["video"],
             )
     return buf.getvalue()
 
 
-def render_results(results, zip_bytes):
-    # ចំណុចយោងសម្រាប់លោតមកទីនេះ
-    st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
-    st.divider()
-    st.subheader("⬇️ កន្លែងទាញយក")
+# ---------- ចំណុចប្រទាក់៖ ផ្នែកបង្ហាញលទ្ធផល ----------
 
-    ok_count = sum(1 for r in results if r.get("video"))
-    st.caption(f"រួចរាល់ {ok_count} / {len(results)} វីដេអូ")
+def dl_button(label, data, file_name, mime, key, **kwargs):
+    """ប៊ូតុងទាញយក មិនធ្វើឱ្យអេក្រង់ផ្ទុកឡើងវិញ (បើ Streamlit គាំទ្រ)។"""
+    if ST_VER >= (1, 43):
+        return st.download_button(
+            label,
+            data=data,
+            file_name=file_name,
+            mime=mime,
+            key=key,
+            on_click="ignore",
+            **kwargs,
+        )
+    return st.download_button(
+        label,
+        data=data,
+        file_name=file_name,
+        mime=mime,
+        key=key,
+        **kwargs,
+    )
 
-    if zip_bytes:
-        st.download_button(
+
+def work_area(job, was_running):
+    """ផ្នែក ③ កន្លែងធ្វើការ៖ ស្ថានភាពវីដេអូនីមួយៗ។"""
+    items = job.items
+    total = len(items)
+    done = sum(1 for it in items if it["state"] == "done")
+    failed = sum(1 for it in items if it["state"] == "error")
+    working = total - done - failed
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("⏳ កំពុងធ្វើ", working)
+    c2.metric("✅ រួចរាល់", done)
+    c3.metric("❌ បរាជ័យ", failed)
+
+    st.progress(
+        (done + failed) / total,
+        text=f"សរុប {done + failed} / {total}",
+    )
+
+    for i, it in enumerate(items, start=1):
+        with st.container(border=True):
+            left, right = st.columns([4, 1])
+            left.markdown(f"**{i}. {it['name']}**")
+
+            if it["t0"]:
+                if it["elapsed"] is not None:
+                    secs = it["elapsed"]
+                else:
+                    secs = time.time() - it["t0"]
+                right.caption(f"⏱ {int(secs)} វិនាទី")
+
+            if it["state"] == "done":
+                st.success("✅ រួចរាល់ — ទាញយកបាននៅផ្នែកខាងក្រោម ⬇️")
+            elif it["state"] == "error":
+                st.error(it["error"] or "មិនបានសម្រេច។")
+                if DEBUG and it["raw_error"]:
+                    st.text(it["raw_error"])
+            else:
+                st.progress(
+                    max(0.0, min(1.0, it["pct"])),
+                    text=it["stage"],
+                )
+
+            for w in it["warn"]:
+                st.warning(w)
+
+    # ធ្វើការរួចទាំងអស់ → ផ្ទុកទំព័រឡើងវិញម្តង ដើម្បីបញ្ឈប់ការធ្វើបច្ចុប្បន្នភាព
+    if was_running and not job.running():
+        st.rerun()
+
+
+def download_area(job):
+    """ផ្នែក ④ កន្លែងទាញយក៖ វីដេអូណារួច ទាញយកបានភ្លាម។"""
+    done = [
+        (i, it)
+        for i, it in enumerate(job.items, start=1)
+        if it["state"] == "done"
+    ]
+
+    if job.zip:
+        dl_button(
             "📦 ទាញយកទាំងអស់ (ZIP)",
-            data=zip_bytes,
-            file_name="khmer_videos.zip",
-            mime="application/zip",
+            job.zip,
+            "khmer_videos.zip",
+            "application/zip",
+            key=f"zip_{job.id}",
             use_container_width=True,
-            key="dl_zip",
         )
 
-    for i, r in enumerate(results, start=1):
+    if not done:
+        st.info(
+            "វីដេអូណាដែលរួចរាល់ នឹងលេចឡើងនៅទីនេះភ្លាមៗ "
+            "ហើយអាចទាញយកបានតែម្តង មិនបាច់រង់ចាំវីដេអូផ្សេងទេ។"
+        )
+        return
+
+    for i, it in done:
         with st.container(border=True):
-            st.markdown(f"**វីដេអូទី {i}៖ {r['name']}**")
-
-            if not r.get("video"):
-                st.error(r.get("error") or "មិនបានសម្រេច។")
-                continue
-
-            st.video(r["video"])
-            st.download_button(
+            st.markdown(f"**{i}. {it['name']}**")
+            st.video(it["video"])
+            dl_button(
                 "⬇️ ទាញយកវីដេអូនេះ",
-                data=r["video"],
-                file_name=f"{safe_filename(r['name'])}_khmer.mp4",
-                mime="video/mp4",
+                it["video"],
+                f"{safe_filename(it['name'])}_khmer.mp4",
+                "video/mp4",
+                key=f"dl_{job.id}_{i}",
                 type="primary",
                 use_container_width=True,
-                key=f"dl_{i}",
             )
 
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
-                for text in r["captions"]:
+                for text in it["captions"]:
                     st.write(text)
 
             if DEBUG:
                 with st.expander("🛠 DEBUG"):
-                    for key, value in r["debug"].items():
+                    for key, value in it["debug"].items():
                         st.text(f"{key}: {value}")
-
-    if st.button("🗑 លុបលទ្ធផលទាំងអស់", key="clear_results"):
-        st.session_state.pop("results", None)
-        st.session_state.pop("zip", None)
-        st.rerun()
+                    st.text("\n".join(it["log"][-30:]))
 
 
 def scroll_to_downloads():
@@ -1328,14 +1629,14 @@ def scroll_to_downloads():
     )
 
 
-# ---------- ចំណុចប្រទាក់ ----------
+# ---------- ចំណុចប្រទាក់៖ ទំព័រមេ ----------
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 st.title("🎬 Khmer Auto Caption")
 st.caption(
     "ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ "
-    f"(ធ្វើបានរហូតដល់ {MAX_VIDEOS} វីដេអូម្តង)"
+    f"(ធ្វើបានរហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា)"
 )
 
 if not API_KEY:
@@ -1349,10 +1650,18 @@ colors = {
     "ខៀវ": "&H00FF0000",
 }
 
+current_job = st.session_state.get("job")
+busy = bool(current_job and current_job.running())
+
+# ---------- ផ្នែក ① ជ្រើសវីដេអូ ----------
+
+st.subheader("① 🎞️ ជ្រើសវីដេអូ")
+
 mode = st.radio(
     "វិធីបញ្ចូលវីដេអូ",
     ["📁 Upload ឯកសារ", "🔗 បិទភ្ជាប់តំណ (Link)"],
     horizontal=True,
+    label_visibility="collapsed",
 )
 
 uploaded_files = []
@@ -1372,13 +1681,18 @@ else:
         height=110,
     )
 
+# ---------- ផ្នែក ② ការកំណត់ ----------
+
+st.subheader("② ⚙️ ការកំណត់")
+
 language_label = st.selectbox(
     "ភាសាក្នុងវីដេអូ",
     list(LANGUAGES.keys()),
     index=0,
     help=(
         "ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ "
-        "បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់។"
+        "បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់ "
+        "(ឧ. ខ្មែរ បើវីដេអូនិយាយខ្មែរ)។"
     ),
 )
 
@@ -1400,7 +1714,8 @@ with st.expander("🎨 កំណត់អក្សរ"):
     outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
     font_color = st.selectbox("ពណ៌អក្សរ", list(colors.keys()))
 
-# រៀបចំបញ្ជីវីដេអូ
+# ---------- រៀបចំបញ្ជីវីដេអូ ----------
+
 items = []
 too_many = False
 
@@ -1430,17 +1745,32 @@ if too_many:
     )
 
 run = False
-if not items:
-    st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
+if busy:
+    st.button(
+        "⏳ កំពុងធ្វើការ... សូមរង់ចាំ",
+        disabled=True,
+        use_container_width=True,
+    )
+elif not items:
+    if not current_job:
+        st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
 else:
     label = "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ"
     if len(items) > 1:
-        label += f" ({len(items)} វីដេអូ)"
+        label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
     run = st.button(label, type="primary", use_container_width=True)
 
-# ---------- កន្លែងធ្វើការ ----------
+# ---------- ចាប់ផ្តើមការងារ ----------
 
 if run:
+    try:
+        fonts_data = load_font_bytes()
+    except Exception:
+        st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
+        st.stop()
+
+    prepare_home_font(fonts_data)
+
     settings = {
         "language": LANGUAGES[language_label],
         "quality": QUALITY[quality_label],
@@ -1452,37 +1782,65 @@ if run:
         "color": colors[font_color],
     }
 
-    work = st.container(border=True)
-    with work:
-        st.subheader("⚙️ កន្លែងធ្វើការ")
-        overall = st.progress(0.0, text=f"កំពុងចាប់ផ្តើម... (0/{len(items)})")
+    # លុបការងារចាស់
+    old = st.session_state.get("job")
+    if old:
+        shutil.rmtree(old.folder, ignore_errors=True)
 
-    results = []
-    for i, item in enumerate(items, start=1):
-        box = work.container(border=True)
-        res = process_one(i, len(items), item, settings, box)
-        results.append(res)
-        overall.progress(
-            i / len(items),
-            text=f"បានធ្វើរួច {i}/{len(items)}",
-        )
+    job_folder = tempfile.mkdtemp(prefix="kac_")
+    job_items = []
+    for idx, it in enumerate(items, start=1):
+        item = new_item(it["name"], url=it["url"])
+        if it["file"] is not None:
+            p = os.path.join(job_folder, f"upload_{idx}.bin")
+            with open(p, "wb") as f:
+                f.write(it["file"].getbuffer())
+            item["path"] = p
+        job_items.append(item)
 
-    st.session_state["results"] = results
-    st.session_state["zip"] = build_zip(results)
+    job = Job(job_items, job_folder)
+    st.session_state["job"] = job
 
-    ok_total = sum(1 for r in results if r.get("video"))
-    if ok_total:
-        work.success(
-            f"រួចរាល់ {ok_total}/{len(results)} វីដេអូ 🎉 "
-            "កំពុងទៅកន្លែងទាញយក ⬇️"
-        )
-    else:
-        work.error("គ្មានវីដេអូណាមួយសម្រេចទេ។ សូមសាកម្តងទៀត។")
+    # ចាប់ផ្តើមវីដេអូទាំងអស់ស្មើគ្នា
+    for item in job.items:
+        threading.Thread(
+            target=run_worker,
+            args=(job, item, settings, API_KEY, fonts_data),
+            daemon=True,
+        ).start()
 
-# ---------- កន្លែងទាញយក ----------
+    st.rerun()
 
-saved = st.session_state.get("results")
-if saved:
-    render_results(saved, st.session_state.get("zip"))
-    if run and any(r.get("video") for r in saved):
-        scroll_to_downloads()
+# ---------- ផ្នែក ③ ④ ----------
+
+job = st.session_state.get("job")
+
+if job:
+    running = job.running()
+
+    # បង្កើត ZIP តែម្តង ពេលរួចទាំងអស់
+    if not running and not job.zip_done:
+        job.zip = build_zip(job.items)
+        job.zip_done = True
+
+    refresh = REFRESH_SECONDS if running else None
+
+    st.divider()
+    st.subheader("③ ⚙️ កន្លែងធ្វើការ")
+    st.fragment(run_every=refresh)(work_area)(job, running)
+
+    st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
+    st.divider()
+    st.subheader("④ ⬇️ កន្លែងទាញយក")
+    st.fragment(run_every=refresh)(download_area)(job)
+
+    if not running:
+        if st.button("🗑 លុបលទ្ធផលទាំងអស់"):
+            shutil.rmtree(job.folder, ignore_errors=True)
+            st.session_state.pop("job", None)
+            st.rerun()
+
+        if not job.scrolled:
+            job.scrolled = True
+            if any(it["state"] == "done" for it in job.items):
+                scroll_to_downloads()
