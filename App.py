@@ -1,15 +1,19 @@
 import os
+import io
 import re
 import json
 import time
 import shutil
 import asyncio
+import zipfile
 import tempfile
 import subprocess
+import urllib.parse
 import urllib.request
 import unicodedata
 
 import streamlit as st
+import streamlit.components.v1 as components
 import imageio_ffmpeg
 import edge_tts
 from google import genai
@@ -40,6 +44,8 @@ DEBUG = bool(st.secrets.get("DEBUG", False))
 REQUEST_TIMEOUT_MS = 120000  # 120 វិនាទី
 MAX_CAPTION_CHARS = 26
 MAX_DOWNLOAD_MB = 300
+MAX_VIDEOS = 5  # ចំនួនវីដេអូអតិបរមាក្នុងមួយដង
+MAX_ZIP_MB = 250
 
 PREFERRED_MODELS = [
     "gemini-3.8-flash",
@@ -148,6 +154,12 @@ def khmer_ratio(segments):
     return good / len(segments)
 
 
+def safe_filename(name):
+    base = os.path.splitext(str(name))[0]
+    base = re.sub(r"[^\w\-]+", "_", base).strip("_")[:40]
+    return base or "video"
+
+
 def run_ffmpeg(args, cwd=None, verbose=False, env=None):
     exe = imageio_ffmpeg.get_ffmpeg_exe()
     cmd = [exe, "-y"]
@@ -219,40 +231,44 @@ def time_ass(seconds):
 
 # ---------- Font ----------
 
-def fetch_font(url, path):
-    request = urllib.request.Request(
-        url,
-        headers={"User-Agent": "Mozilla/5.0"},
-    )
-    with urllib.request.urlopen(request, timeout=25) as response:
-        data = response.read()
-    if len(data) < 1000:
-        raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
-    with open(path, "wb") as f:
-        f.write(data)
-
-
-def download_fonts(folder):
-    """ទាញយក Font ខ្មែរ។ Font ទីមួយចាំបាច់ ដែលនៅសល់ជាជម្រើសបម្រុង។"""
-    fonts = []
+@st.cache_resource(show_spinner=False)
+def load_font_bytes():
+    """ទាញយក Font ខ្មែរតែម្តង (cache) ប្រើបានគ្រប់វីដេអូ។"""
+    out = []
     for i, (filename, url, default_name) in enumerate(FONT_SOURCES):
-        path = os.path.join(folder, filename)
         try:
-            fetch_font(url, path)
+            request = urllib.request.Request(
+                url,
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(request, timeout=25) as response:
+                data = response.read()
+            if len(data) < 1000:
+                raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
         except Exception:
             if i == 0:
                 raise
             continue
+        out.append((filename, data, default_name))
+    return out
+
+
+def install_fonts(folder):
+    """ដាក់ Font ចូលថតរបស់វីដេអូនីមួយៗ។"""
+    fonts = []
+    for filename, data, default_name in load_font_bytes():
+        path = os.path.join(folder, filename)
+        with open(path, "wb") as f:
+            f.write(data)
         fonts.append((path, default_name))
 
     # ចម្លង Font ទីមួយទៅ ~/.fonts ដើម្បីឱ្យប្រព័ន្ធរកឃើញបន្ថែម
     try:
         home_fonts = os.path.expanduser("~/.fonts")
         os.makedirs(home_fonts, exist_ok=True)
-        shutil.copy(
-            fonts[0][0],
-            os.path.join(home_fonts, "Battambang-Regular.ttf"),
-        )
+        dst = os.path.join(home_fonts, "Battambang-Regular.ttf")
+        if not os.path.exists(dst):
+            shutil.copy(fonts[0][0], dst)
     except Exception:
         pass
 
@@ -1081,13 +1097,245 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
     return data, best[0], best[1], attempts
 
 
+# ---------- ដំណើរការវីដេអូមួយៗ (កន្លែងធ្វើការ) ----------
+
+def process_one(index, total, item, settings, box):
+    """ធ្វើវីដេអូមួយ នៅក្នុងប្រអប់ផ្ទាល់ខ្លួនរបស់វា។"""
+    name = item["name"]
+    result = {
+        "name": name,
+        "video": None,
+        "captions": [],
+        "error": None,
+        "raw_error": "",
+        "debug": {},
+    }
+
+    with box:
+        st.markdown(f"**🎞️ វីដេអូទី {index}/{total}៖ {name}**")
+        status = st.status("កំពុងដំណើរការ...", expanded=True)
+
+        with tempfile.TemporaryDirectory() as folder:
+            source = os.path.join(folder, "input.mp4")
+            audio_path = os.path.join(folder, "audio.mp3")
+
+            try:
+                if item.get("file") is not None:
+                    with open(source, "wb") as f:
+                        f.write(item["file"].getbuffer())
+                else:
+                    status.write("កំពុងទាញយកវីដេអូ...")
+                    bar = status.progress(0.0)
+                    download_video(item["url"], source, bar)
+
+                status.write("១/៤ កំពុងរៀបចំ...")
+                fonts = install_fonts(folder)
+
+                status.write("២/៤ កំពុងដកសំឡេង...")
+                extract_audio(source, audio_path)
+                duration, vid_w, vid_h = probe_video(source)
+
+                status.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
+                segments, used_model = transcribe(
+                    API_KEY,
+                    audio_path,
+                    duration,
+                    settings["language"],
+                    status,
+                    concise=settings["dub_on"],
+                )
+
+                captions, sync_mode = build_captions(
+                    segments, audio_path, duration
+                )
+
+                if not captions:
+                    raise UserError(
+                        "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។"
+                    )
+
+                dub_ok = False
+                if settings["dub_on"]:
+                    status.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+                    try:
+                        dub_ok = make_dub(
+                            folder,
+                            segments,
+                            settings["voice"],
+                            duration,
+                            settings["keep_bg"],
+                            genai.Client(api_key=API_KEY),
+                            used_model,
+                        )
+                    except Exception:
+                        dub_ok = False
+                    if not dub_ok:
+                        st.warning(
+                            "បង្កើតសំឡេងអានមិនបានទេ។ "
+                            "វីដេអូនឹងមានតែអក្សរ។"
+                        )
+
+                status.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
+                video, used_font, ffmpeg_log, attempts = render_with_fonts(
+                    folder,
+                    fonts,
+                    captions,
+                    settings["font_size"],
+                    settings["outline_size"],
+                    settings["color"],
+                    vid_w,
+                    vid_h,
+                    settings["quality"],
+                    status,
+                    dub=dub_ok,
+                )
+
+                result["video"] = video
+                result["captions"] = [t for _, _, t in captions]
+                result["debug"] = {
+                    "ម៉ូដែល": used_model,
+                    "ការតម្រឹម": sync_mode,
+                    "Font ដែលប្រើ": used_font,
+                    "Dubbing": dub_ok,
+                    "ទំហំលទ្ធផល": f"{len(video) / (1024 * 1024):.1f}MB",
+                    "ការសាក Font": "\n".join(attempts),
+                    "fontselect": "\n".join(
+                        line
+                        for line in ffmpeg_log.splitlines()
+                        if "fontselect" in line.lower()
+                    )[:1500],
+                }
+
+                status.update(
+                    label=f"✅ រួចរាល់៖ {name}",
+                    state="complete",
+                    expanded=False,
+                )
+
+            except Exception as error:
+                msg = friendly_message(error)
+                result["error"] = msg
+                result["raw_error"] = str(error)
+                status.update(
+                    label=f"❌ មានបញ្ហា៖ {name}",
+                    state="error",
+                    expanded=False,
+                )
+                st.error(msg)
+                if DEBUG:
+                    st.text(str(error))
+
+    return result
+
+
+# ---------- កន្លែងទាញយក ----------
+
+def build_zip(results):
+    ok = [r for r in results if r.get("video")]
+    if len(ok) < 2:
+        return None
+    total = sum(len(r["video"]) for r in ok)
+    if total > MAX_ZIP_MB * 1024 * 1024:
+        return None
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+        for i, r in enumerate(ok, start=1):
+            z.writestr(
+                f"{i:02d}_{safe_filename(r['name'])}_khmer.mp4",
+                r["video"],
+            )
+    return buf.getvalue()
+
+
+def render_results(results, zip_bytes):
+    # ចំណុចយោងសម្រាប់លោតមកទីនេះ
+    st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
+    st.divider()
+    st.subheader("⬇️ កន្លែងទាញយក")
+
+    ok_count = sum(1 for r in results if r.get("video"))
+    st.caption(f"រួចរាល់ {ok_count} / {len(results)} វីដេអូ")
+
+    if zip_bytes:
+        st.download_button(
+            "📦 ទាញយកទាំងអស់ (ZIP)",
+            data=zip_bytes,
+            file_name="khmer_videos.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="dl_zip",
+        )
+
+    for i, r in enumerate(results, start=1):
+        with st.container(border=True):
+            st.markdown(f"**វីដេអូទី {i}៖ {r['name']}**")
+
+            if not r.get("video"):
+                st.error(r.get("error") or "មិនបានសម្រេច។")
+                continue
+
+            st.video(r["video"])
+            st.download_button(
+                "⬇️ ទាញយកវីដេអូនេះ",
+                data=r["video"],
+                file_name=f"{safe_filename(r['name'])}_khmer.mp4",
+                mime="video/mp4",
+                type="primary",
+                use_container_width=True,
+                key=f"dl_{i}",
+            )
+
+            with st.expander("📝 មើលអត្ថបទខ្មែរ"):
+                for text in r["captions"]:
+                    st.write(text)
+
+            if DEBUG:
+                with st.expander("🛠 DEBUG"):
+                    for key, value in r["debug"].items():
+                        st.text(f"{key}: {value}")
+
+    if st.button("🗑 លុបលទ្ធផលទាំងអស់", key="clear_results"):
+        st.session_state.pop("results", None)
+        st.session_state.pop("zip", None)
+        st.rerun()
+
+
+def scroll_to_downloads():
+    """រមូរទៅកន្លែងទាញយកដោយស្វ័យប្រវត្តិ។"""
+    components.html(
+        f"""
+        <script>
+        // {time.time()}
+        const go = () => {{
+          try {{
+            const doc = window.parent.document;
+            const el = doc.getElementById("download-area");
+            if (el) {{
+              el.scrollIntoView({{behavior: "smooth", block: "start"}});
+              return true;
+            }}
+          }} catch (e) {{}}
+          return false;
+        }};
+        let tries = 0;
+        const timer = setInterval(() => {{
+          if (go() || ++tries > 24) clearInterval(timer);
+        }}, 250);
+        </script>
+        """,
+        height=0,
+    )
+
+
 # ---------- ចំណុចប្រទាក់ ----------
 
 API_KEY = st.secrets.get("GEMINI_API_KEY", "")
 
 st.title("🎬 Khmer Auto Caption")
 st.caption(
-    "ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ"
+    "ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ "
+    f"(ធ្វើបានរហូតដល់ {MAX_VIDEOS} វីដេអូម្តង)"
 )
 
 if not API_KEY:
@@ -1107,19 +1355,21 @@ mode = st.radio(
     horizontal=True,
 )
 
-uploaded = None
-video_url = ""
+uploaded_files = []
+link_text = ""
 
 if mode.startswith("📁"):
-    uploaded = st.file_uploader(
-        "ជ្រើសរើសវីដេអូ",
+    uploaded_files = st.file_uploader(
+        "ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)",
         type=["mp4", "mov", "mkv", "avi", "webm"],
+        accept_multiple_files=True,
         help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link",
-    )
+    ) or []
 else:
-    video_url = st.text_input(
-        "តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ)",
-        placeholder="https://...",
+    link_text = st.text_area(
+        "តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ",
+        placeholder="https://...\nhttps://...",
+        height=110,
     )
 
 language_label = st.selectbox(
@@ -1150,138 +1400,89 @@ with st.expander("🎨 កំណត់អក្សរ"):
     outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
     font_color = st.selectbox("ពណ៌អក្សរ", list(colors.keys()))
 
-has_input = uploaded is not None or bool(video_url.strip())
+# រៀបចំបញ្ជីវីដេអូ
+items = []
+too_many = False
 
-if not has_input:
+if uploaded_files:
+    too_many = len(uploaded_files) > MAX_VIDEOS
+    for f in uploaded_files[:MAX_VIDEOS]:
+        items.append({"name": f.name, "file": f, "url": None})
+else:
+    lines = [
+        ln.strip()
+        for ln in link_text.splitlines()
+        if ln.strip().lower().startswith(("http://", "https://"))
+    ]
+    too_many = len(lines) > MAX_VIDEOS
+    for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
+        tail = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
+        items.append({
+            "name": tail or f"តំណទី {i}",
+            "file": None,
+            "url": url,
+        })
+
+if too_many:
+    st.warning(
+        f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ "
+        f"កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។"
+    )
+
+run = False
+if not items:
     st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
 else:
-    if st.button(
-        "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ",
-        type="primary",
-        use_container_width=True,
-    ):
-        status = st.status("កំពុងដំណើរការ...", expanded=True)
+    label = "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ"
+    if len(items) > 1:
+        label += f" ({len(items)} វីដេអូ)"
+    run = st.button(label, type="primary", use_container_width=True)
 
-        with tempfile.TemporaryDirectory() as folder:
-            source = os.path.join(folder, "input.mp4")
-            audio_path = os.path.join(folder, "audio.mp3")
+# ---------- កន្លែងធ្វើការ ----------
 
-            try:
-                if uploaded is not None:
-                    with open(source, "wb") as f:
-                        f.write(uploaded.getbuffer())
-                else:
-                    status.write("កំពុងទាញយកវីដេអូ...")
-                    bar = status.progress(0.0)
-                    download_video(video_url, source, bar)
+if run:
+    settings = {
+        "language": LANGUAGES[language_label],
+        "quality": QUALITY[quality_label],
+        "dub_on": dub_on,
+        "voice": TTS_VOICES[voice_label],
+        "keep_bg": keep_bg,
+        "font_size": font_size,
+        "outline_size": outline_size,
+        "color": colors[font_color],
+    }
 
-                status.write("១/៤ កំពុងរៀបចំ...")
-                fonts = download_fonts(folder)
+    work = st.container(border=True)
+    with work:
+        st.subheader("⚙️ កន្លែងធ្វើការ")
+        overall = st.progress(0.0, text=f"កំពុងចាប់ផ្តើម... (0/{len(items)})")
 
-                status.write("២/៤ កំពុងដកសំឡេង...")
-                extract_audio(source, audio_path)
-                duration, vid_w, vid_h = probe_video(source)
+    results = []
+    for i, item in enumerate(items, start=1):
+        box = work.container(border=True)
+        res = process_one(i, len(items), item, settings, box)
+        results.append(res)
+        overall.progress(
+            i / len(items),
+            text=f"បានធ្វើរួច {i}/{len(items)}",
+        )
 
-                status.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
-                segments, used_model = transcribe(
-                    API_KEY,
-                    audio_path,
-                    duration,
-                    LANGUAGES[language_label],
-                    status,
-                    concise=dub_on,
-                )
+    st.session_state["results"] = results
+    st.session_state["zip"] = build_zip(results)
 
-                captions, sync_mode = build_captions(
-                    segments, audio_path, duration
-                )
+    ok_total = sum(1 for r in results if r.get("video"))
+    if ok_total:
+        work.success(
+            f"រួចរាល់ {ok_total}/{len(results)} វីដេអូ 🎉 "
+            "កំពុងទៅកន្លែងទាញយក ⬇️"
+        )
+    else:
+        work.error("គ្មានវីដេអូណាមួយសម្រេចទេ។ សូមសាកម្តងទៀត។")
 
-                if not captions:
-                    raise UserError(
-                        "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។"
-                    )
+# ---------- កន្លែងទាញយក ----------
 
-                dub_ok = False
-                if dub_on:
-                    status.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
-                    dub_ok = make_dub(
-                        folder,
-                        segments,
-                        TTS_VOICES[voice_label],
-                        duration,
-                        keep_bg,
-                        genai.Client(api_key=API_KEY),
-                        used_model,
-                    )
-                    if not dub_ok:
-                        st.warning(
-                            "បង្កើតសំឡេងអានមិនបានទេ។ "
-                            "វីដេអូនឹងមានតែអក្សរ។"
-                        )
-
-                status.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
-                result_video, used_font, ffmpeg_log, attempts = (
-                    render_with_fonts(
-                        folder,
-                        fonts,
-                        captions,
-                        font_size,
-                        outline_size,
-                        colors[font_color],
-                        vid_w,
-                        vid_h,
-                        QUALITY[quality_label],
-                        status,
-                        dub=dub_ok,
-                    )
-                )
-
-                status.update(
-                    label="រួចរាល់!",
-                    state="complete",
-                    expanded=False,
-                )
-
-                st.success("វីដេអូរបស់អ្នករួចរាល់ហើយ 🎉")
-                st.video(result_video)
-                st.download_button(
-                    "⬇️ ទាញយកវីដេអូ",
-                    data=result_video,
-                    file_name="khmer_caption.mp4",
-                    mime="video/mp4",
-                    type="primary",
-                    use_container_width=True,
-                )
-
-                with st.expander("📝 មើលអត្ថបទខ្មែរ"):
-                    for _, _, text in captions:
-                        st.write(text)
-
-                if DEBUG:
-                    with st.expander("🛠 DEBUG"):
-                        size_mb = len(result_video) / (1024 * 1024)
-                        st.write(f"ម៉ូដែល: {used_model}")
-                        st.write(f"ការតម្រឹម: {sync_mode}")
-                        st.write(f"Font ដែលប្រើ: {used_font}")
-                        st.write(f"Dubbing: {dub_ok}")
-                        st.write(f"ទំហំលទ្ធផល: {size_mb:.1f}MB")
-                        st.write("ការសាក Font:")
-                        st.text("\n".join(attempts))
-                        font_lines = [
-                            line
-                            for line in ffmpeg_log.splitlines()
-                            if "fontselect" in line.lower()
-                        ][:8]
-                        st.text("\n".join(font_lines) or "no fontselect")
-                        for start, end, text in captions:
-                            st.write(f"[{start:.1f}s - {end:.1f}s] {text}")
-
-            except Exception as error:
-                status.update(
-                    label="មានបញ្ហា",
-                    state="error",
-                    expanded=False,
-                )
-                st.error(friendly_message(error))
-                if DEBUG:
-                    st.text(str(error))
+saved = st.session_state.get("results")
+if saved:
+    render_results(saved, st.session_state.get("zip"))
+    if run and any(r.get("video") for r in saved):
+        scroll_to_downloads()
