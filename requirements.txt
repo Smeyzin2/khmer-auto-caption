@@ -3,3 +3,4 @@ google-genai
 imageio-ffmpeg
 fonttools
 edge-tts
+deep-translator
