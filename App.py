@@ -10,6 +10,7 @@ import zipfile
 import tempfile
 import threading
 import subprocess
+import urllib.error
 import urllib.parse
 import urllib.request
 import unicodedata
@@ -58,6 +59,22 @@ MAX_DURATION_MIN = 15  # វីដេអូវែងអតិបរមា (ន�
 CHUNK_TARGET = 20.0  # វិនាទី
 CHUNK_MAX = 28.0
 MAX_CHUNK_WORKERS = 3
+
+# ម៉ាស៊ីនឥតគិតថ្លៃ (Groq Whisper)
+GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
+GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
+
+# លេខកូដភាសាសម្រាប់ Whisper
+WHISPER_LANG = {
+    "Khmer": "km",
+    "English": "en",
+    "Thai": "th",
+    "Vietnamese": "vi",
+    "Chinese": "zh",
+    "Japanese": "ja",
+    "Korean": "ko",
+    "French": "fr",
+}
 
 try:
     ST_VER = tuple(int(x) for x in re.findall(r"\d+", st.__version__)[:2])
@@ -118,6 +135,16 @@ TTS_VOICES = {
 
 class UserError(RuntimeError):
     """សារកំហុសដែលសមស្របនឹងបង្ហាញដល់អ្នកប្រើផ្ទាល់។"""
+
+
+def is_quota_error(error):
+    low = str(error).lower()
+    return (
+        "429" in low
+        or "quota" in low
+        or "exhausted" in low
+        or "rate limit" in low
+    )
 
 
 def friendly_message(error):
@@ -416,7 +443,7 @@ def download_video(url, path, progress):
 def extract_audio(video_path, audio_path, master_path):
     """
     ដកសំឡេងពីរបែប៖
-    - audio.mp3 (ស្រាល) សម្រាប់លាយសំឡេងពេល Dubbing
+    - audio.mp3 (ស្រាល) សម្រាប់លាយសំឡេងពេល Dubbing និងម៉ាស៊ីនឥតគិតថ្លៃ
     - master.flac (គ្មានការបាត់បង់គុណភាព) សម្រាប់ឱ្យ AI ស្តាប់
     """
     try:
@@ -985,7 +1012,7 @@ def transcribe_clip(client, models, audio_bytes, mime, clip_duration,
 def transcribe(api_key, audio_path, duration, source_language, status,
                concise=False, speech=None):
     """
-    ស្តាប់សំឡេងទាំងមូលដោយកាត់ជាផ្នែកៗ ហើយស្តាប់ស្មើគ្នា។
+    ស្តាប់សំឡេងទាំងមូលដោយកាត់ជាផ្នែកៗ ហើយស្តាប់ស្មើគ្នា (Gemini)។
     ត្រឡប់ (segments, model, ចំនួនផ្នែកបរាជ័យ)។
     """
     client = genai.Client(
@@ -1094,6 +1121,177 @@ def transcribe(api_key, audio_path, duration, source_language, status,
     return all_segments, main_model, failed
 
 
+# ---------- ម៉ាស៊ីនឥតគិតថ្លៃ (Groq Whisper + Google Translate) ----------
+
+def groq_request(api_key, audio_path, model, language):
+    """ផ្ញើសំឡេងទៅ Groq Whisper ហើយទទួលអត្ថបទ + ម៉ោងតាមឃ្លា។"""
+    boundary = "----kac" + uuid.uuid4().hex
+
+    fields = [
+        ("model", model),
+        ("response_format", "verbose_json"),
+        ("temperature", "0"),
+        ("timestamp_granularities[]", "segment"),
+    ]
+    if language:
+        fields.append(("language", language))
+
+    parts = []
+    for name, value in fields:
+        parts.append(
+            (
+                f"--{boundary}\r\n"
+                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'
+                f"{value}\r\n"
+            ).encode("utf-8")
+        )
+
+    with open(audio_path, "rb") as f:
+        audio_data = f.read()
+
+    parts.append(
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="file"; '
+            'filename="audio.mp3"\r\n'
+            "Content-Type: audio/mpeg\r\n\r\n"
+        ).encode("utf-8")
+    )
+    parts.append(audio_data)
+    parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+    body = b"".join(parts)
+
+    request = urllib.request.Request(
+        GROQ_URL,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:500]
+        raise RuntimeError(f"Groq HTTP {e.code}: {detail}")
+
+
+def groq_transcribe(api_key, audio_path, language, status):
+    """ហៅ Groq ដោយសាកម៉ូដែលទីពីរ បើទីមួយរវល់ ឬអស់កូតា។"""
+    last = None
+    for model in GROQ_MODELS:
+        for attempt in range(2):
+            try:
+                return groq_request(api_key, audio_path, model, language), model
+            except RuntimeError as e:
+                last = e
+                text = str(e)
+                if ("429" in text or "503" in text) and attempt == 0:
+                    status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
+                    time.sleep(12)
+                    continue
+                break
+            except Exception as e:
+                last = e
+                break
+    raise last or RuntimeError("Groq បរាជ័យ")
+
+
+def translate_texts(texts):
+    """បកប្រែអត្ថបទជាភាសាខ្មែរដោយ Google Translate (ឥតគិតថ្លៃ)។"""
+    from deep_translator import GoogleTranslator
+
+    def one(text):
+        for attempt in range(3):
+            try:
+                out = GoogleTranslator(
+                    source="auto", target="km"
+                ).translate(text)
+                out = fix_khmer(out or "")
+                bad = re.search(
+                    r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]", out
+                )
+                if out and not bad:
+                    return out
+            except Exception:
+                pass
+            time.sleep(0.8 * (attempt + 1))
+        return None
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        return list(ex.map(one, texts))
+
+
+def transcribe_free(groq_key, audio_path, duration, source_language,
+                    status):
+    """
+    ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate។
+    ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
+    """
+    code = WHISPER_LANG.get(source_language) if source_language else None
+
+    data, model = groq_transcribe(groq_key, audio_path, code, status)
+    detected = str(data.get("language", "") or "").lower()
+
+    keep = []
+    for sg in data.get("segments") or []:
+        text = str(sg.get("text", "")).strip()
+        if not text:
+            continue
+        # តម្រងសំឡេងរំខាន (Whisper ពេលខ្លះភ្លឺសរសេរអ្វីៗក្នុងសំឡេងស្ងាត់)
+        if (
+            float(sg.get("no_speech_prob", 0) or 0) > 0.6
+            and float(sg.get("avg_logprob", 0) or 0) < -0.8
+        ):
+            continue
+        try:
+            s = float(sg.get("start", 0))
+            e = float(sg.get("end", 0))
+        except Exception:
+            continue
+        s = min(max(0.0, s), duration)
+        e = min(max(e, s + 0.4), duration + 0.5)
+        keep.append((s, e, text))
+
+    if not keep:
+        raise UserError(
+            "រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។ "
+            "សូមសាកវីដេអូដែលមានសំឡេងនិយាយច្បាស់។"
+        )
+
+    failed = 0
+    is_khmer = detected in ("khmer", "km") or source_language == "Khmer"
+
+    if is_khmer:
+        segs = [
+            (s, e, fix_khmer(t)) for s, e, t in keep if has_khmer(t)
+        ]
+    else:
+        status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
+        outs = translate_texts([t for _, _, t in keep])
+        segs = []
+        for (s, e, _), out in zip(keep, outs):
+            if out:
+                segs.append((s, e, out))
+            else:
+                failed += 1
+
+        if not segs or failed > len(keep) * 0.5:
+            raise RuntimeError(
+                "Google Translate បរាជ័យ។ សូមសាកម្តងទៀតពេលក្រោយ។"
+            )
+
+    if not segs:
+        raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
+
+    segs.sort(key=lambda x: x[0])
+    return segs, f"Groq {model} + Google Translate", failed
+
+
 # ---------- សំឡេងអានខ្មែរ (Dubbing) ----------
 
 def tts_segment(text, voice, path):
@@ -1123,9 +1321,13 @@ def shorten_khmer(client, model, text, max_seconds):
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model):
-    """បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗ។"""
+    """
+    បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗ។
+    បើ client = None (ម៉ាស៊ីនឥតគិតថ្លៃ) មិនបង្រួមប្រយោគទេ តែបង្កើនល្បឿនបន្ថែម។
+    """
     inputs, filters = [], []
     n = 0
+    max_speed = 1.6 if client is not None else 1.8
 
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
@@ -1147,7 +1349,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model):
             d, _, _ = probe_video(path)
 
             # វែងពេក → បង្រួមប្រយោគ ហើយអានម្តងទៀត
-            if d > slot * 1.25:
+            if client is not None and d > slot * 1.25:
                 t2 = shorten_khmer(client, model, t, slot)
                 if t2 != t:
                     tts_segment(t2, voice, path)
@@ -1155,7 +1357,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model):
         except Exception:
             continue
 
-        speed = min(1.6, max(1.0, d / slot))
+        speed = min(max_speed, max(1.0, d / slot))
         delay = int(s * 1000)
 
         inputs += ["-i", name]
@@ -1317,7 +1519,7 @@ class Job:
         return any(it["state"] in ("queued", "running") for it in self.items)
 
 
-def run_worker(job, item, settings, api_key, fonts_data):
+def run_worker(job, item, settings, fonts_data):
     """ដំណើរការវីដេអូមួយ ក្នុង thread ផ្ទាល់ខ្លួន (គ្មានការហៅ st)។"""
     rep = Reporter(item)
     item["t0"] = time.time()
@@ -1356,19 +1558,66 @@ def run_worker(job, item, settings, api_key, fonts_data):
 
             item["pct"] = 0.25
             rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
-            segments, used_model, failed_chunks = transcribe(
-                api_key,
-                master_path,
-                duration,
-                settings["language"],
-                rep,
-                concise=settings["dub_on"],
-                speech=speech,
+
+            # លំដាប់ម៉ាស៊ីន៖ ម៉ាស៊ីនដែលបានជ្រើសមុន ហើយម៉ាស៊ីនមួយទៀតជាបម្រុង
+            order = (
+                ["free", "gemini"]
+                if settings["engine"] == "free"
+                else ["gemini", "free"]
             )
+            order = [
+                k for k in order
+                if (k == "free" and settings["groq_key"])
+                or (k == "gemini" and settings["gemini_key"])
+            ]
+
+            segments = None
+            used_engine = ""
+            used_model = ""
+            failed_chunks = 0
+            last_error = None
+
+            for idx, engine in enumerate(order):
+                try:
+                    if engine == "free":
+                        segments, used_model, failed_chunks = (
+                            transcribe_free(
+                                settings["groq_key"],
+                                audio_path,
+                                duration,
+                                settings["language"],
+                                rep,
+                            )
+                        )
+                    else:
+                        segments, used_model, failed_chunks = transcribe(
+                            settings["gemini_key"],
+                            master_path,
+                            duration,
+                            settings["language"],
+                            rep,
+                            concise=settings["dub_on"],
+                            speech=speech,
+                        )
+                    used_engine = engine
+                    break
+                except UserError:
+                    raise
+                except Exception as e:
+                    last_error = e
+                    if idx + 1 < len(order):
+                        item["warn"].append(
+                            "ម៉ាស៊ីនទីមួយមានបញ្ហា "
+                            "កម្មវិធីបានប្តូរទៅម៉ាស៊ីនបម្រុងដោយស្វ័យប្រវត្តិ។"
+                        )
+                        rep.write("កំពុងប្តូរទៅម៉ាស៊ីនបម្រុង...")
+
+            if segments is None:
+                raise last_error or RuntimeError("មិនមានម៉ាស៊ីនបកប្រែទេ។")
 
             if failed_chunks:
                 item["warn"].append(
-                    "ផ្នែកខ្លះនៃវីដេអូមិនអាចស្តាប់បាន ដូច្នេះអក្សរអាចខ្វះ។ "
+                    "ផ្នែកខ្លះនៃវីដេអូមិនអាចបកប្រែបាន ដូច្នេះអក្សរអាចខ្វះ។ "
                     "សូមសាកម្តងទៀតពេលក្រោយ។"
                 )
 
@@ -1383,13 +1632,18 @@ def run_worker(job, item, settings, api_key, fonts_data):
                 item["pct"] = 0.6
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
+                    client = (
+                        genai.Client(api_key=settings["gemini_key"])
+                        if used_engine == "gemini"
+                        else None
+                    )
                     dub_ok = make_dub(
                         folder,
                         segments,
                         settings["voice"],
                         duration,
                         settings["keep_bg"],
-                        genai.Client(api_key=api_key),
+                        client,
                         used_model,
                     )
                 except Exception:
@@ -1421,6 +1675,7 @@ def run_worker(job, item, settings, api_key, fonts_data):
             item["video"] = video
             item["captions"] = [t for _, _, t in captions]
             item["debug"] = {
+                "ម៉ាស៊ីន": used_engine,
                 "ម៉ូដែល": used_model,
                 "ការតម្រឹម": sync_mode,
                 "ផ្នែកបរាជ័យ": failed_chunks,
@@ -1631,7 +1886,8 @@ def scroll_to_downloads():
 
 # ---------- ចំណុចប្រទាក់៖ ទំព័រមេ ----------
 
-API_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 
 st.title("🎬 Khmer Auto Caption")
 st.caption(
@@ -1639,7 +1895,7 @@ st.caption(
     f"(ធ្វើបានរហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា)"
 )
 
-if not API_KEY:
+if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
     st.stop()
 
@@ -1649,6 +1905,9 @@ colors = {
     "បៃតង": "&H0000FF00",
     "ខៀវ": "&H00FF0000",
 }
+
+ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
+ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
 
 current_job = st.session_state.get("job")
 busy = bool(current_job and current_job.running())
@@ -1685,6 +1944,27 @@ else:
 
 st.subheader("② ⚙️ ការកំណត់")
 
+engine_options = []
+if GROQ_KEY:
+    engine_options.append(ENGINE_FREE)
+if GEMINI_KEY:
+    engine_options.append(ENGINE_GEMINI)
+
+engine_label = st.selectbox(
+    "ម៉ាស៊ីនបកប្រែ",
+    engine_options,
+    index=0,
+    help=(
+        "បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា ឬអស់កូតា "
+        "កម្មវិធីនឹងប្តូរទៅម៉ាស៊ីនមួយទៀតដោយស្វ័យប្រវត្តិ។"
+    ),
+)
+if engine_label == ENGINE_FREE:
+    st.caption(
+        "ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate "
+        "អាចមិនទន់ភ្លន់ដូច Gemini ទេ។"
+    )
+
 language_label = st.selectbox(
     "ភាសាក្នុងវីដេអូ",
     list(LANGUAGES.keys()),
@@ -1692,7 +1972,7 @@ language_label = st.selectbox(
     help=(
         "ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ "
         "បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់ "
-        "(ឧ. ខ្មែរ បើវីដេអូនិយាយខ្មែរ)។"
+        "(ឧ. ចិន បើវីដេអូនិយាយចិន)។"
     ),
 )
 
@@ -1772,6 +2052,9 @@ if run:
     prepare_home_font(fonts_data)
 
     settings = {
+        "engine": "free" if engine_label == ENGINE_FREE else "gemini",
+        "gemini_key": GEMINI_KEY,
+        "groq_key": GROQ_KEY,
         "language": LANGUAGES[language_label],
         "quality": QUALITY[quality_label],
         "dub_on": dub_on,
@@ -1805,7 +2088,7 @@ if run:
     for item in job.items:
         threading.Thread(
             target=run_worker,
-            args=(job, item, settings, API_KEY, fonts_data),
+            args=(job, item, settings, fonts_data),
             daemon=True,
         ).start()
 
