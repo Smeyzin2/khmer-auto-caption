@@ -1242,7 +1242,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
         text = str(sg.get("text", "")).strip()
         if not text:
             continue
-        # តម្រងសំឡេងរំខាន (Whisper ពេលខ្លះភ្លឺសរសេរអ្វីៗក្នុងសំឡេងស្ងាត់)
+        # តម្រងសំឡេងរំខាន (Whisper ពេលខ្លះសរសេរអ្វីៗក្នុងសំឡេងស្ងាត់)
         if (
             float(sg.get("no_speech_prob", 0) or 0) > 0.6
             and float(sg.get("avg_logprob", 0) or 0) < -0.8
@@ -1272,7 +1272,13 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
         ]
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        outs = translate_texts([t for _, _, t in keep])
+        try:
+            outs = translate_texts([t for _, _, t in keep])
+        except ImportError:
+            raise RuntimeError(
+                "មិនទាន់ដំឡើង deep-translator ទេ។ "
+                "សូម Reboot app បន្ទាប់ពីបន្ថែមក្នុង requirements.txt។"
+            )
         segs = []
         for (s, e, _), out in zip(keep, outs):
             if out:
@@ -1519,6 +1525,10 @@ class Job:
         return any(it["state"] in ("queued", "running") for it in self.items)
 
 
+def engine_name(engine):
+    return "ឥតគិតថ្លៃ (Groq)" if engine == "free" else "Gemini"
+
+
 def run_worker(job, item, settings, fonts_data):
     """ដំណើរការវីដេអូមួយ ក្នុង thread ផ្ទាល់ខ្លួន (គ្មានការហៅ st)។"""
     rep = Reporter(item)
@@ -1575,7 +1585,7 @@ def run_worker(job, item, settings, fonts_data):
             used_engine = ""
             used_model = ""
             failed_chunks = 0
-            last_error = None
+            engine_errors = []
 
             for idx, engine in enumerate(order):
                 try:
@@ -1604,16 +1614,21 @@ def run_worker(job, item, settings, fonts_data):
                 except UserError:
                     raise
                 except Exception as e:
-                    last_error = e
+                    reason = f"{engine_name(engine)}: {str(e)[:300]}"
+                    engine_errors.append(reason)
                     if idx + 1 < len(order):
                         item["warn"].append(
                             "ម៉ាស៊ីនទីមួយមានបញ្ហា "
                             "កម្មវិធីបានប្តូរទៅម៉ាស៊ីនបម្រុងដោយស្វ័យប្រវត្តិ។"
+                            f"\n\nមូលហេតុ → {reason}"
                         )
                         rep.write("កំពុងប្តូរទៅម៉ាស៊ីនបម្រុង...")
 
             if segments is None:
-                raise last_error or RuntimeError("មិនមានម៉ាស៊ីនបកប្រែទេ។")
+                raise UserError(
+                    "ម៉ាស៊ីនបកប្រែទាំងអស់បរាជ័យ។\n\n"
+                    + "\n\n".join(engine_errors)
+                )
 
             if failed_chunks:
                 item["warn"].append(
