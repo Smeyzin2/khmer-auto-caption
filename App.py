@@ -76,6 +76,9 @@ WHISPER_LANG = {
     "French": "fr",
 }
 
+# អក្សរចិន/ជប៉ុន/កូរ៉េ (ដើម្បីតម្រងលទ្ធផលបកប្រែ)
+CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
+
 try:
     ST_VER = tuple(int(x) for x in re.findall(r"\d+", st.__version__)[:2])
 except Exception:
@@ -1201,29 +1204,114 @@ def groq_transcribe(api_key, audio_path, language, status):
     raise last or RuntimeError("Groq បរាជ័យ")
 
 
-def translate_texts(texts):
-    """បកប្រែអត្ថបទជាភាសាខ្មែរដោយ Google Translate (ឥតគិតថ្លៃ)។"""
-    from deep_translator import GoogleTranslator
+def google_translate_request(text):
+    """ហៅ Google Translate ផ្ទាល់ (POST) → អត្ថបទខ្មែរ។"""
+    query = urllib.parse.urlencode(
+        {"client": "gtx", "sl": "auto", "tl": "km", "dt": "t"}
+    )
+    url = "https://translate.googleapis.com/translate_a/single?" + query
+    body = urllib.parse.urlencode({"q": text}).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=body,
+        method="POST",
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0 Safari/537.36"
+            ),
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=25) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    return "".join(
+        part[0] for part in (data[0] or []) if part and part[0]
+    )
 
-    def one(text):
+
+def clean_translation(out):
+    """សម្អាតលទ្ធផលបកប្រែ (លុបអក្សរចិនដែលនៅសល់)។"""
+    out = str(out or "")
+    out = CJK_RE.sub("", out)
+    out = fix_khmer(out)
+    return out or None
+
+
+def translate_texts(texts):
+    """
+    បកប្រែអត្ថបទជាភាសាខ្មែរ (ឥតគិតថ្លៃ)។
+    ផ្ញើជាក្រុមធំៗ ដើម្បីកុំឱ្យ Google រារាំង។
+    ត្រឡប់ (លទ្ធផល, បញ្ជីមូលហេតុបរាជ័យ)។
+    """
+    errors = []
+    outs = [None] * len(texts)
+
+    def single(text):
+        last = "មិនស្គាល់"
         for attempt in range(3):
             try:
-                out = GoogleTranslator(
-                    source="auto", target="km"
-                ).translate(text)
-                out = fix_khmer(out or "")
-                bad = re.search(
-                    r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]", out
-                )
-                if out and not bad:
+                out = clean_translation(google_translate_request(text))
+                if out:
                     return out
-            except Exception:
-                pass
-            time.sleep(0.8 * (attempt + 1))
+                last = "លទ្ធផលទទេ"
+            except Exception as e:
+                last = f"google: {e}"
+
+            try:
+                from deep_translator import GoogleTranslator
+
+                out = clean_translation(
+                    GoogleTranslator(source="auto", target="km").translate(
+                        text
+                    )
+                )
+                if out:
+                    return out
+            except Exception as e:
+                last = f"deep-translator: {e}"
+
+            time.sleep(1.0 * (attempt + 1))
+
+        errors.append(str(last)[:200])
         return None
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        return list(ex.map(one, texts))
+    # បែងជាក្រុម (~1200 តួអក្សរ ក្នុងមួយសំណើ)
+    batches = []
+    cur = []
+    size = 0
+    for i, t in enumerate(texts):
+        flat = str(t).replace("\n", " ").strip()
+        if cur and size + len(flat) > 1200:
+            batches.append(cur)
+            cur = []
+            size = 0
+        cur.append((i, flat))
+        size += len(flat) + 1
+    if cur:
+        batches.append(cur)
+
+    def run_batch(batch):
+        joined = "\n".join(t for _, t in batch)
+        try:
+            raw = google_translate_request(joined)
+            lines = raw.strip("\n").split("\n")
+            if len(lines) == len(batch):
+                for (i, _), line in zip(batch, lines):
+                    outs[i] = clean_translation(line)
+        except Exception as e:
+            errors.append(f"batch: {e}"[:200])
+
+        # ឃ្លាណាមិនបាន → បកម្តងមួយៗ
+        for i, t in batch:
+            if outs[i] is None:
+                outs[i] = single(t)
+
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        list(ex.map(run_batch, batches))
+
+    return outs, errors
 
 
 def transcribe_free(groq_key, audio_path, duration, source_language,
@@ -1272,13 +1360,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
         ]
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        try:
-            outs = translate_texts([t for _, _, t in keep])
-        except ImportError:
-            raise RuntimeError(
-                "មិនទាន់ដំឡើង deep-translator ទេ។ "
-                "សូម Reboot app បន្ទាប់ពីបន្ថែមក្នុង requirements.txt។"
-            )
+        outs, errs = translate_texts([t for _, _, t in keep])
         segs = []
         for (s, e, _), out in zip(keep, outs):
             if out:
@@ -1287,8 +1369,11 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
                 failed += 1
 
         if not segs or failed > len(keep) * 0.5:
+            reason = " | ".join(errs[:2]) or "មិនស្គាល់មូលហេតុ"
             raise RuntimeError(
-                "Google Translate បរាជ័យ។ សូមសាកម្តងទៀតពេលក្រោយ។"
+                "Google Translate បរាជ័យ។ "
+                f"(ស្តាប់បាន {len(keep)} ឃ្លា បកបាន {len(segs)}) "
+                f"មូលហេតុ: {reason}"
             )
 
     if not segs:
@@ -1614,7 +1699,7 @@ def run_worker(job, item, settings, fonts_data):
                 except UserError:
                     raise
                 except Exception as e:
-                    reason = f"{engine_name(engine)}: {str(e)[:300]}"
+                    reason = f"{engine_name(engine)}: {str(e)[:400]}"
                     engine_errors.append(reason)
                     if idx + 1 < len(order):
                         item["warn"].append(
