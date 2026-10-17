@@ -1436,8 +1436,149 @@ def translate_texts(texts, groq_key=None):
     return outs, errors
 
 
+def retime_by_speech(segs, speech, duration, pad=0.6):
+    """
+    ភាសាខ្មែរ៖ Whisper ផ្តល់ម៉ោងមិនសូវត្រូវ (ឃ្លាវែង ម៉ោងរសាត់)។
+    ដូច្នេះចែកអក្សរក្នុងឃ្លានីមួយៗ តាមចន្លោះដែលមានសំឡេងនិយាយពិត
+    (រំលងចន្លោះស្ងាត់) ជំនួសការចែកស្មើៗ។
+    """
+    if not speech or duration <= 0:
+        return segs
+
+    total_all = sum(b - a for a, b in speech)
+    if total_all / duration >= 0.9 or total_all < 1.0:
+        return segs  # ភ្លេងខ្លាំង/រកសំឡេងមិនបាន → ទុកម៉ោងដើម
+
+    out = []
+    for s, e, text in segs:
+        pieces = split_display(text)
+        if not pieces:
+            continue
+
+        # ចន្លោះសំឡេងក្នុងបង្អួចរបស់ឃ្លានេះ (ពង្រីកបន្តិច)
+        lo, hi = max(0.0, s - pad), min(duration, e + pad)
+        win = []
+        for a, b in speech:
+            a2, b2 = max(a, lo), min(b, hi)
+            if b2 - a2 >= 0.1:
+                win.append((a2, b2))
+        win_total = sum(b - a for a, b in win)
+
+        # សំឡេងតិចពេក → ចែកស្មើតាមម៉ោងដើម
+        if win_total < 0.5:
+            win = [(s, max(e, s + 0.4))]
+            win_total = win[0][1] - win[0][0]
+
+        def to_real(x, is_end):
+            acc = 0.0
+            for a, b in win:
+                d = b - a
+                if (x <= acc + d) if is_end else (x < acc + d):
+                    return a + max(0.0, x - acc)
+                acc += d
+            return win[-1][1]
+
+        weights = [max(1, len(p)) for p in pieces]
+        total_w = float(sum(weights))
+        cum = 0
+        for piece, w in zip(pieces, weights):
+            x0 = win_total * cum / total_w
+            cum += w
+            x1 = win_total * cum / total_w
+            ps, pe = to_real(x0, False), to_real(x1, True)
+            out.append((ps, max(pe, ps + 0.3), piece))
+
+    out.sort(key=lambda x: x[0])
+    return out or segs
+
+
+def plan_short_chunks(duration, speech, target=10.0, limit=14.0):
+    """កាត់សំឡេងជាផ្នែកខ្លីៗ ~10 វិនាទី ត្រង់ចន្លោះស្ងាត់។"""
+    cuts = []
+    for (a1, b1), (a2, b2) in zip(speech or [], (speech or [])[1:]):
+        if a2 - b1 >= 0.15:
+            cuts.append((b1 + a2) / 2.0)
+
+    chunks = []
+    start = 0.0
+    while duration - start > limit:
+        want = start + target
+        cands = [c for c in cuts if start + 4.0 <= c <= start + limit]
+        cut = min(cands, key=lambda c: abs(c - want)) if cands else want
+        chunks.append((start, cut))
+        start = cut
+    chunks.append((start, duration))
+    return chunks
+
+
+def transcribe_khmer_chunks(groq_key, audio_path, duration, speech,
+                            status):
+    """
+    ភាសាខ្មែរ៖ ផ្ញើទៅ Whisper ម្តងមួយផ្នែកខ្លីៗ (~10 វិនាទី)
+    ដូច្នេះម៉ោងមិនអាចរសាត់ឆ្ងាយបាន។ ក្នុងផ្នែកនីមួយៗ ចែកអក្សរតាម
+    ចន្លោះដែលមានសំឡេងនិយាយពិត។
+    """
+    folder = os.path.dirname(audio_path)
+    base = os.path.basename(audio_path)
+    chunks = plan_short_chunks(duration, speech)
+    out = []
+
+    for i, (a, b) in enumerate(chunks):
+        if b - a < 0.5:
+            continue
+        t0 = time.time()
+        name = f"kchunk_{i}.mp3"
+        try:
+            run_ffmpeg(
+                [
+                    "-ss", f"{a:.3f}",
+                    "-t", f"{b - a:.3f}",
+                    "-i", base,
+                    "-c:a", "libmp3lame", "-b:a", "64k",
+                    name,
+                ],
+                cwd=folder,
+            )
+            data, _ = groq_transcribe(
+                groq_key, os.path.join(folder, name), "km", status
+            )
+
+            texts = []
+            for sg in data.get("segments") or []:
+                text = fix_khmer(sg.get("text", ""))
+                if not text or not has_khmer(text):
+                    continue
+                if (
+                    float(sg.get("no_speech_prob", 0) or 0) > 0.6
+                    and float(sg.get("avg_logprob", 0) or 0) < -0.8
+                ):
+                    continue
+                texts.append(text)
+
+            text = fix_khmer(" ".join(texts))
+            if text:
+                out.extend(
+                    retime_by_speech(
+                        [(a, b, text)], speech, duration, pad=0.0
+                    )
+                )
+        except Exception:
+            pass
+
+        status.write(
+            f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({i + 1}/{len(chunks)})"
+        )
+        # កុំឱ្យលើសកូតា Groq ក្នុងមួយនាទី
+        wait = 3.2 - (time.time() - t0)
+        if wait > 0:
+            time.sleep(wait)
+
+    out.sort(key=lambda x: x[0])
+    return out
+
+
 def transcribe_free(groq_key, audio_path, duration, source_language,
-                    status):
+                    status, speech=None):
     """
     ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Groq LLM)។
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
@@ -1477,9 +1618,20 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
     is_khmer = detected in ("khmer", "km") or source_language == "Khmer"
 
     if is_khmer:
-        segs = [
-            (s, e, fix_khmer(t)) for s, e, t in keep if has_khmer(t)
-        ]
+        segs = []
+        if duration > 12:
+            try:
+                segs = transcribe_khmer_chunks(
+                    groq_key, audio_path, duration, speech or [], status
+                )
+            except Exception:
+                segs = []
+
+        if not segs:
+            segs = [
+                (s, e, fix_khmer(t)) for s, e, t in keep if has_khmer(t)
+            ]
+            segs = retime_by_speech(segs, speech, duration)
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
         outs, errs = translate_texts([t for _, _, t in keep], groq_key)
@@ -1804,6 +1956,7 @@ def run_worker(job, item, settings, fonts_data):
                                 duration,
                                 settings["language"],
                                 rep,
+                                speech=speech,
                             )
                         )
                     else:
