@@ -1819,7 +1819,103 @@ def shorten_khmer(client, model, text, max_seconds):
         return text
 
 
-def make_dub(folder, segments, voice, duration, keep_bg, client, model):
+VOICE_MALE = "km-KH-PisethNeural"
+VOICE_FEMALE = "km-KH-SreymomNeural"
+
+
+def load_pcm(path):
+    """ដកសំឡេងទាំងមូលជាលេខ (16kHz mono) ដើម្បីវាស់កម្រិតសំឡេង។"""
+    import numpy as np
+
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    result = subprocess.run(
+        [exe, "-i", path, "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    data = np.frombuffer(result.stdout, dtype=np.int16)
+    return data.astype(np.float32) / 32768.0
+
+
+def estimate_pitch(samples, sr=16000):
+    """ប៉ាន់ស្មានកម្រិតសំឡេង (Hz) ។ ត្រឡប់ None បើមិនអាចវាស់បាន។"""
+    import numpy as np
+
+    n = int(0.04 * sr)
+    hop = int(0.02 * sr)
+    if len(samples) < n * 2:
+        return None
+
+    lag_min = int(sr / 400)
+    lag_max = int(sr / 70)
+
+    starts = list(range(0, len(samples) - n, hop))
+    if not starts:
+        return None
+    stride = max(1, len(starts) // 150)
+    starts = starts[::stride]
+
+    energies = [
+        float(np.sqrt(np.mean(samples[i:i + n] ** 2))) for i in starts
+    ]
+    thr = max(0.01, float(np.percentile(energies, 40)))
+
+    f0s = []
+    for i, e in zip(starts, energies):
+        if e < thr:
+            continue
+        fr = samples[i:i + n]
+        fr = fr - fr.mean()
+        spec = np.fft.rfft(fr, 2 * n)
+        ac = np.fft.irfft(spec * np.conj(spec))[:n]
+        if ac[0] <= 0:
+            continue
+        ac = ac / ac[0]
+        seg = ac[lag_min:lag_max + 1]
+        k = int(np.argmax(seg))
+        if seg[k] < 0.35:
+            continue
+        f0s.append(sr / (lag_min + k))
+
+    if len(f0s) < 5:
+        return None
+    return float(np.median(f0s))
+
+
+def assign_voices(segments, pcm, default_voice, sr=16000):
+    """
+    ជ្រើសសំឡេងអានសម្រាប់ឃ្លានីមួយៗ តាមកម្រិតសំឡេងដើម៖
+    ទាប (<150Hz) = ប្រុស, ខ្ពស់ (>180Hz) = ស្រី,
+    កណ្តាល/វាស់មិនបាន = ដូចឃ្លាមុន (ឬសំឡេងលំនាំដើម)។
+    """
+    voices = []
+    previous = default_voice
+    for s, e, _ in segments:
+        a = max(0, int(s * sr))
+        b = min(len(pcm), int(e * sr))
+        f0 = None
+        try:
+            if b - a > sr * 0.5:
+                f0 = estimate_pitch(pcm[a:b], sr)
+        except Exception:
+            f0 = None
+
+        if f0 is None:
+            voice = previous
+        elif f0 < 150:
+            voice = VOICE_MALE
+        elif f0 > 180:
+            voice = VOICE_FEMALE
+        else:
+            voice = previous
+
+        voices.append(voice)
+        previous = voice
+    return voices
+
+
+def make_dub(folder, segments, voice, duration, keep_bg, client, model,
+             seg_voices=None):
     """
     បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗ។
     បើ client = None (ម៉ាស៊ីនឥតគិតថ្លៃ) មិនបង្រួមប្រយោគទេ តែបង្កើនល្បឿនបន្ថែម។
@@ -1842,16 +1938,17 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model):
 
         name = f"tts_{i}.mp3"
         path = os.path.join(folder, name)
+        v = seg_voices[i] if seg_voices else voice
 
         try:
-            tts_segment(t, voice, path)
+            tts_segment(t, v, path)
             d, _, _ = probe_video(path)
 
             # វែងពេក → បង្រួមប្រយោគ ហើយអានម្តងទៀត
             if client is not None and d > slot * 1.25:
                 t2 = shorten_khmer(client, model, t, slot)
                 if t2 != t:
-                    tts_segment(t2, voice, path)
+                    tts_segment(t2, v, path)
                     d, _, _ = probe_video(path)
         except Exception:
             continue
@@ -2148,6 +2245,17 @@ def run_worker(job, item, settings, fonts_data):
                         if used_engine == "gemini"
                         else None
                     )
+                    seg_voices = None
+                    if settings["auto_gender"]:
+                        try:
+                            rep.write("🔍 កំពុងស្គាល់សំឡេងប្រុស/ស្រី...")
+                            pcm = load_pcm(master_path)
+                            seg_voices = assign_voices(
+                                segments, pcm, settings["voice"]
+                            )
+                        except Exception:
+                            seg_voices = None
+                        rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     dub_ok = make_dub(
                         folder,
                         segments,
@@ -2156,6 +2264,7 @@ def run_worker(job, item, settings, fonts_data):
                         settings["keep_bg"],
                         client,
                         used_model,
+                        seg_voices=seg_voices,
                     )
                 except Exception:
                     dub_ok = False
@@ -2496,8 +2605,16 @@ quality_label = st.selectbox(
 dub_on = st.checkbox("🎙 បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)")
 voice_label = list(TTS_VOICES.keys())[0]
 keep_bg = False
+auto_gender = False
 if dub_on:
     voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
+    auto_gender = st.checkbox(
+        "👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ",
+        help=(
+            "ស្តាប់កម្រិតសំឡេងដើម៖ ប្រុសនិយាយ → AI ប្រុស, "
+            "ស្រីនិយាយ → AI ស្រី។ បើវាស់មិនបាន ប្រើសំឡេងដែលបានជ្រើសខាងលើ។"
+        ),
+    )
     keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
 
 with st.expander("🎨 កំណត់អក្សរ"):
@@ -2571,6 +2688,7 @@ if run:
         "dub_on": dub_on,
         "voice": TTS_VOICES[voice_label],
         "keep_bg": keep_bg,
+        "auto_gender": auto_gender,
         "font_size": font_size,
         "outline_size": outline_size,
         "color": colors[font_color],
