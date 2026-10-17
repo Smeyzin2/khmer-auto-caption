@@ -1819,8 +1819,13 @@ def shorten_khmer(client, model, text, max_seconds):
         return text
 
 
+# ---------- ស្គាល់សំឡេងប្រុស/ស្រី តាមអ្នកនិយាយ ----------
+
 VOICE_MALE = "km-KH-PisethNeural"
 VOICE_FEMALE = "km-KH-SreymomNeural"
+
+BIN = 0.1  # វិនាទី (ទំហំបង្អួចនៃការបែងចែកអ្នកនិយាយ)
+MIN_TURN = 0.8  # អ្នកនិយាយប្តូរខ្លីជាងនេះ ត្រូវបានរួមចូលអ្នកជិតខាង
 
 
 def load_pcm(path):
@@ -1837,94 +1842,341 @@ def load_pcm(path):
     return data.astype(np.float32) / 32768.0
 
 
-def estimate_pitch(samples, sr=16000):
-    """ប៉ាន់ស្មានកម្រិតសំឡេង (Hz) ។ ត្រឡប់ None បើមិនអាចវាស់បាន។"""
-    import numpy as np
-
-    n = int(0.04 * sr)
-    hop = int(0.02 * sr)
-    if len(samples) < n * 2:
-        return None
-
-    lag_min = int(sr / 400)
-    lag_max = int(sr / 70)
-
-    starts = list(range(0, len(samples) - n, hop))
-    if not starts:
-        return None
-    stride = max(1, len(starts) // 150)
-    starts = starts[::stride]
-
-    energies = [
-        float(np.sqrt(np.mean(samples[i:i + n] ** 2))) for i in starts
-    ]
-    thr = max(0.01, float(np.percentile(energies, 40)))
-
-    f0s = []
-    for i, e in zip(starts, energies):
-        if e < thr:
-            continue
-        fr = samples[i:i + n]
-        fr = fr - fr.mean()
-        spec = np.fft.rfft(fr, 2 * n)
-        ac = np.fft.irfft(spec * np.conj(spec))[:n]
-        if ac[0] <= 0:
-            continue
-        ac = ac / ac[0]
-        seg = ac[lag_min:lag_max + 1]
-        k = int(np.argmax(seg))
-        if seg[k] < 0.35:
-            continue
-        f0s.append(sr / (lag_min + k))
-
-    if len(f0s) < 5:
-        return None
-    return float(np.median(f0s))
-
-
-def assign_voices(segments, pcm, default_voice, sr=16000):
+def pitch_track(samples, sr=16000):
     """
-    ជ្រើសសំឡេងអានសម្រាប់ឃ្លានីមួយៗ តាមកម្រិតសំឡេងដើម៖
-    ទាប (<150Hz) = ប្រុស, ខ្ពស់ (>180Hz) = ស្រី,
-    កណ្តាល/វាស់មិនបាន = ដូចឃ្លាមុន។ ឃ្លាដំបូងប្រើតម្លៃកណ្តាលនៃវីដេអូទាំងមូល។
-    ត្រឡប់ (បញ្ជីសំឡេង, បញ្ជីពត៌មានសម្រាប់បង្ហាញ)។
+    វាស់កម្រិតសំឡេង (Hz) គ្រប់ ២០ms លើសំឡេងទាំងមូល។
+    ត្រឡប់ (ម៉ោង, f0, ថាមពល)។ f0 = 0 ពេលមិនមែនសំឡេងមនុស្សនិយាយ។
     """
     import numpy as np
 
-    f0s = []
-    for s_, e_, _ in segments:
-        a_ = max(0, int(s_ * sr))
-        b_ = min(len(pcm), int(e_ * sr))
-        f0 = None
-        try:
-            if b_ - a_ > sr * 0.5:
-                f0 = estimate_pitch(pcm[a_:b_], sr)
-        except Exception:
-            f0 = None
-        f0s.append(f0)
+    n = int(0.04 * sr)  # ស៊ុមវែង ៤០ms
+    hop = int(0.02 * sr)  # រំកិលម្តង ២០ms
+    lag_min = int(sr / 400)  # 400Hz
+    lag_max = int(sr / 70)  # 70Hz
 
-    valid = [f for f in f0s if f]
-    if valid:
-        median = float(np.median(valid))
-        previous = VOICE_MALE if median < 165 else VOICE_FEMALE
-    else:
-        previous = default_voice
+    empty = np.array([])
+    if len(samples) < n * 3:
+        return empty, empty, empty
 
-    voices, info = [], []
-    for f0 in f0s:
-        if f0 is None:
-            voice = previous
-        elif f0 < 150:
-            voice = VOICE_MALE
-        elif f0 > 180:
-            voice = VOICE_FEMALE
+    count = 1 + (len(samples) - n) // hop
+    times = (np.arange(count) * hop + n / 2) / sr
+    f0 = np.zeros(count, dtype=np.float64)
+    rms = np.zeros(count, dtype=np.float64)
+    peaks = np.zeros(count, dtype=np.float64)
+
+    lags = np.arange(n)
+    overlap_fix = n / np.maximum(n - lags, 1)  # ជំនួសការធ្លាក់នៃ autocorr
+
+    step = 1500
+    for b0 in range(0, count, step):
+        b1 = min(count, b0 + step)
+        idx = (np.arange(b0, b1) * hop)[:, None] + np.arange(n)[None, :]
+        frames = samples[idx].astype(np.float64)
+
+        rms[b0:b1] = np.sqrt(np.mean(frames ** 2, axis=1))
+        frames = frames - frames.mean(axis=1, keepdims=True)
+
+        spec = np.fft.rfft(frames, 2 * n, axis=1)
+        ac = np.fft.irfft(spec * np.conj(spec), axis=1)[:, :n]
+        ac = ac / np.maximum(ac[:, :1], 1e-9)
+        ac = ac * overlap_fix[None, :]
+
+        seg = ac[:, lag_min - 1:lag_max + 2]
+        core = seg[:, 1:-1]
+        is_peak = (core >= seg[:, :-2]) & (core >= seg[:, 2:])
+        pk = core.max(axis=1)
+
+        # យកកំពូលតូចបំផុត (ប្រេកង់គោល) ដែលខ្លាំងជិតកំពូលធំបំផុត
+        cand = is_peak & (core >= 0.9 * pk[:, None])
+        first = np.argmax(cand, axis=1)
+        lag = lag_min + first
+
+        f0[b0:b1] = sr / np.maximum(lag, 1)
+        peaks[b0:b1] = core[np.arange(len(first)), first]
+
+    thr = max(0.004, 0.12 * float(np.percentile(rms, 95)))
+    voiced = (rms >= thr) & (peaks >= 0.45)
+    f0 = np.where(voiced, f0, 0.0)
+    return times, f0, rms
+
+
+def median_pitch(info, a, b):
+    """កម្រិតសំឡេងកណ្តាល (Hz) ក្នុងចន្លោះម៉ោង a-b។"""
+    import numpy as np
+
+    t = info.get("times")
+    f = info.get("f0")
+    if t is None or len(t) == 0:
+        return None
+    m = (t >= a) & (t <= b) & (f > 0)
+    if int(m.sum()) < 3:
+        return None
+    return float(np.median(f[m]))
+
+
+def merge_short_runs(runs, min_len):
+    """រួមចន្លោះខ្លីពេកចូលអ្នកជិតខាងដែលវែងជាង ហើយបូកចន្លោះដែលដូចគ្នា។"""
+    runs = [list(r) for r in runs]
+    while len(runs) > 1:
+        idx = min(range(len(runs)), key=lambda k: runs[k][1] - runs[k][0])
+        if runs[idx][1] - runs[idx][0] >= min_len:
+            break
+
+        left = runs[idx - 1] if idx > 0 else None
+        right = runs[idx + 1] if idx < len(runs) - 1 else None
+        if left is not None and right is not None:
+            if (left[1] - left[0]) >= (right[1] - right[0]):
+                target = left
+            else:
+                target = right
         else:
-            voice = previous
-        voices.append(voice)
-        previous = voice
-        mark = "♂" if voice == VOICE_MALE else "♀"
-        info.append(f"{mark} {int(f0) if f0 else '?'}Hz")
-    return voices, info
+            target = left if left is not None else right
+
+        if target is left:
+            left[1] = runs[idx][1]
+        else:
+            right[0] = runs[idx][0]
+        runs.pop(idx)
+
+        merged = [runs[0]]
+        for r in runs[1:]:
+            if r[2] == merged[-1][2]:
+                merged[-1][1] = r[1]
+            else:
+                merged.append(r)
+        runs = merged
+    return runs
+
+
+def gender_timeline(pcm, duration, default_voice, sr=16000):
+    """
+    វិភាគសំឡេងទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយនៅពេលណា (ប្រុស M / ស្រី F)។
+    ១) វាស់កម្រិតសំឡេងគ្រប់ស៊ុម
+    ២) បែងជា ២ ក្រុមដោយខ្លួនឯង (k-means លើ log-pitch) មិនប្រើតួលេខថេរ
+    ៣) បើមានក្រុមតែមួយ → អ្នកនិយាយម្នាក់ សំឡេងតែមួយពេញវីដេអូ
+    ត្រឡប់ (runs, info)។ runs = [(ចាប់ផ្តើម, បញ្ចប់, "M"/"F")]
+    """
+    import numpy as np
+
+    times, f0, _ = pitch_track(pcm, sr)
+    info = {"times": times, "f0": f0, "summary": ""}
+
+    mask = f0 > 0
+    if int(mask.sum()) < 25:
+        info["summary"] = (
+            "វាស់កម្រិតសំឡេងមិនបាន (សំឡេងតិច ឬមានតែភ្លេង) "
+            "ប្រើសំឡេងដែលបានជ្រើស"
+        )
+        return None, info
+
+    tv = times[mask]
+    hz = f0[mask]
+    lg = np.log2(hz)
+
+    # k-means ២ ក្រុម
+    c0 = float(np.percentile(lg, 20))
+    c1 = float(np.percentile(lg, 80))
+    for _ in range(30):
+        hi = np.abs(lg - c1) < np.abs(lg - c0)
+        if hi.all() or (~hi).all():
+            break
+        n0 = float(lg[~hi].mean())
+        n1 = float(lg[hi].mean())
+        done = abs(n0 - c0) < 1e-4 and abs(n1 - c1) < 1e-4
+        c0, c1 = n0, n1
+        if done:
+            break
+    hi = np.abs(lg - c1) < np.abs(lg - c0)
+
+    n_hi = int(hi.sum())
+    n_lo = int(len(lg) - n_hi)
+    hz0, hz1 = float(2 ** c0), float(2 ** c1)
+
+    two = False
+    single = None
+    g0 = g1 = None
+    if n_hi >= 30 and n_lo >= 30 and c1 > c0:
+        s0 = float(lg[~hi].std())
+        s1 = float(lg[hi].std())
+        sep = (c1 - c0) / (0.5 * (s0 + s1) + 1e-6)
+        if hz1 / hz0 >= 1.3 and sep >= 2.0:
+            g0 = "M" if hz0 < 175 else "F"
+            g1 = "F" if hz1 >= 165 else "M"
+            if g0 != g1:
+                two = True
+            else:
+                single = g0  # ទាំងពីរក្រុមភេទដូចគ្នា (ឧ. ប្រុសពីរនាក់)
+
+    if not two and single is None:
+        med = float(np.median(hz))
+        if med < 150:
+            single = "M"
+        elif med > 190:
+            single = "F"
+        else:
+            single = "M" if default_voice == VOICE_MALE else "F"
+            info["summary"] = (
+                f"កម្រិតសំឡេង ~{int(med)}Hz មិនច្បាស់ ប្រើសំឡេងដែលបានជ្រើស"
+            )
+
+    names = {"M": "ប្រុស", "F": "ស្រី"}
+
+    if not two:
+        med = float(np.median(hz))
+        if not info["summary"]:
+            info["summary"] = (
+                f"ស្គាល់ឃើញអ្នកនិយាយ ១ នាក់៖ {names[single]} (~{int(med)}Hz)"
+            )
+        return [(0.0, duration + 1.0, single)], info
+
+    # ដាក់ស្លាកក្នុងបង្អួច ០.១ វិនាទី
+    nb = int(duration / BIN) + 2
+    isf = np.where(
+        hi,
+        1 if g1 == "F" else 0,
+        1 if g0 == "F" else 0,
+    )
+    bins = np.minimum((tv / BIN).astype(int), nb - 1)
+    vf = np.zeros(nb)
+    vm = np.zeros(nb)
+    np.add.at(vf, bins, isf)
+    np.add.at(vm, bins, 1 - isf)
+
+    lab = np.full(nb, -1, dtype=int)
+    lab[vf > vm] = 1
+    lab[vm > vf] = 0
+
+    # បំពេញបង្អួចដែលគ្មានសំឡេង ដោយយកតម្លៃជិតបំផុត
+    last = -1
+    for i in range(nb):
+        if lab[i] >= 0:
+            last = lab[i]
+        elif last >= 0:
+            lab[i] = last
+    nxt = -1
+    for i in range(nb - 1, -1, -1):
+        if lab[i] >= 0:
+            nxt = lab[i]
+        elif nxt >= 0:
+            lab[i] = nxt
+
+    # រលោងដោយ median ៥ បង្អួច (០.៥ វិនាទី)
+    pad = np.pad(lab, 2, mode="edge")
+    sm = np.array([1 if pad[i:i + 5].sum() >= 3 else 0 for i in range(nb)])
+
+    runs = []
+    start = 0
+    for i in range(1, nb + 1):
+        if i == nb or sm[i] != sm[start]:
+            runs.append([start * BIN, i * BIN, "F" if sm[start] else "M"])
+            start = i
+
+    runs = merge_short_runs(runs, MIN_TURN)
+    runs[-1][1] = max(runs[-1][1], duration + 1.0)
+
+    hz_m = hz0 if g0 == "M" else hz1
+    hz_f = hz0 if g0 == "F" else hz1
+    info["summary"] = (
+        "ស្គាល់ឃើញអ្នកនិយាយ ២ នាក់៖ "
+        f"ប្រុស (~{int(hz_m)}Hz) និងស្រី (~{int(hz_f)}Hz) "
+        f"ប្តូរអ្នកនិយាយ {len(runs) - 1} ដង"
+    )
+    return [(a, b, g) for a, b, g in runs], info
+
+
+def safe_cut(text, pos):
+    """រកកន្លែងកាត់អត្ថបទជិត pos (ត្រង់ដកឃ្លា ឬមិនបំបែកព្យញ្ជនៈជើង/ស្រៈ)។"""
+    n = len(text)
+    pos = max(0, min(n, pos))
+
+    for d in range(0, 9):
+        for p in (pos - d, pos + d):
+            if 0 < p < n and text[p] == " ":
+                return p
+
+    p = pos
+    while 0 < p < n and (
+        "\u17B6" <= text[p] <= "\u17D3" or text[p - 1] == "\u17D2"
+    ):
+        p -= 1
+    return p
+
+
+def split_text_by_shares(text, shares):
+    """ចែកអត្ថបទជាច្រើនផ្នែក តាមសមាមាត្រពេលវេលា។"""
+    text = fix_khmer(text)
+    n = len(text)
+    total = float(sum(shares)) or 1.0
+
+    cuts = []
+    acc = 0.0
+    for sh in shares[:-1]:
+        acc += sh
+        cuts.append(safe_cut(text, int(round(n * acc / total))))
+
+    pieces = []
+    prev = 0
+    for c in cuts + [n]:
+        c = max(c, prev)
+        pieces.append(fix_khmer(text[prev:c]))
+        prev = c
+    return pieces
+
+
+def split_by_speaker(segments, runs, default_voice):
+    """
+    បំបែកឃ្លានីមួយៗ ត្រង់កន្លែងដែលអ្នកនិយាយប្តូរ (ប្រុស ↔ ស្រី)។
+    ត្រឡប់ [(ចាប់ផ្តើម, បញ្ចប់, អត្ថបទ, សំឡេង)]
+    """
+    voice_of = {"M": VOICE_MALE, "F": VOICE_FEMALE}
+    out = []
+
+    for s, e, text in segments:
+        parts = []
+        for rs, re_, g in runs:
+            a, b = max(s, rs), min(e, re_)
+            if b - a > 0.01:
+                parts.append([a, b, g])
+
+        if not parts:
+            out.append((s, e, text, default_voice))
+            continue
+
+        parts = merge_short_runs(parts, 0.6)
+
+        if len(parts) == 1:
+            out.append((s, e, text, voice_of[parts[0][2]]))
+            continue
+
+        shares = [p[1] - p[0] for p in parts]
+        pieces = split_text_by_shares(text, shares)
+        for (a, b, g), piece in zip(parts, pieces):
+            if piece:
+                out.append((a, b, piece, voice_of[g]))
+
+    return out
+
+
+def plan_dub_voices(segments, pcm, default_voice, duration):
+    """
+    ត្រឡប់ (ឃ្លាបន្ទាប់ពីបំបែក [(s,e,text,voice)], បន្ទាត់បង្ហាញ, info)។
+    """
+    runs, info = gender_timeline(pcm, duration, default_voice)
+    if runs is None:
+        return (
+            [(s, e, t, default_voice) for s, e, t in segments],
+            [],
+            info,
+        )
+
+    dub = split_by_speaker(segments, runs, default_voice)
+
+    lines = []
+    for a, b, t, v in dub:
+        hz = median_pitch(info, a, b)
+        mark = "♂" if v == VOICE_MALE else "♀"
+        lines.append(f"{mark} {int(hz) if hz else '?'}Hz  {t}")
+    return dub, lines, info
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
@@ -2264,24 +2516,39 @@ def run_worker(job, item, settings, fonts_data):
                         if used_engine == "gemini"
                         else None
                     )
+
+                    dub_segments = segments
                     seg_voices = None
+
                     if settings["auto_gender"]:
                         try:
-                            rep.write("🔍 កំពុងស្គាល់សំឡេងប្រុស/ស្រី...")
+                            rep.write("🔍 កំពុងស្គាល់អ្នកនិយាយប្រុស/ស្រី...")
                             pcm = load_pcm(master_path)
-                            seg_voices, voice_info = assign_voices(
-                                segments, pcm, settings["voice"]
+                            planned, lines, voice_info = plan_dub_voices(
+                                segments,
+                                pcm,
+                                settings["voice"],
+                                duration,
                             )
-                            item["voice_lines"] = [
-                                f"{inf}  {t}"
-                                for inf, (_, _, t) in zip(voice_info, segments)
+                            dub_segments = [
+                                (s, e, t) for s, e, t, _ in planned
                             ]
+                            seg_voices = [v for _, _, _, v in planned]
+                            item["voice_lines"] = (
+                                [voice_info.get("summary", "")] + lines
+                            )
                         except Exception:
+                            dub_segments = segments
                             seg_voices = None
+                            item["warn"].append(
+                                "ស្គាល់សំឡេងប្រុស/ស្រីមិនបាន "
+                                "ប្រើសំឡេងតែមួយតាមដែលបានជ្រើស។"
+                            )
                         rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+
                     dub_ok = make_dub(
                         folder,
-                        segments,
+                        dub_segments,
                         settings["voice"],
                         duration,
                         settings["keep_bg"],
@@ -2324,6 +2591,9 @@ def run_worker(job, item, settings, fonts_data):
                 "ផ្នែកបរាជ័យ": failed_chunks,
                 "Font ដែលប្រើ": used_font,
                 "Dubbing": dub_ok,
+                "អ្នកនិយាយ": (
+                    item["voice_lines"][0] if item["voice_lines"] else ""
+                ),
                 "ទំហំលទ្ធផល": f"{len(video) / (1024 * 1024):.1f}MB",
                 "ការសាក Font": "\n".join(attempts),
                 "fontselect": "\n".join(
@@ -2639,8 +2909,10 @@ if dub_on:
     auto_gender = st.checkbox(
         "👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ",
         help=(
-            "ស្តាប់កម្រិតសំឡេងដើម៖ ប្រុសនិយាយ → AI ប្រុស, "
-            "ស្រីនិយាយ → AI ស្រី។ បើវាស់មិនបាន ប្រើសំឡេងដែលបានជ្រើសខាងលើ។"
+            "វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។ "
+            "ប្រុសនិយាយ → AI ប្រុស, ស្រីនិយាយ → AI ស្រី "
+            "ហើយបំបែកឃ្លាត្រង់កន្លែងដែលអ្នកនិយាយប្តូរ។ "
+            "បើមានអ្នកនិយាយម្នាក់ វាប្រើសំឡេងតែមួយពេញវីដេអូ។"
         ),
     )
     keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
