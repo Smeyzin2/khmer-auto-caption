@@ -1581,6 +1581,115 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech,
     return out
 
 
+# កូនសោសាធារណៈរបស់ Google Speech (ដូចក្នុងបណ្ណាល័យ speech_recognition)
+GSPEECH_KEY = "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+
+
+def google_speech_request(flac_bytes, lang="km-KH"):
+    """ស្តាប់សំឡេងខ្លីៗជាភាសាខ្មែរដោយ Google Speech (ឥតគិតថ្លៃ)។"""
+    query = urllib.parse.urlencode(
+        {
+            "client": "chromium",
+            "lang": lang,
+            "key": GSPEECH_KEY,
+            "pFilter": "0",
+        }
+    )
+    request = urllib.request.Request(
+        "https://www.google.com/speech-api/v2/recognize?" + query,
+        data=flac_bytes,
+        method="POST",
+        headers={
+            "Content-Type": "audio/x-flac; rate=16000",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=40) as response:
+        body = response.read().decode("utf-8", "ignore")
+
+    for line in body.split("\n"):
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        results = obj.get("result") or []
+        if results:
+            alts = results[0].get("alternative") or []
+            if alts:
+                return fix_khmer(alts[0].get("transcript", ""))
+    return ""
+
+
+def transcribe_khmer_google(audio_path, duration, speech, status):
+    """
+    ភាសាខ្មែរ៖ កាត់ជាផ្នែក ~10 វិនាទី ត្រង់ចន្លោះស្ងាត់ ស្តាប់ដោយ
+    Google Speech (ស្គាល់ខ្មែរបានល្អជាង Whisper) រួចចែកអក្សរតាមសំឡេងពិត។
+    មិនប្រើ Gemini ទេ។
+    """
+    folder = os.path.dirname(audio_path)
+    base = os.path.basename(audio_path)
+    chunks = plan_short_chunks(duration, speech)
+    out = []
+    got = 0
+    errors_in_row = 0
+
+    for i, (a, b) in enumerate(chunks):
+        if b - a < 0.5:
+            continue
+        name = f"gs_{i}.flac"
+        try:
+            run_ffmpeg(
+                [
+                    "-ss", f"{a:.3f}",
+                    "-t", f"{b - a:.3f}",
+                    "-i", base,
+                    "-ac", "1", "-ar", "16000",
+                    "-c:a", "flac",
+                    name,
+                ],
+                cwd=folder,
+            )
+            with open(os.path.join(folder, name), "rb") as f:
+                data = f.read()
+
+            text = ""
+            for attempt in range(2):
+                try:
+                    text = google_speech_request(data)
+                    errors_in_row = 0
+                    break
+                except urllib.error.HTTPError as e:
+                    if e.code in (429, 503) and attempt == 0:
+                        time.sleep(4)
+                        continue
+                    raise
+
+            if text:
+                got += 1
+                out.extend(
+                    retime_by_speech(
+                        [(a, b, text)], speech, duration, pad=0.0
+                    )
+                )
+        except Exception:
+            errors_in_row += 1
+            if errors_in_row >= 3:
+                raise  # ត្រូវបានរារាំង → ប្តូរទៅវិធីបម្រុង
+
+        status.write(
+            f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({i + 1}/{len(chunks)})"
+        )
+        time.sleep(0.6)
+
+    if got == 0:
+        return []
+    out.sort(key=lambda x: x[0])
+    return out
+
+
 def transcribe_free(groq_key, audio_path, duration, source_language,
                     status, speech=None, khmer_ok=True):
     """
@@ -1588,6 +1697,17 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
     """
     code = WHISPER_LANG.get(source_language) if source_language else None
+
+    # ភាសាខ្មែរ៖ សាក Google Speech មុន (ល្អជាង Whisper)
+    if source_language == "Khmer":
+        try:
+            gs = transcribe_khmer_google(
+                audio_path, duration, speech or [], status
+            )
+        except Exception:
+            gs = []
+        if gs:
+            return gs, "Google Speech (km-KH)", 0
 
     data, model = groq_transcribe(groq_key, audio_path, code, status)
     detected = str(data.get("language", "") or "").lower()
@@ -1621,12 +1741,19 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
     failed = 0
     is_khmer = detected in ("khmer", "km") or source_language == "Khmer"
 
-    if is_khmer and not khmer_ok:
-        raise KhmerNeedsGemini("Whisper ស្តាប់ខ្មែរមិនច្បាស់")
-
     if is_khmer:
         segs = []
-        if duration > 12:
+        if source_language != "Khmer":
+            try:
+                segs = transcribe_khmer_google(
+                    audio_path, duration, speech or [], status
+                )
+            except Exception:
+                segs = []
+            if segs:
+                return segs, "Google Speech (km-KH)", 0
+
+        if not segs and duration > 12:
             try:
                 segs = transcribe_khmer_chunks(
                     groq_key, audio_path, duration, speech or [], status
@@ -1947,14 +2074,6 @@ def run_worker(job, item, settings, fonts_data):
                 or (k == "gemini" and settings["gemini_key"])
             ]
 
-            # ភាសាខ្មែរ៖ Gemini ស្តាប់បានច្បាស់ជាង Whisper ខ្លាំង
-            if settings["language"] == "Khmer" and settings["gemini_key"]:
-                order = (
-                    [k for k in order if k == "gemini"]
-                    + [k for k in order if k != "gemini"]
-                )
-            gemini_failed = False
-
             segments = None
             used_engine = ""
             used_model = ""
@@ -1972,10 +2091,6 @@ def run_worker(job, item, settings, fonts_data):
                                 settings["language"],
                                 rep,
                                 speech=speech,
-                                khmer_ok=(
-                                    not settings["gemini_key"]
-                                    or gemini_failed
-                                ),
                             )
                         )
                     else:
@@ -1995,8 +2110,6 @@ def run_worker(job, item, settings, fonts_data):
                 except KhmerNeedsGemini:
                     continue
                 except Exception as e:
-                    if engine == "gemini":
-                        gemini_failed = True
                     reason = f"{engine_name(engine)}: {str(e)[:400]}"
                     engine_errors.append(reason)
                     if idx + 1 < len(order):
