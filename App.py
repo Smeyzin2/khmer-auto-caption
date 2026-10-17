@@ -153,6 +153,10 @@ class UserError(RuntimeError):
     """សារកំហុសដែលសមស្របនឹងបង្ហាញដល់អ្នកប្រើផ្ទាល់។"""
 
 
+class KhmerNeedsGemini(RuntimeError):
+    """Whisper ស្តាប់ភាសាខ្មែរមិនច្បាស់ → ប្តូរទៅ Gemini។"""
+
+
 def is_quota_error(error):
     low = str(error).lower()
     return (
@@ -1578,7 +1582,7 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech,
 
 
 def transcribe_free(groq_key, audio_path, duration, source_language,
-                    status, speech=None):
+                    status, speech=None, khmer_ok=True):
     """
     ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Groq LLM)។
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
@@ -1616,6 +1620,9 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
 
     failed = 0
     is_khmer = detected in ("khmer", "km") or source_language == "Khmer"
+
+    if is_khmer and not khmer_ok:
+        raise KhmerNeedsGemini("Whisper ស្តាប់ខ្មែរមិនច្បាស់")
 
     if is_khmer:
         segs = []
@@ -1940,6 +1947,14 @@ def run_worker(job, item, settings, fonts_data):
                 or (k == "gemini" and settings["gemini_key"])
             ]
 
+            # ភាសាខ្មែរ៖ Gemini ស្តាប់បានច្បាស់ជាង Whisper ខ្លាំង
+            if settings["language"] == "Khmer" and settings["gemini_key"]:
+                order = (
+                    [k for k in order if k == "gemini"]
+                    + [k for k in order if k != "gemini"]
+                )
+            gemini_failed = False
+
             segments = None
             used_engine = ""
             used_model = ""
@@ -1957,6 +1972,10 @@ def run_worker(job, item, settings, fonts_data):
                                 settings["language"],
                                 rep,
                                 speech=speech,
+                                khmer_ok=(
+                                    not settings["gemini_key"]
+                                    or gemini_failed
+                                ),
                             )
                         )
                     else:
@@ -1973,7 +1992,11 @@ def run_worker(job, item, settings, fonts_data):
                     break
                 except UserError:
                     raise
+                except KhmerNeedsGemini:
+                    continue
                 except Exception as e:
+                    if engine == "gemini":
+                        gemini_failed = True
                     reason = f"{engine_name(engine)}: {str(e)[:400]}"
                     engine_errors.append(reason)
                     if idx + 1 < len(order):
