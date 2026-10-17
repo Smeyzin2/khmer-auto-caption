@@ -1886,20 +1886,32 @@ def assign_voices(segments, pcm, default_voice, sr=16000):
     """
     ជ្រើសសំឡេងអានសម្រាប់ឃ្លានីមួយៗ តាមកម្រិតសំឡេងដើម៖
     ទាប (<150Hz) = ប្រុស, ខ្ពស់ (>180Hz) = ស្រី,
-    កណ្តាល/វាស់មិនបាន = ដូចឃ្លាមុន (ឬសំឡេងលំនាំដើម)។
+    កណ្តាល/វាស់មិនបាន = ដូចឃ្លាមុន។ ឃ្លាដំបូងប្រើតម្លៃកណ្តាលនៃវីដេអូទាំងមូល។
+    ត្រឡប់ (បញ្ជីសំឡេង, បញ្ជីពត៌មានសម្រាប់បង្ហាញ)។
     """
-    voices = []
-    previous = default_voice
-    for s, e, _ in segments:
-        a = max(0, int(s * sr))
-        b = min(len(pcm), int(e * sr))
+    import numpy as np
+
+    f0s = []
+    for s_, e_, _ in segments:
+        a_ = max(0, int(s_ * sr))
+        b_ = min(len(pcm), int(e_ * sr))
         f0 = None
         try:
-            if b - a > sr * 0.5:
-                f0 = estimate_pitch(pcm[a:b], sr)
+            if b_ - a_ > sr * 0.5:
+                f0 = estimate_pitch(pcm[a_:b_], sr)
         except Exception:
             f0 = None
+        f0s.append(f0)
 
+    valid = [f for f in f0s if f]
+    if valid:
+        median = float(np.median(valid))
+        previous = VOICE_MALE if median < 165 else VOICE_FEMALE
+    else:
+        previous = default_voice
+
+    voices, info = [], []
+    for f0 in f0s:
         if f0 is None:
             voice = previous
         elif f0 < 150:
@@ -1908,10 +1920,11 @@ def assign_voices(segments, pcm, default_voice, sr=16000):
             voice = VOICE_FEMALE
         else:
             voice = previous
-
         voices.append(voice)
         previous = voice
-    return voices
+        mark = "♂" if voice == VOICE_MALE else "♀"
+        info.append(f"{mark} {int(f0) if f0 else '?'}Hz")
+    return voices, info
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
@@ -1922,7 +1935,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     """
     inputs, filters = [], []
     n = 0
-    max_speed = 1.6 if client is not None else 1.8
+    max_speed = 2.0
 
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
@@ -1931,10 +1944,14 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
 
     first_voice = n
     voices = 0
+    cursor = 0.0  # ម៉ោងដែលឃ្លាមុនអានចប់ (កុំឱ្យសំឡេងជាន់គ្នា)
 
     for i, (s, e, t) in enumerate(segments):
         next_s = segments[i + 1][0] if i + 1 < len(segments) else duration
-        slot = max(0.5, min(next_s - 0.05, e + 0.4) - s)
+        start = max(s, cursor)
+        if start >= duration - 0.3:
+            break
+        slot = max(0.5, min(next_s - 0.05, e + 0.4) - start)
 
         name = f"tts_{i}.mp3"
         path = os.path.join(folder, name)
@@ -1954,7 +1971,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             continue
 
         speed = min(max_speed, max(1.0, d / slot))
-        delay = int(s * 1000)
+        delay = int(start * 1000)
+        cursor = start + d / speed + 0.08
 
         inputs += ["-i", name]
         filters.append(
@@ -2093,6 +2111,7 @@ def new_item(name, path=None, url=None):
         "log": [],
         "video": None,
         "captions": [],
+        "voice_lines": [],
         "error": None,
         "raw_error": "",
         "debug": {},
@@ -2250,9 +2269,13 @@ def run_worker(job, item, settings, fonts_data):
                         try:
                             rep.write("🔍 កំពុងស្គាល់សំឡេងប្រុស/ស្រី...")
                             pcm = load_pcm(master_path)
-                            seg_voices = assign_voices(
+                            seg_voices, voice_info = assign_voices(
                                 segments, pcm, settings["voice"]
                             )
+                            item["voice_lines"] = [
+                                f"{inf}  {t}"
+                                for inf, (_, _, t) in zip(voice_info, segments)
+                            ]
                         except Exception:
                             seg_voices = None
                         rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
@@ -2469,6 +2492,11 @@ def download_area(job):
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
                 for text in it["captions"]:
                     st.write(text)
+
+            if it.get("voice_lines"):
+                with st.expander("👫 សំឡេងអានដែលបានជ្រើស (ប្រុស/ស្រី)"):
+                    for line in it["voice_lines"]:
+                        st.write(line)
 
             if DEBUG:
                 with st.expander("🛠 DEBUG"):
