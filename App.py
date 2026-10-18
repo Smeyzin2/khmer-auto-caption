@@ -91,6 +91,52 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p {
 }
 [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--ink-soft) !important; }
 
+/* ---------- Token bar ---------- */
+.kac-token {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 10px 8px 14px;
+  margin: 0 0 14px;
+  box-shadow: 0 2px 10px rgba(29,33,69,.06);
+}
+.kac-token .bal {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  font-size: 1rem;
+  color: var(--ink) !important;
+}
+.kac-token .coin {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: .85rem;
+  background: radial-gradient(circle at 35% 35%, #FFD27A, #F5A524 75%);
+  box-shadow: 0 0 0 3px var(--saffron-soft);
+}
+.kac-token .lbl {
+  font-weight: 500;
+  font-size: .78rem;
+  color: var(--ink-soft) !important;
+}
+.kac-token .cost {
+  background: var(--saffron-soft);
+  color: var(--ink) !important;
+  border-radius: 999px;
+  padding: 5px 12px;
+  font-size: .78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
 /* ---------- Hero ---------- */
 .kac-hero {
   background: linear-gradient(160deg, #232958 0%, #1A1E45 100%);
@@ -329,6 +375,29 @@ hr { border-color: var(--line) !important; margin: 1.6rem 0 !important; }
 
 def apply_theme():
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+
+
+TOKEN_START = 9_999_999_999
+TOKEN_COST = 10
+
+
+def render_token_bar():
+    if "tokens" not in st.session_state:
+        st.session_state["tokens"] = TOKEN_START
+    balance = st.session_state["tokens"]
+    st.markdown(
+        f"""
+        <div class="kac-token">
+          <div class="bal">
+            <span class="coin">🪙</span>
+            <span>{balance:,}</span>
+            <span class="lbl">Token</span>
+          </div>
+          <div class="cost">១ វីដេអូ = {TOKEN_COST} Token</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_hero(max_videos=5):
@@ -2781,6 +2850,7 @@ GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
+render_token_bar()
 render_hero(MAX_VIDEOS)
 
 if not GEMINI_KEY and not GROQ_KEY:
@@ -2881,6 +2951,7 @@ else:
     label = "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ"
     if len(items) > 1:
         label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
+    label += f" · 🪙 {len(items) * TOKEN_COST} Token"
     run = st.button(label, type="primary", use_container_width=True)
 
 if run:
@@ -2918,6 +2989,9 @@ if run:
         job_items.append(item)
     job = Job(job_items, job_folder)
     st.session_state["job"] = job
+    st.session_state["tokens"] = max(
+        0, st.session_state.get("tokens", TOKEN_START) - len(job_items) * TOKEN_COST
+    )
     for item in job.items:
         threading.Thread(target=run_worker, args=(job, item, settings, fonts_data), daemon=True).start()
     st.rerun()
