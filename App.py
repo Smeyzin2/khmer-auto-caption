@@ -2105,8 +2105,66 @@ def emotion_prosody(label, intensity, use_pitch=True):
     return {"rate": f"{rate:+d}%", "pitch": f"{pitch:+d}Hz", "volume": f"{vol:+d}%"}
 
 
+
+def merge_for_dub(segments, max_chars=80, max_gap=0.6, max_len=8.0):
+    """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
+    out = []
+    for s, e, t in segments:
+        if out:
+            ps, pe, pt = out[-1]
+            if s - pe <= max_gap and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
+                out[-1] = (ps, max(pe, e), fix_khmer(pt + " " + t))
+                continue
+        out.append((s, e, t))
+    return out
+
+
+def tts_retry(text, voice, path, prosody=None, tries=3):
+    last = None
+    for k in range(tries):
+        try:
+            tts_segment(text, voice, path, prosody)
+            if os.path.exists(path) and os.path.getsize(path) > 200:
+                return True
+        except Exception as e:
+            last = e
+        time.sleep(0.8 * (k + 1))
+    return False
+
+
+def shorten_groq(api_key, text, max_seconds):
+    limit = max(6, int(max_seconds * 11))
+    try:
+        models = groq_chat_models(api_key)[:3]
+    except Exception:
+        return text
+    for model in models:
+        try:
+            body = json.dumps({
+                "model": model, "temperature": 0.2,
+                "messages": [
+                    {"role": "system", "content": f"Shorten the Khmer sentence to at most {limit} characters. Keep the meaning. Khmer script only. Return only the sentence."},
+                    {"role": "user", "content": text},
+                ],
+            }).encode("utf-8")
+            request = urllib.request.Request(
+                GROQ_CHAT_URL, data=body, method="POST",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+            )
+            with urllib.request.urlopen(request, timeout=40) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
+            out = clean_translation(content)
+            if out and has_khmer(out) and len(out) < len(text):
+                return out
+        except Exception:
+            continue
+    return text
+
+
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
-             seg_voices=None, targets=None, notes=None, emotions=None):
+             seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None):
     inputs, filters = [], []
     n = 0
     if keep_bg:
@@ -2116,12 +2174,13 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     first_voice = n
     cursor = 0.0
     plan = []
+    skipped = 0
     for i, (s, e, t) in enumerate(segments):
         next_s = segments[i + 1][0] if i + 1 < len(segments) else duration
         start = max(s, cursor)
         if start >= duration - 0.3:
             break
-        slot = max(0.5, min(next_s - 0.05, e + 0.4) - start)
+        slot = max(0.6, min(next_s - 0.08, e + 1.0) - start)
         name = f"tts_{i}.mp3"
         path = os.path.join(folder, name)
         v = seg_voices[i] if seg_voices else voice
@@ -2130,16 +2189,22 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             label, inten = emotions[i]
             prosody = emotion_prosody(label, inten, use_pitch=(targets is None))
         try:
-            tts_segment(t, v, path, prosody)
+            if not tts_retry(t, v, path, prosody):
+                skipped += 1
+                continue
             d, _, _ = probe_media(path)
-            if client is not None and d > slot * 1.25:
-                t2 = shorten_khmer(client, model, t, slot)
-                if t2 != t:
-                    tts_segment(t2, v, path, prosody)
+            if d > slot * 1.2:
+                t2 = t
+                if client is not None:
+                    t2 = shorten_khmer(client, model, t, slot)
+                elif groq_key:
+                    t2 = shorten_groq(groq_key, t, slot)
+                if t2 != t and tts_retry(t2, v, path, prosody):
                     d, _, _ = probe_media(path)
         except Exception:
+            skipped += 1
             continue
-        speed = min(2.0, max(1.0, d / slot))
+        speed = min(1.7, max(1.0, d / slot))
         cursor = start + d / speed + 0.08
         f0 = None
         target = None
@@ -2147,6 +2212,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             target = targets[i]
             f0 = tts_median_pitch(path)
         plan.append({"name": name, "start": start, "speed": speed, "voice": v, "f0": f0, "target": target})
+    if notes is not None and skipped:
+        notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
     if not plan:
         return False
     base = {}
@@ -2329,7 +2396,7 @@ def run_worker(job, item, settings, fonts_data):
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
                     client = (genai.Client(api_key=settings["gemini_key"]) if used_engine == "gemini" else None)
-                    dub_segments = segments
+                    dub_segments = merge_for_dub(segments)
                     seg_voices = None
                     targets = None
                     emotions = None
@@ -2344,7 +2411,7 @@ def run_worker(job, item, settings, fonts_data):
                             tracks = pitch_track(pcm)
                             pitch_inf = {"times": tracks[0], "f0": tracks[1], "rms": tracks[2]}
                             if settings["auto_gender"]:
-                                planned, lines, voice_info, runs_ = plan_dub_voices(segments, pcm, settings["voice"], duration, tracks=tracks)
+                                planned, lines, voice_info, runs_ = plan_dub_voices(dub_segments, pcm, settings["voice"], duration, tracks=tracks)
                                 dub_segments = [(s, e, t) for s, e, t, _ in planned]
                                 seg_voices = [v for _, _, _, v in planned]
                                 pitch_inf = voice_info
@@ -2352,7 +2419,7 @@ def run_worker(job, item, settings, fonts_data):
                             if settings["voice_match"]:
                                 targets = compute_targets(dub_segments, seg_voices, pitch_inf, runs_)
                         except Exception:
-                            dub_segments = segments
+                            dub_segments = merge_for_dub(segments)
                             seg_voices = None
                             targets = None
                             voice_notes = []
@@ -2369,7 +2436,7 @@ def run_worker(job, item, settings, fonts_data):
                             item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
-                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions)
+                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"])
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
