@@ -32,249 +32,288 @@ st.set_page_config(
 )
 
 # =====================================================================
-#  THEME (ស្បែកថ្មី)
+#  THEME (ស្បែកថ្មី v2)
 # =====================================================================
+for _k, _v in {
+    "theme.base": "light",
+    "theme.primaryColor": "#1D2145",
+    "theme.backgroundColor": "#F4F6FB",
+    "theme.secondaryBackgroundColor": "#FFFFFF",
+    "theme.textColor": "#1D2145",
+}.items():
+    try:
+        st._config.set_option(_k, _v)
+    except Exception:
+        pass
+
 THEME_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700&family=Moul&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700;800&display=swap');
 
 :root {
   --ink: #1D2145;
-  --ink-soft: #5B6185;
-  --paper: #F4F6FB;
+  --ink-2: #2E3566;
+  --ink-soft: #666C8F;
+  --paper: #F3F5FA;
   --surface: #FFFFFF;
-  --line: #E1E5F0;
+  --line: #E3E7F2;
   --saffron: #F5A524;
-  --r-lg: 20px;
+  --saffron-soft: #FFF4DC;
+  --r-lg: 22px;
   --r-md: 14px;
-  --r-sm: 10px;
+  --r-sm: 12px;
 }
 
 #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"],
-.stDeployButton { display: none !important; visibility: hidden; }
+.stDeployButton, [data-testid="stStatusWidget"], [class*="viewerBadge"],
+[data-testid="manage-app-button"] { display: none !important; }
 
-html, body, [data-testid="stAppViewContainer"], .stApp {
+html, body, .stApp, [data-testid="stAppViewContainer"] {
   background: var(--paper) !important;
   color: var(--ink);
-  font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif;
+  font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif !important;
   color-scheme: light;
 }
+.stApp * { font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif; }
 [data-testid="stHeader"] { background: transparent; }
-.block-container {
-  max-width: 760px;
-  padding-top: 1.2rem;
-  padding-bottom: 4rem;
-}
-.stMarkdown, .stMarkdown p, [data-testid="stCaptionContainer"],
-[data-testid="stText"], h1, h2, h3, label, [data-testid="stWidgetLabel"] p {
-  color: var(--ink);
-}
-[data-testid="stCaptionContainer"] { color: var(--ink-soft); }
+.block-container { max-width: 720px; padding: 1rem 1rem 4rem; }
 
-/* Hero */
+.stMarkdown, .stMarkdown p, [data-testid="stText"], h1, h2, h3,
+label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p {
+  color: var(--ink) !important;
+}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--ink-soft) !important; }
+
+/* ---------- Hero ---------- */
 .kac-hero {
-  background: var(--ink);
-  border-radius: 28px;
-  padding: 28px 24px 26px;
-  margin-bottom: 26px;
+  background: linear-gradient(160deg, #232958 0%, #1A1E45 100%);
+  border-radius: 26px;
+  padding: 26px 22px 22px;
+  margin-bottom: 18px;
+  box-shadow: 0 14px 34px rgba(29,33,69,.22);
 }
 .kac-hero h1 {
-  font-family: 'Moul', 'Kantumruy Pro', serif;
-  font-weight: 400;
-  font-size: clamp(1.5rem, 5.5vw, 2.2rem);
-  line-height: 1.5;
-  margin: 0 0 6px;
-  padding: 0;
-  color: #fff;
+  font-weight: 800 !important;
+  font-size: clamp(1.7rem, 7vw, 2.3rem) !important;
+  line-height: 1.25 !important;
+  letter-spacing: -0.01em;
+  margin: 0 0 8px !important;
+  padding: 0 !important;
+  color: #fff !important;
 }
 .kac-hero p {
   margin: 0;
-  color: #C9CEEA;
-  font-size: 0.98rem;
-  line-height: 1.7;
-  max-width: 52ch;
+  color: #C7CCEA !important;
+  font-size: .98rem;
+  line-height: 1.75;
 }
 .kac-frame {
-  margin-top: 20px;
-  border-radius: var(--r-md);
-  aspect-ratio: 16 / 7;
-  background: linear-gradient(180deg, #2B3066 0%, #232857 55%, #1A1E47 100%);
-  border: 1px solid #3A4080;
+  margin-top: 18px;
+  border-radius: 16px;
+  height: 132px;
+  background: linear-gradient(180deg, #343B7A 0%, #262C60 70%);
   position: relative;
   overflow: hidden;
 }
-.kac-frame::before {
+.kac-frame::before {            /* ព្រះអាទិត្យ */
   content: "";
   position: absolute;
-  left: 50%; bottom: -46%;
-  width: 62%; aspect-ratio: 1;
+  left: 50%; top: 18px;
+  width: 64px; height: 64px;
   transform: translateX(-50%);
   border-radius: 50%;
-  background: var(--saffron);
-  opacity: .9;
+  background: radial-gradient(circle at 35% 35%, #FFD27A, #F5A524 70%);
+  box-shadow: 0 0 40px 10px rgba(245,165,36,.35);
+}
+.kac-frame::after {             /* ដី */
+  content: "";
+  position: absolute;
+  left: 0; right: 0; bottom: 0; height: 30px;
+  background: #161A3D;
 }
 .kac-cap {
   position: absolute;
-  left: 50%; bottom: 14%;
+  left: 50%; bottom: 12px;
   transform: translateX(-50%);
-  background: rgba(10, 12, 30, .82);
-  color: #fff;
-  padding: 7px 16px;
+  z-index: 2;
+  background: rgba(255,255,255,.96);
+  color: var(--ink) !important;
+  padding: 6px 14px;
   border-radius: 8px;
-  font-size: clamp(.85rem, 3.2vw, 1.05rem);
-  font-weight: 600;
+  font-size: .92rem;
+  font-weight: 700;
   white-space: nowrap;
-  overflow: hidden;
-  animation: kac-type 1.1s steps(14, end) 0.3s both;
 }
-@keyframes kac-type { from { max-width: 0; } to { max-width: 100%; } }
-@media (prefers-reduced-motion: reduce) { .kac-cap { animation: none; } }
-
 .kac-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
 .kac-pills span {
-  background: rgba(255,255,255,.1);
-  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.08);
+  border: 1px solid rgba(255,255,255,.14);
   color: #E6E9FA;
   padding: 5px 12px;
   border-radius: 999px;
-  font-size: .82rem;
+  font-size: .8rem;
 }
 
-/* Section headings */
-[data-testid="stHeading"] h3, h3 {
-  font-size: 1.15rem !important;
+/* ---------- Section headings ---------- */
+[data-testid="stHeading"] h3, .stApp h3 {
+  font-size: 1.12rem !important;
   font-weight: 700 !important;
-  margin-top: 1.6rem !important;
-  padding-left: 12px;
-  border-left: 4px solid var(--saffron);
+  margin: 1.6rem 0 .6rem !important;
+  padding: 0 !important;
+  border: none !important;
+}
+[data-testid="stHeading"] h3::after {
+  content: "";
+  display: block;
+  width: 34px; height: 4px;
+  border-radius: 4px;
+  background: var(--saffron);
+  margin-top: 6px;
 }
 
-/* Cards */
+/* ---------- Cards ---------- */
 div[data-testid="stVerticalBlockBorderWrapper"] {
-  background: var(--surface);
-  border-color: var(--line) !important;
+  background: var(--surface) !important;
+  border: 1px solid var(--line) !important;
   border-radius: var(--r-lg) !important;
-  box-shadow: 0 1px 2px rgba(29,33,69,.04);
+  box-shadow: 0 2px 10px rgba(29,33,69,.05);
+  padding: 6px 4px;
+}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlockBorderWrapper"] {
+  box-shadow: none; background: #FAFBFE !important;
 }
 
-/* Inputs */
-[data-baseweb="select"] > div,
-[data-baseweb="textarea"],
-[data-baseweb="base-input"],
-.stTextArea textarea {
-  background: var(--surface) !important;
+/* ---------- Select ---------- */
+[data-testid="stSelectbox"] [data-baseweb="select"] > div,
+[data-testid="stSelectbox"] [data-baseweb="select"] > div > div,
+[data-baseweb="select"] > div {
+  background-color: #F6F8FD !important;
+  border: 1.5px solid var(--line) !important;
   border-radius: var(--r-sm) !important;
-  border-color: var(--line) !important;
   color: var(--ink) !important;
+  min-height: 48px;
 }
-[data-baseweb="select"] * { color: var(--ink); }
-[data-baseweb="popover"] li, [data-baseweb="popover"] ul {
-  background: var(--surface) !important;
-  color: var(--ink) !important;
-}
-[data-baseweb="select"] > div:focus-within,
-.stTextArea textarea:focus {
+[data-baseweb="select"] > div:focus-within, [data-baseweb="select"] > div:hover {
   border-color: var(--ink) !important;
-  box-shadow: 0 0 0 3px rgba(29,33,69,.12) !important;
+  box-shadow: 0 0 0 3px rgba(29,33,69,.10) !important;
 }
-label, [data-testid="stWidgetLabel"] p { font-weight: 600; }
+[data-baseweb="select"] * { color: var(--ink) !important; }
+[data-baseweb="popover"] ul, [data-baseweb="popover"] li, [data-baseweb="menu"] {
+  background: #fff !important; color: var(--ink) !important;
+}
+[data-baseweb="popover"] li:hover { background: var(--saffron-soft) !important; }
 
-/* Radio as pills */
-div[role="radiogroup"] { gap: 8px; }
-div[role="radiogroup"] > label {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 8px 16px;
-  margin: 0 !important;
+/* ---------- Text area ---------- */
+.stTextArea textarea, [data-baseweb="textarea"], [data-baseweb="textarea"] > div {
+  background: #F6F8FD !important;
+  border: 1.5px solid var(--line) !important;
+  border-radius: var(--r-sm) !important;
+  color: var(--ink) !important;
 }
-div[role="radiogroup"] > label:has(input:checked) {
+.stTextArea textarea:focus { border-color: var(--ink) !important; box-shadow: 0 0 0 3px rgba(29,33,69,.10) !important; }
+
+/* ---------- Radio => pills ---------- */
+[data-testid="stRadio"] [role="radiogroup"] { gap: 8px; flex-wrap: wrap; }
+[data-testid="stRadio"] label {
+  background: #F6F8FD;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  padding: 8px 16px !important;
+  margin: 0 !important;
+  cursor: pointer;
+}
+[data-testid="stRadio"] label > div:first-child { display: none !important; }
+[data-testid="stRadio"] label:has(input:checked) {
   background: var(--ink);
   border-color: var(--ink);
 }
-div[role="radiogroup"] > label:has(input:checked) p { color: #fff !important; }
+[data-testid="stRadio"] label:has(input:checked) *,
+[data-testid="stRadio"] label:has(input:checked) p { color: #fff !important; }
 
-/* Uploader */
+/* ---------- Checkbox ---------- */
+[data-testid="stCheckbox"] label > span:first-child,
+[data-baseweb="checkbox"] > span:first-child {
+  border-radius: 7px !important;
+  border: 1.5px solid #B9C0DD !important;
+  background-color: #fff !important;
+}
+[data-testid="stCheckbox"] label:has(input:checked) > span:first-child,
+[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
+  background-color: var(--ink) !important;
+  border-color: var(--ink) !important;
+}
+
+/* ---------- Slider ---------- */
+[data-testid="stSlider"] [role="slider"] { background: var(--ink) !important; border-color: var(--ink) !important; }
+[data-testid="stSlider"] [data-testid="stThumbValue"] { color: var(--ink) !important; }
+
+/* ---------- Uploader ---------- */
 [data-testid="stFileUploaderDropzone"] {
-  background: var(--surface);
+  background: #F9FAFE;
   border: 2px dashed #B9C0DD;
   border-radius: var(--r-lg);
-  padding: 26px 18px;
+  padding: 22px 16px;
 }
-[data-testid="stFileUploaderDropzone"]:hover {
-  border-color: var(--saffron);
-  background: #FFFBF2;
+[data-testid="stFileUploaderDropzone"]:hover { border-color: var(--saffron); background: #FFFBF2; }
+[data-testid="stFileUploaderDropzone"] * { color: var(--ink) !important; }
+[data-testid="stFileUploaderDropzone"] button {
+  background: var(--ink) !important; color: #fff !important;
+  border-radius: var(--r-sm) !important; border: none !important;
 }
-[data-testid="stFileUploaderDropzone"] * { color: var(--ink); }
+[data-testid="stFileUploaderDropzone"] button * { color: #fff !important; }
 
-/* Buttons */
+/* ---------- Buttons ---------- */
 .stButton > button, .stDownloadButton > button {
   border-radius: var(--r-md);
-  border: 1px solid var(--line);
+  border: 1.5px solid var(--line);
   background: var(--surface);
   color: var(--ink);
-  font-weight: 600;
-  min-height: 48px;
-  transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
+  font-weight: 700;
+  min-height: 50px;
+  transition: transform .12s ease, box-shadow .12s ease;
 }
-.stButton > button:hover, .stDownloadButton > button:hover {
-  border-color: var(--ink);
-  color: var(--ink);
-}
+.stButton > button *, .stDownloadButton > button * { color: inherit !important; }
 .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-  background: var(--ink);
-  border-color: var(--ink);
-  color: #fff;
-  min-height: 54px;
+  background: linear-gradient(180deg, #2E3566, #1D2145) !important;
+  border: none !important;
+  color: #fff !important;
+  min-height: 56px;
   font-size: 1.05rem;
-  box-shadow: 0 6px 18px rgba(29,33,69,.22);
+  box-shadow: 0 8px 20px rgba(29,33,69,.28);
 }
-.stButton > button[kind="primary"] *, .stDownloadButton > button[kind="primary"] * { color: #fff; }
-.stButton > button[kind="primary"]:hover,
-.stDownloadButton > button[kind="primary"]:hover {
-  background: #2A3070;
-  color: #fff;
-  transform: translateY(-1px);
-}
-.stButton > button:focus-visible, .stDownloadButton > button:focus-visible {
-  outline: 3px solid var(--saffron);
-  outline-offset: 2px;
-}
-.stButton > button:disabled {
-  background: #E9ECF5; color: #8A90AD; border-color: var(--line); box-shadow: none;
-}
+.stButton > button[kind="primary"] *, .stDownloadButton > button[kind="primary"] * { color: #fff !important; }
+.stButton > button:hover, .stDownloadButton > button:hover { transform: translateY(-1px); border-color: var(--ink); }
+.stButton > button:focus-visible { outline: 3px solid var(--saffron); outline-offset: 2px; }
+.stButton > button:disabled { background: #E9ECF5 !important; color: #8A90AD !important; box-shadow: none; transform: none; }
 
-/* Progress */
-[data-testid="stProgress"] > div > div { background: #E4E8F3; border-radius: 999px; }
+/* ---------- Progress ---------- */
+[data-testid="stProgress"] > div > div { background: #E4E8F3 !important; border-radius: 999px; }
 [data-testid="stProgress"] > div > div > div { background: var(--saffron) !important; border-radius: 999px; }
 
-/* Metrics */
+/* ---------- Metrics ---------- */
 [data-testid="stMetric"] {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-md);
   padding: 12px 14px;
 }
-[data-testid="stMetricValue"] { font-weight: 700; color: var(--ink); }
-[data-testid="stMetricLabel"] p { color: var(--ink-soft); font-weight: 500; }
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-weight: 800; color: var(--ink) !important; }
+[data-testid="stMetricLabel"] p { color: var(--ink-soft) !important; font-weight: 500; }
 
-[data-testid="stAlert"] { border-radius: var(--r-md); }
+/* ---------- Alerts ---------- */
+[data-testid="stAlert"] { border-radius: var(--r-md); border: none; }
+[data-testid="stAlert"][kind="info"], div[data-baseweb="notification"][kind="info"] { background: #EAF0FF; }
 
+/* ---------- Expander ---------- */
 [data-testid="stExpander"] {
-  background: var(--surface);
-  border: 1px solid var(--line) !important;
+  background: #FAFBFE;
+  border: 1.5px solid var(--line) !important;
   border-radius: var(--r-md);
 }
-[data-testid="stExpander"] * { color: var(--ink); }
+[data-testid="stExpander"] * { color: var(--ink) !important; }
 
 [data-testid="stVideo"] video { border-radius: var(--r-md); background: #000; }
-
 hr { border-color: var(--line) !important; margin: 1.6rem 0 !important; }
-
-@media (max-width: 640px) {
-  .block-container { padding-left: 14px; padding-right: 14px; }
-  .kac-hero { padding: 22px 18px; border-radius: 22px; }
-}
 </style>
 """
 
@@ -289,7 +328,7 @@ def render_hero(max_videos=5):
         <div class="kac-hero">
           <h1>Khmer Auto Caption</h1>
           <p>ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ
-             ធ្វើបានរហូតដល់ {max_videos} វីដេអូស្មើគ្នា។</p>
+             (រហូតដល់ {max_videos} វីដេអូស្មើគ្នា)</p>
           <div class="kac-frame"><div class="kac-cap">សួស្តី! នេះគឺជាអក្សររត់ខ្មែរ</div></div>
           <div class="kac-pills">
             <span>🎙 ស្តាប់ និងបកប្រែ</span>
@@ -2488,50 +2527,52 @@ current_job = st.session_state.get("job")
 busy = bool(current_job and current_job.running())
 
 st.subheader("① 🎞️ ជ្រើសវីដេអូ")
+with st.container(border=True):
 
-mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload ឯកសារ", "🔗 បិទភ្ជាប់តំណ (Link)"], horizontal=True, label_visibility="collapsed")
+    mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload ឯកសារ", "🔗 បិទភ្ជាប់តំណ (Link)"], horizontal=True, label_visibility="collapsed")
 
-uploaded_files = []
-link_text = ""
+    uploaded_files = []
+    link_text = ""
 
-if mode.startswith("📁"):
-    uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
-else:
-    link_text = st.text_area("តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
+    if mode.startswith("📁"):
+        uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
+    else:
+        link_text = st.text_area("តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
 
 st.subheader("② ⚙️ ការកំណត់")
+with st.container(border=True):
 
-engine_options = []
-if GROQ_KEY:
-    engine_options.append(ENGINE_FREE)
-if GEMINI_KEY:
-    engine_options.append(ENGINE_GEMINI)
+    engine_options = []
+    if GROQ_KEY:
+        engine_options.append(ENGINE_FREE)
+    if GEMINI_KEY:
+        engine_options.append(ENGINE_GEMINI)
 
-engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0, help="បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា កម្មវិធីនឹងប្តូរទៅម៉ាស៊ីនមួយទៀតដោយស្វ័យប្រវត្តិ។")
-if engine_label == ENGINE_FREE:
-    st.caption("ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate អាចមិនទន់ភ្លន់ដូច Gemini ទេ។")
+    engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0, help="បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា កម្មវិធីនឹងប្តូរទៅម៉ាស៊ីនមួយទៀតដោយស្វ័យប្រវត្តិ។")
+    if engine_label == ENGINE_FREE:
+        st.caption("ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate អាចមិនទន់ភ្លន់ដូច Gemini ទេ។")
 
-language_label = st.selectbox("ភាសាក្នុងវីដេអូ", list(LANGUAGES.keys()), index=0, help="ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់។")
-quality_label = st.selectbox("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1)
+    language_label = st.selectbox("ភាសាក្នុងវីដេអូ", list(LANGUAGES.keys()), index=0, help="ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់។")
+    quality_label = st.selectbox("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1)
 
-dub_on = st.checkbox("🎙 បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)")
-voice_label = list(TTS_VOICES.keys())[0]
-keep_bg = False
-auto_gender = False
-voice_match = False
-emotion = False
+    dub_on = st.checkbox("🎙 បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)")
+    voice_label = list(TTS_VOICES.keys())[0]
+    keep_bg = False
+    auto_gender = False
+    voice_match = False
+    emotion = False
 
-if dub_on:
-    voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
-    auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ", help="វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។")
-    voice_match = st.checkbox("🧬 ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (ប្រហាក់ប្រហែល)", help="វាស់កម្រិតសំឡេង (ខ្ពស់/ទាប) របស់អ្នកនិយាយដើម រួចកែសំឡេង AI ឱ្យជិតគ្នា (កំណត់ត្រឹម ±៤ semitones)។")
-    emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន", help="AI ចាត់ថ្នាក់អារម្មណ៍នៃឃ្លានីមួយៗតាមអត្ថបទ ហើយវាស់កម្លាំងសំឡេងដើមដើម្បីកំណត់កម្រិតខ្លាំង។")
-    keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
+    if dub_on:
+        voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
+        auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ", help="វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។")
+        voice_match = st.checkbox("🧬 ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (ប្រហាក់ប្រហែល)", help="វាស់កម្រិតសំឡេង (ខ្ពស់/ទាប) របស់អ្នកនិយាយដើម រួចកែសំឡេង AI ឱ្យជិតគ្នា (កំណត់ត្រឹម ±៤ semitones)។")
+        emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន", help="AI ចាត់ថ្នាក់អារម្មណ៍នៃឃ្លានីមួយៗតាមអត្ថបទ ហើយវាស់កម្លាំងសំឡេងដើមដើម្បីកំណត់កម្រិតខ្លាំង។")
+        keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
 
-with st.expander("🎨 កំណត់អក្សរ"):
-    font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
-    outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
-    font_color = st.selectbox("ពណ៌អក្សរ", list(colors.keys()))
+    with st.expander("🎨 កំណត់អក្សរ"):
+        font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
+        outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
+        font_color = st.selectbox("ពណ៌អក្សរ", list(colors.keys()))
 
 items = []
 too_many = False
