@@ -6,6 +6,7 @@ import time
 import uuid
 import shutil
 import asyncio
+import datetime
 import zipfile
 import tempfile
 import threading
@@ -377,27 +378,81 @@ def apply_theme():
     st.markdown(THEME_CSS, unsafe_allow_html=True)
 
 
-TOKEN_START = 9_999_999_999
+DAILY_TOKENS = 10000
 TOKEN_COST = 10
+TOKEN_TZ = datetime.timezone(datetime.timedelta(hours=7))  # ម៉ោងកម្ពុជា
+TOKEN_FILE = os.path.join(tempfile.gettempdir(), "kac_tokens.json")
+_token_lock = threading.Lock()
 
 
-def render_token_bar():
-    if "tokens" not in st.session_state:
-        st.session_state["tokens"] = TOKEN_START
-    balance = st.session_state["tokens"]
+def _today():
+    return datetime.datetime.now(TOKEN_TZ).strftime("%Y-%m-%d")
+
+
+def get_user_id():
+    uid = st.query_params.get("u", "")
+    if not re.fullmatch(r"[A-Za-z0-9]{8,32}", str(uid or "")):
+        uid = uuid.uuid4().hex[:16]
+        st.query_params["u"] = uid
+    return str(uid)
+
+
+def _load_tokens():
+    try:
+        with open(TOKEN_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_tokens(data):
+    tmp = TOKEN_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, TOKEN_FILE)
+
+
+def token_balance(uid):
+    with _token_lock:
+        rec = _load_tokens().get(uid)
+    if not rec or rec.get("day") != _today():
+        return DAILY_TOKENS
+    return max(0, DAILY_TOKENS - int(rec.get("used", 0)))
+
+
+def spend_tokens(uid, amount):
+    today = _today()
+    with _token_lock:
+        data = {k: v for k, v in _load_tokens().items() if isinstance(v, dict) and v.get("day") == today}
+        rec = data.get(uid) or {"day": today, "used": 0}
+        if DAILY_TOKENS - int(rec.get("used", 0)) < amount:
+            return False
+        rec["used"] = int(rec.get("used", 0)) + amount
+        data[uid] = rec
+        try:
+            _save_tokens(data)
+        except Exception:
+            pass
+    return True
+
+
+def render_token_bar(uid):
+    balance = token_balance(uid)
     st.markdown(
         f"""
         <div class="kac-token">
           <div class="bal">
             <span class="coin">🪙</span>
             <span>{balance:,}</span>
-            <span class="lbl">Token</span>
+            <span class="lbl">/ {DAILY_TOKENS:,} Token</span>
           </div>
           <div class="cost">១ វីដេអូ = {TOKEN_COST} Token</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    st.caption(f"Token ថ្ងៃនេះ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញដោយស្វ័យប្រវត្តិ។")
 
 
 def render_hero(max_videos=5):
@@ -2583,6 +2638,35 @@ def run_worker(job, item, settings, fonts_data):
             if item.get("path"):
                 shutil.move(item["path"], source)
                 item["path"] = None
+class Job:
+    def __init__(self, items, folder):
+        self.id = uuid.uuid4().hex[:8]
+        self.items = items
+        self.folder = folder
+        self.render_slots = threading.Semaphore(MAX_RENDER_AT_ONCE)
+        self.zip = None
+        self.zip_done = False
+        self.scrolled = False
+    def running(self):
+        return any(it["state"] in ("queued", "running") for it in self.items)
+
+
+def engine_name(engine):
+    return "ឥតគិតថ្លៃ (Groq)" if engine == "free" else "Gemini"
+
+
+def run_worker(job, item, settings, fonts_data):
+    rep = Reporter(item)
+    item["t0"] = time.time()
+    item["state"] = "running"
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            source = os.path.join(folder, "input.mp4")
+            audio_path = os.path.join(folder, "audio.mp3")
+            master_path = os.path.join(folder, "master.flac")
+            if item.get("path"):
+                shutil.move(item["path"], source)
+                item["path"] = None
             else:
                 item["pct"] = 0.03
                 rep.write("កំពុងទាញយកវីដេអូ...")
@@ -2850,7 +2934,35 @@ GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
-render_token_bar()
+USER_ID = get_user_id()
+render_token_bar(USER_ID)
+render_hero(MAX_VIDEOS)
+
+if not GEMINI_KEY and not GROQ_KEY:
+    st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
+    st.stop()
+
+colors = {"ស": "&H00FFFFFF", "លឿង": "&H0000FFFF", "បៃតង": "&H0000FF00", "ខៀវ": "&H00FF0000"}
+
+ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
+ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
+
+current_job = st.session_state.get("job")
+busy = bool(current_job and current_job.running())
+
+st.subheader("① 🎞️ ជ្រើសវីដេអូ")
+with st.container(border=True):
+
+    mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True, label_visibility="collapsed")
+
+    uploaded_files = []
+    link_text = ""
+GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
+
+USER_ID = get_user_id()
+render_token_bar(USER_ID)
 render_hero(MAX_VIDEOS)
 
 if not GEMINI_KEY and not GROQ_KEY:
@@ -2942,12 +3054,19 @@ if too_many:
     st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
 
 run = False
+affordable = token_balance(USER_ID) // TOKEN_COST
 if busy:
     st.button("⏳ កំពុងធ្វើការ... សូមរង់ចាំ", disabled=True, use_container_width=True)
 elif not items:
     if not current_job:
         st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
+elif affordable <= 0:
+    st.error(f"😅 Token ថ្ងៃនេះអស់ហើយ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
+    st.button("🔒 Token អស់ — ស្អែកមកវិញ", disabled=True, use_container_width=True)
 else:
+    if len(items) > affordable:
+        st.warning(f"Token នៅសល់គ្រាន់តែ {affordable} វីដេអូប៉ុណ្ណោះ។ កម្មវិធីនឹងធ្វើតែ {affordable} ដំបូង។")
+        items = items[:affordable]
     label = "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ"
     if len(items) > 1:
         label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
@@ -2961,6 +3080,9 @@ if run:
         st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
         st.stop()
     prepare_home_font(fonts_data)
+    if not spend_tokens(USER_ID, len(items) * TOKEN_COST):
+        st.error(f"Token មិនគ្រប់ទេ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
+        st.stop()
     settings = {
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
         "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
@@ -2989,9 +3111,6 @@ if run:
         job_items.append(item)
     job = Job(job_items, job_folder)
     st.session_state["job"] = job
-    st.session_state["tokens"] = max(
-        0, st.session_state.get("tokens", TOKEN_START) - len(job_items) * TOKEN_COST
-    )
     for item in job.items:
         threading.Thread(target=run_worker, args=(job, item, settings, fonts_data), daemon=True).start()
     st.rerun()
@@ -3020,3 +3139,4 @@ if job:
             job.scrolled = True
             if any(it["state"] == "done" for it in job.items):
                 scroll_to_downloads()
+    
