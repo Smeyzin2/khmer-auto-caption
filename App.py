@@ -1794,12 +1794,29 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
 
 # ---------- សំឡេងអានខ្មែរ (Dubbing) ----------
 
-def tts_segment(text, voice, path):
-    """បង្កើតសំឡេងអានខ្មែរមួយឃ្លា។"""
-    async def _go():
-        await edge_tts.Communicate(text, voice).save(path)
+def tts_segment(text, voice, path, prosody=None):
+    """
+    បង្កើតសំឡេងអានខ្មែរមួយឃ្លា។
+    prosody = {"rate": "+8%", "pitch": "+10Hz", "volume": "+5%"} (អារម្មណ៍)
+    បើ prosody បរាជ័យ វាសាកម្តងទៀតដោយគ្មាន prosody។
+    """
+    async def _go(p):
+        kw = {}
+        if p:
+            kw = {
+                "rate": p["rate"],
+                "volume": p["volume"],
+                "pitch": p["pitch"],
+            }
+        await edge_tts.Communicate(text, voice, **kw).save(path)
 
-    asyncio.run(_go())
+    try:
+        asyncio.run(_go(prosody))
+    except Exception:
+        if prosody:
+            asyncio.run(_go(None))
+        else:
+            raise
 
 
 def shorten_khmer(client, model, text, max_seconds):
@@ -1949,7 +1966,7 @@ def merge_short_runs(runs, min_len):
     return runs
 
 
-def gender_timeline(pcm, duration, default_voice, sr=16000):
+def gender_timeline(pcm, duration, default_voice, sr=16000, tracks=None):
     """
     វិភាគសំឡេងទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយនៅពេលណា (ប្រុស M / ស្រី F)។
     ១) វាស់កម្រិតសំឡេងគ្រប់ស៊ុម
@@ -1959,8 +1976,11 @@ def gender_timeline(pcm, duration, default_voice, sr=16000):
     """
     import numpy as np
 
-    times, f0, _ = pitch_track(pcm, sr)
-    info = {"times": times, "f0": f0, "summary": ""}
+    if tracks is not None:
+        times, f0, rms = tracks
+    else:
+        times, f0, rms = pitch_track(pcm, sr)
+    info = {"times": times, "f0": f0, "rms": rms, "summary": ""}
 
     mask = f0 > 0
     if int(mask.sum()) < 25:
@@ -2158,11 +2178,13 @@ def split_by_speaker(segments, runs, default_voice):
     return out
 
 
-def plan_dub_voices(segments, pcm, default_voice, duration):
+def plan_dub_voices(segments, pcm, default_voice, duration, tracks=None):
     """
     ត្រឡប់ (ឃ្លាបន្ទាប់ពីបំបែក [(s,e,text,voice)], បន្ទាត់បង្ហាញ, info, runs)។
     """
-    runs, info = gender_timeline(pcm, duration, default_voice)
+    runs, info = gender_timeline(
+        pcm, duration, default_voice, tracks=tracks
+    )
     if runs is None:
         return (
             [(s, e, t, default_voice) for s, e, t in segments],
@@ -2269,12 +2291,299 @@ def atempo_chain(x):
     return ",".join(parts)
 
 
+# ---------- អារម្មណ៍ក្នុងសំឡេងអាន (Emotion) ----------
+
+EMO_LABELS = ["neutral", "happy", "excited", "angry", "sad", "fear", "whisper"]
+EMO_HIGH = ("happy", "excited", "angry", "fear")
+EMO_LOW = ("sad", "whisper")
+
+# (ល្បឿន %, កម្រិតសំឡេង Hz, កម្លាំង %) នៅកម្រិតខ្លាំង ១.០
+EMO_PRESETS = {
+    "neutral": (0, 0, 0),
+    "happy": (8, 12, 5),
+    "excited": (15, 18, 15),
+    "angry": (12, 4, 30),
+    "sad": (-12, -10, -15),
+    "fear": (10, 20, -5),
+    "whisper": (-8, -4, -45),
+}
+
+EMO_NAMES = {
+    "neutral": "😐 ធម្មតា",
+    "happy": "😊 សប្បាយ",
+    "excited": "🤩 រំភើប",
+    "angry": "😠 ខឹង",
+    "sad": "😢 ក្រៀមក្រំ",
+    "fear": "😨 ភ័យ",
+    "whisper": "🤫 ខ្សឹប",
+}
+
+EMO_SYSTEM = (
+    "You label the emotion of each Khmer subtitle line spoken by a "
+    "character. Use ONLY these labels: neutral, happy, excited, angry, "
+    "sad, fear, whisper. Judge from meaning and punctuation. "
+    "Return JSON: {\"emotions\": [...]} with exactly the same number of "
+    "items, in the same order."
+)
+
+
+def norm_emotion(x):
+    x = str(x or "").strip().lower()
+    return x if x in EMO_LABELS else "neutral"
+
+
+def groq_emotion_chunk(api_key, texts):
+    """ចាត់ថ្នាក់អារម្មណ៍ជាក្រុមដោយ Groq LLM។"""
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+
+    models = groq_chat_models(api_key)
+    good = _groq_chat_cache["good"]
+    if good in models:
+        models = [good] + [m for m in models if m != good]
+
+    last = "មិនមានម៉ូដែល"
+    for model in models[:6]:
+        body = json.dumps({
+            "model": model,
+            "temperature": 0,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": EMO_SYSTEM},
+                {"role": "user", "content": numbered},
+            ],
+        }).encode("utf-8")
+
+        for attempt in range(2):
+            request = urllib.request.Request(
+                GROQ_CHAT_URL,
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=60) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                content = data["choices"][0]["message"]["content"]
+                content = re.sub(
+                    r"<think>.*?</think>", "", content, flags=re.S
+                )
+                items = json.loads(content).get("emotions") or []
+                if len(items) == len(texts):
+                    _groq_chat_cache["good"] = model
+                    return [norm_emotion(x) for x in items]
+                last = f"{model}: ចំនួនមិនត្រូវគ្នា"
+                break
+            except urllib.error.HTTPError as e:
+                last = f"{model}: {http_detail(e)}"
+                if e.code == 429 and attempt == 0:
+                    time.sleep(6)
+                    continue
+                break
+            except Exception as e:
+                last = f"{model}: {e}"
+                break
+
+    raise RuntimeError(last[:300])
+
+
+def gemini_emotion_labels(api_key, texts):
+    """ចាត់ថ្នាក់អារម្មណ៍ដោយ Gemini (ជម្រើសបម្រុង)។"""
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
+    models = get_available_models(client)[:3]
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+    prompt = EMO_SYSTEM + "\n\n" + numbered
+
+    last = None
+    for model in models:
+        try:
+            resp = client.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    temperature=0,
+                    response_mime_type="application/json",
+                ),
+            )
+            raw = (getattr(resp, "text", "") or "").strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+            data = json.loads(raw)
+            items = data.get("emotions") if isinstance(data, dict) else data
+            if isinstance(items, list) and len(items) == len(texts):
+                return [norm_emotion(x) for x in items]
+        except Exception as e:
+            last = e
+    raise RuntimeError(f"Gemini emotion: {last}")
+
+
+def label_emotions(texts, groq_key, gemini_key):
+    """ចាត់ថ្នាក់អារម្មណ៍តាមអត្ថបទ។ ត្រឡប់បញ្ជី ឬ None បើបរាជ័យ។"""
+    if not texts:
+        return None
+
+    if groq_key:
+        out = []
+        ok = True
+        for k in range(0, len(texts), 25):
+            try:
+                out.extend(groq_emotion_chunk(groq_key, texts[k:k + 25]))
+            except Exception:
+                ok = False
+                break
+            time.sleep(0.5)
+        if ok and len(out) == len(texts):
+            return out
+
+    if gemini_key:
+        try:
+            return gemini_emotion_labels(gemini_key, texts)
+        except Exception:
+            pass
+
+    return None
+
+
+def combine_emotion(text_label, arousal):
+    """
+    បូកអារម្មណ៍ពីអត្ថបទ និងកម្លាំងសំឡេងដើម (arousal -1.5..1.5)។
+    ត្រឡប់ (label, intensity)។
+    """
+    if text_label in EMO_HIGH:
+        return text_label, max(0.3, min(1.4, 0.6 + 0.5 * arousal))
+    if text_label in EMO_LOW:
+        return text_label, max(0.3, min(1.4, 0.6 - 0.5 * arousal))
+
+    # អត្ថបទធម្មតា ឬគ្មាន → ប្រើតែសំឡេងដើម
+    if arousal > 0.35:
+        return "excited", min(1.2, 0.4 + (arousal - 0.35) * 0.9)
+    if arousal < -0.35:
+        return "sad", min(1.2, 0.4 + (-arousal - 0.35) * 0.9)
+    return "neutral", 0.0
+
+
+def plan_emotions(dub_segments, seg_voices, info, runs, groq_key,
+                  gemini_key):
+    """
+    កំណត់អារម្មណ៍ឃ្លានីមួយៗ ពីអត្ថបទ (AI) + សំឡេងដើម (កម្លាំង កម្រិត ការប្រែប្រួល)។
+    ត្រឡប់ ([(label, intensity)], បន្ទាត់បង្ហាញ)។
+    """
+    import numpy as np
+
+    texts = [seg[2] for seg in dub_segments]
+    labels = label_emotions(texts, groq_key, gemini_key)
+
+    t = f = r = None
+    if info:
+        t, f, r = info.get("times"), info.get("f0"), info.get("rms")
+    have_audio = (
+        t is not None and f is not None and r is not None and len(t) > 0
+    )
+
+    all_f = base_rms = None
+    meds = {}
+    if have_audio:
+        voiced = f > 0
+        if int(voiced.sum()) >= 25:
+            all_f = float(np.median(f[voiced]))
+            base_rms = float(np.median(r[voiced]))
+        if runs:
+            meds = gender_medians(info, runs)
+
+    def clip(x):
+        return float(np.clip(x, -1.5, 1.5))
+
+    voices = seg_voices or [None] * len(dub_segments)
+    result = []
+
+    for i, seg in enumerate(dub_segments):
+        s, e = seg[0], seg[1]
+        v = voices[i]
+        g = "M" if v == VOICE_MALE else ("F" if v == VOICE_FEMALE else None)
+
+        arousal = 0.0
+        if have_audio and all_f and base_rms:
+            m = (t >= s) & (t <= e) & (f > 0)
+            if int(m.sum()) >= 5:
+                own = float(np.median(f[m]))
+                base_f = meds.get(g) or all_f
+                loud_db = 20.0 * np.log10(
+                    max(float(np.mean(r[m])), 1e-6) / max(base_rms, 1e-6)
+                )
+                pitch_st = 12.0 * np.log2(own / base_f)
+                std_st = float(np.std(12.0 * np.log2(f[m] / own)))
+                arousal = (
+                    0.5 * clip(loud_db / 6.0)
+                    + 0.3 * clip(pitch_st / 4.0)
+                    + 0.2 * clip((std_st - 2.5) / 2.0)
+                )
+
+        text_label = labels[i] if labels else None
+        result.append(combine_emotion(text_label, arousal))
+
+    # សង្ខេបសម្រាប់បង្ហាញ
+    counts = Counter(lab for lab, _ in result)
+    source = (
+        "តាមអត្ថបទ + សំឡេងដើម"
+        if labels and have_audio
+        else "តាមអត្ថបទតែប៉ុណ្ណោះ"
+        if labels
+        else "តាមសំឡេងដើមតែប៉ុណ្ណោះ"
+        if have_audio
+        else "មិនមានទិន្នន័យ"
+    )
+    summary = (
+        f"🎭 អារម្មណ៍ ({source})៖ "
+        + " · ".join(
+            f"{EMO_NAMES[k]} {counts[k]}"
+            for k in EMO_LABELS
+            if counts.get(k)
+        )
+    )
+
+    lines = [summary]
+    shown = 0
+    for (lab, inten), text in zip(result, texts):
+        if lab == "neutral":
+            continue
+        lines.append(f"{EMO_NAMES[lab]} ×{inten:.1f}  {text}")
+        shown += 1
+        if shown >= 40:
+            break
+
+    return result, lines
+
+
+def emotion_prosody(label, intensity, use_pitch=True):
+    """បំលែងអារម្មណ៍ទៅជា rate/pitch/volume សម្រាប់ edge-tts។"""
+    rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
+    k = max(0.0, float(intensity))
+
+    rate = int(max(-30, min(30, rate * k)))
+    pitch = int(max(-30, min(30, pitch * k))) if use_pitch else 0
+    vol = int(max(-50, min(50, vol * k)))
+
+    if rate == 0 and pitch == 0 and vol == 0:
+        return None
+    return {
+        "rate": f"{rate:+d}%",
+        "pitch": f"{pitch:+d}Hz",
+        "volume": f"{vol:+d}%",
+    }
+
+
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
-             seg_voices=None, targets=None, notes=None):
+             seg_voices=None, targets=None, notes=None, emotions=None):
     """
     បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗ។
     បើ client = None (ម៉ាស៊ីនឥតគិតថ្លៃ) មិនបង្រួមប្រយោគទេ តែបង្កើនល្បឿនបន្ថែម។
     បើមាន targets → កែកម្រិតសំឡេង AI ឱ្យជិតសំឡេងដើម។
+    បើមាន emotions → កែល្បឿន/កម្លាំង (និងកម្រិតសំឡេង បើមិនប្រើ targets) តាមអារម្មណ៍។
     """
     inputs, filters = [], []
     n = 0
@@ -2301,15 +2610,23 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         path = os.path.join(folder, name)
         v = seg_voices[i] if seg_voices else voice
 
+        prosody = None
+        if emotions is not None and i < len(emotions):
+            label, inten = emotions[i]
+            # បើ 🧬 បើក កម្រិតសំឡេងត្រូវបានគ្រប់គ្រងដោយ 🧬 រួចហើយ
+            prosody = emotion_prosody(
+                label, inten, use_pitch=(targets is None)
+            )
+
         try:
-            tts_segment(t, v, path)
+            tts_segment(t, v, path, prosody)
             d, _, _ = probe_video(path)
 
             # វែងពេក → បង្រួមប្រយោគ ហើយអានម្តងទៀត
             if client is not None and d > slot * 1.25:
                 t2 = shorten_khmer(client, model, t, slot)
                 if t2 != t:
-                    tts_segment(t2, v, path)
+                    tts_segment(t2, v, path, prosody)
                     d, _, _ = probe_video(path)
         except Exception:
             continue
@@ -2384,10 +2701,13 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     labels = "[bg]" if keep_bg else ""
     labels += "".join(f"[a{k}]" for k in range(first_voice, n))
 
+    # សំឡេងខ្លាំង (ខឹង/រំភើប) អាចលើស → ដាក់ limiter បើមានអារម្មណ៍
+    limiter = ",alimiter=limit=0.95" if emotions is not None else ""
+
     fc = (
         ";".join(filters)
         + f";{labels}amix=inputs={n}:dropout_transition=0,"
-        f"volume={n}[out]"
+        f"volume={n}{limiter}[out]"
     )
 
     run_ffmpeg(
@@ -2665,15 +2985,30 @@ def run_worker(job, item, settings, fonts_data):
                     dub_segments = segments
                     seg_voices = None
                     targets = None
+                    emotions = None
                     voice_notes = []
+                    pitch_inf = None
+                    runs_ = None
 
-                    if settings["auto_gender"] or settings["voice_match"]:
+                    need_audio = (
+                        settings["auto_gender"]
+                        or settings["voice_match"]
+                        or settings["emotion"]
+                    )
+
+                    # ១) វិភាគសំឡេងដើម (ប្រុស/ស្រី + កម្រិតសំឡេង + កម្លាំង)
+                    if need_audio:
                         try:
                             rep.write(
                                 "🔍 កំពុងវិភាគសំឡេងអ្នកនិយាយដើម..."
                             )
                             pcm = load_pcm(master_path)
-                            runs_ = None
+                            tracks = pitch_track(pcm)
+                            pitch_inf = {
+                                "times": tracks[0],
+                                "f0": tracks[1],
+                                "rms": tracks[2],
+                            }
 
                             if settings["auto_gender"]:
                                 planned, lines, voice_info, runs_ = (
@@ -2682,6 +3017,7 @@ def run_worker(job, item, settings, fonts_data):
                                         pcm,
                                         settings["voice"],
                                         duration,
+                                        tracks=tracks,
                                     )
                                 )
                                 dub_segments = [
@@ -2692,9 +3028,6 @@ def run_worker(job, item, settings, fonts_data):
                                 voice_notes = (
                                     [voice_info.get("summary", "")] + lines
                                 )
-                            else:
-                                times, f0, _ = pitch_track(pcm)
-                                pitch_inf = {"times": times, "f0": f0}
 
                             if settings["voice_match"]:
                                 targets = compute_targets(
@@ -2708,12 +3041,34 @@ def run_worker(job, item, settings, fonts_data):
                             seg_voices = None
                             targets = None
                             voice_notes = []
+                            pitch_inf = None
+                            runs_ = None
                             item["warn"].append(
                                 "វិភាគសំឡេងអ្នកនិយាយមិនបាន "
                                 "ប្រើសំឡេងតែមួយតាមដែលបានជ្រើស។"
                             )
-                        rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
 
+                    # ២) អារម្មណ៍ (អត្ថបទ AI + សំឡេងដើម)
+                    if settings["emotion"]:
+                        try:
+                            rep.write("🎭 កំពុងវិភាគអារម្មណ៍...")
+                            emotions, emo_lines = plan_emotions(
+                                dub_segments,
+                                seg_voices,
+                                pitch_inf,
+                                runs_,
+                                settings["groq_key"],
+                                settings["gemini_key"],
+                            )
+                            voice_notes = voice_notes + emo_lines
+                        except Exception:
+                            emotions = None
+                            item["warn"].append(
+                                "វិភាគអារម្មណ៍មិនបាន "
+                                "ប្រើសំឡេងធម្មតា។"
+                            )
+
+                    rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     dub_ok = make_dub(
                         folder,
@@ -2726,6 +3081,7 @@ def run_worker(job, item, settings, fonts_data):
                         seg_voices=seg_voices,
                         targets=targets,
                         notes=match_notes,
+                        emotions=emotions,
                     )
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
@@ -2936,7 +3292,9 @@ def download_area(job):
                     st.write(text)
 
             if it.get("voice_lines"):
-                with st.expander("👫 ព័ត៌មានសំឡេងអាន (ប្រុស/ស្រី/កម្រិតសំឡេង)"):
+                with st.expander(
+                    "👫 ព័ត៌មានសំឡេងអាន (ប្រុស/ស្រី/កម្រិតសំឡេង/អារម្មណ៍)"
+                ):
                     for line in it["voice_lines"]:
                         st.write(line)
 
@@ -3077,6 +3435,7 @@ voice_label = list(TTS_VOICES.keys())[0]
 keep_bg = False
 auto_gender = False
 voice_match = False
+emotion = False
 if dub_on:
     voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
     auto_gender = st.checkbox(
@@ -3096,6 +3455,15 @@ if dub_on:
             "នេះមិនមែនក្លូនសំឡេងពិតទេ៖ ពណ៌សំឡេង និងសំនៀងនៅដដែល "
             "មានតែកម្រិតខ្ពស់/ទាបប៉ុណ្ណោះដែលប្រែ។ "
             "ដំណើរការល្អបំផុតជាមួយ 👫 ប្រុស/ស្រីស្វ័យប្រវត្តិ។"
+        ),
+    )
+    emotion = st.checkbox(
+        "🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន (សប្បាយ/រំភើប/ខឹង/ក្រៀមក្រំ/ភ័យ/ខ្សឹប)",
+        help=(
+            "AI ចាត់ថ្នាក់អារម្មណ៍នៃឃ្លានីមួយៗតាមអត្ថបទ (Groq ឬ Gemini) "
+            "ហើយវាស់កម្លាំងសំឡេងដើមដើម្បីកំណត់កម្រិតខ្លាំង។ "
+            "សំឡេង AI ខ្មែរគ្មាន style អារម្មណ៍ពិតទេ ដូច្នេះកែតែល្បឿន "
+            "កម្រិត និងកម្លាំងសំឡេងប៉ុណ្ណោះ (ស្តាប់ឮច្បាស់ តែមិនដូចតួសម្តែងពិតទេ)។"
         ),
     )
     keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
@@ -3173,6 +3541,7 @@ if run:
         "keep_bg": keep_bg,
         "auto_gender": auto_gender,
         "voice_match": voice_match,
+        "emotion": emotion,
         "font_size": font_size,
         "outline_size": outline_size,
         "color": colors[font_color],
