@@ -2116,6 +2116,118 @@ def emotion_prosody(label, intensity, use_pitch=True):
 
 
 
+
+_eleven_sem = threading.Semaphore(2)
+
+
+def _multipart(fields, files):
+    boundary = "----kac" + uuid.uuid4().hex
+    parts = []
+    for n, v in fields:
+        parts.append((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{n}\"\r\n\r\n{v}\r\n").encode("utf-8"))
+    for n, fn, data, ct in files:
+        parts.append((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{n}\"; filename=\"{fn}\"\r\nContent-Type: {ct}\r\n\r\n").encode("utf-8"))
+        parts.append(data)
+        parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def _eleven_call(key, url, body=None, ctype=None, method="POST", timeout=120):
+    headers = {"xi-api-key": key, "User-Agent": "Mozilla/5.0"}
+    if ctype:
+        headers["Content-Type"] = ctype
+    request = urllib.request.Request(url, data=body, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:200]
+        raise RuntimeError(f"ElevenLabs HTTP {e.code}: {detail}")
+
+
+def eleven_add_voice(key, sample_bytes):
+    body, ctype = _multipart(
+        [("name", "kac_" + uuid.uuid4().hex[:8])],
+        [("files", "sample.mp3", sample_bytes, "audio/mpeg")],
+    )
+    raw = _eleven_call(key, "https://api.elevenlabs.io/v1/voices/add", body, ctype, timeout=90)
+    return json.loads(raw.decode("utf-8"))["voice_id"]
+
+
+def eleven_sts(key, voice_id, path):
+    with open(path, "rb") as f:
+        audio = f.read()
+    body, ctype = _multipart(
+        [("model_id", "eleven_multilingual_sts_v2")],
+        [("audio", "in.mp3", audio, "audio/mpeg")],
+    )
+    url = f"https://api.elevenlabs.io/v1/speech-to-speech/{voice_id}?output_format=mp3_44100_128"
+    last = None
+    for attempt in range(3):
+        try:
+            with _eleven_sem:
+                out = _eleven_call(key, url, body, ctype, timeout=120)
+            if len(out) < 500:
+                raise RuntimeError("ElevenLabs ឆ្លើយតបទទេ")
+            with open(path, "wb") as f:
+                f.write(out)
+            return
+        except RuntimeError as e:
+            last = e
+            if "429" in str(e) and attempt < 2:
+                time.sleep(3 * (attempt + 1))
+                continue
+            raise
+    raise last
+
+
+def eleven_delete_voice(key, voice_id):
+    try:
+        _eleven_call(key, f"https://api.elevenlabs.io/v1/voices/{voice_id}", method="DELETE", timeout=30)
+    except Exception:
+        pass
+
+
+
+EQ_CENTERS = [150, 250, 400, 630, 1000, 1600, 2500, 4000, 6300]
+
+
+def band_levels(pcm, sr=16000):
+    """វាស់ 'ពណ៌សំឡេង' ជាកម្រិត dB ក្នុងចន្លោះប្រេកង់ ៩ (ឥតគិតថ្លៃ គ្មាន API)"""
+    import numpy as np
+    n = 1024
+    if pcm is None or len(pcm) < n * 8:
+        return None
+    hop = max(512, (len(pcm) - n) // 6000)
+    count = 1 + (len(pcm) - n) // hop
+    idx = (np.arange(count) * hop)[:, None] + np.arange(n)[None, :]
+    frames = pcm[idx].astype(np.float64)
+    rms = np.sqrt(np.mean(frames ** 2, axis=1))
+    thr = max(1e-4, 0.15 * float(np.percentile(rms, 90)))
+    frames = frames[rms >= thr]
+    if len(frames) < 10:
+        return None
+    pw = (np.abs(np.fft.rfft(frames * np.hanning(n), axis=1)) ** 2).mean(axis=0)
+    freqs = np.fft.rfftfreq(n, 1.0 / sr)
+    out = []
+    for c in EQ_CENTERS:
+        m = (freqs >= c / 1.41) & (freqs < c * 1.41)
+        out.append(10.0 * np.log10(float(pw[m].mean()) + 1e-12))
+    return out
+
+
+def eq_filters(ref, tts, limit=6.0):
+    if not ref or not tts:
+        return ""
+    import numpy as np
+    r = np.array(ref, dtype=np.float64)
+    t = np.array(tts, dtype=np.float64)
+    d = np.clip((r - r.mean()) - (t - t.mean()), -limit, limit)
+    parts = [f"equalizer=f={c}:t=q:w=1.0:g={g:.1f}" for c, g in zip(EQ_CENTERS, d) if abs(g) >= 0.8]
+    return ",".join(parts)
+
+
 def merge_for_dub(segments, max_chars=80, max_gap=0.6, max_len=8.0):
     """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
     out = []
@@ -2174,7 +2286,8 @@ def shorten_groq(api_key, text, max_seconds):
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
-             seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None):
+             seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
+             clone_voice=None, eleven_key=None, ref_bands=None):
     inputs, filters = [], []
     n = 0
     if keep_bg:
@@ -2191,6 +2304,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             label, inten = emotions[i]
             p = emotion_prosody(label, inten, use_pitch=(targets is None))
         pros.append(p)
+
+    clone_stats = {"ok": 0, "fail": 0, "err": ""}
 
     def gen(i):
         s_, e_, t_ = segments[i]
@@ -2209,16 +2324,44 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                     t2 = shorten_groq(groq_key, t_, slot0)
                 if t2 != t_ and tts_retry(t2, voices_[i], path_, pros[i]):
                     d_, _, _ = probe_media(path_)
+            if clone_voice:
+                try:
+                    eleven_sts(eleven_key, clone_voice, path_)
+                    d_, _, _ = probe_media(path_)
+                    clone_stats["ok"] += 1
+                except Exception as ce:
+                    clone_stats["fail"] += 1
+                    clone_stats["err"] = str(ce)[:160]
             f0_ = None
             if targets is not None and i < len(targets) and targets[i]:
                 f0_ = tts_median_pitch(path_)
-            return d_, f0_
+            tb_ = None
+            if ref_bands and not clone_voice:
+                try:
+                    tb_ = band_levels(load_pcm(path_))
+                except Exception:
+                    tb_ = None
+            return d_, f0_, tb_
         except Exception:
             return None
 
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(gen, range(n_seg)))
 
+    voice_eq = {}
+    if ref_bands and not clone_voice:
+        import numpy as np
+        for v_ in set(voices_):
+            arrs = [r_[2] for k_, r_ in enumerate(results) if r_ and r_[2] and voices_[k_] == v_]
+            if arrs:
+                eqs = eq_filters(ref_bands, np.mean(arrs, axis=0).tolist())
+                if eqs:
+                    voice_eq[v_] = eqs
+        if notes is not None and voice_eq:
+            notes.append("🎚 ផ្គូផ្គងពណ៌សំឡេងស្រដៀងសំឡេងគំរូ")
+    if notes is not None and clone_voice:
+        notes.append(f"🧑‍🎤 ក្លូនសំឡេងបាន {clone_stats['ok']}/{n_seg} ឃ្លា"
+                     + (f" (បរាជ័យ: {clone_stats['err']})" if clone_stats["fail"] else ""))
     cursor = 0.0
     plan = []
     skipped = 0
@@ -2227,7 +2370,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if res is None:
             skipped += 1
             continue
-        d, f0 = res
+        d, f0, _tb = res
         next_s = segments[i + 1][0] if i + 1 < n_seg else duration
         start = max(s, cursor)
         if start >= duration - 0.3:
@@ -2237,7 +2380,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
-                     "voice": voices_[i], "f0": f0 if target else None, "target": target})
+                     "voice": voices_[i], "f0": f0 if target else None, "target": target,
+                     "eq": voice_eq.get(voices_[i], "")})
     if notes is not None and skipped:
         notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
     if not plan:
@@ -2264,6 +2408,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             chain = atempo_chain(p["speed"])
         else:
             chain = ("aresample=24000," f"asetrate={int(24000 * ratio)}," "aresample=24000," + atempo_chain(p["speed"] / ratio))
+        if p.get("eq"):
+            chain += "," + p["eq"]
         filters.append(f"[{n}:a]{chain},adelay={delay}:all=1[a{n}]")
         n += 1
     if notes is not None:
@@ -2429,13 +2575,22 @@ def run_worker(job, item, settings, fonts_data):
                     voice_notes = []
                     pitch_inf = None
                     runs_ = None
-                    need_audio = (settings["auto_gender"] or settings["voice_match"] or settings["emotion"])
+                    ref_bands = None
+                    need_audio = (settings["auto_gender"] or settings["voice_match"] or settings["emotion"] or settings.get("timbre"))
                     if need_audio:
                         try:
                             rep.write("🔍 កំពុងវិភាគសំឡេងអ្នកនិយាយដើម...")
                             pcm = load_pcm(master_path)
                             tracks = pitch_track(pcm)
                             pitch_inf = {"times": tracks[0], "f0": tracks[1], "rms": tracks[2]}
+                            if settings.get("timbre"):
+                                ref_pcm = pcm
+                                if settings.get("timbre_sample"):
+                                    sp = os.path.join(folder, "timbre_sample.bin")
+                                    with open(sp, "wb") as f:
+                                        f.write(settings["timbre_sample"])
+                                    ref_pcm = load_pcm(sp)
+                                ref_bands = band_levels(ref_pcm)
                             if settings["auto_gender"]:
                                 planned, lines, voice_info, runs_ = plan_dub_voices(dub_segments, pcm, settings["voice"], duration, tracks=tracks)
                                 dub_segments = [(s, e, t) for s, e, t, _ in planned]
@@ -2460,9 +2615,21 @@ def run_worker(job, item, settings, fonts_data):
                         except Exception:
                             emotions = None
                             item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
+                    clone_voice = None
+                    if settings.get("clone_sample") and settings.get("eleven_key"):
+                        try:
+                            rep.write("🧑‍🎤 កំពុងក្លូនសំឡេងគំរូ...")
+                            clone_voice = eleven_add_voice(settings["eleven_key"], settings["clone_sample"])
+                            targets = None
+                        except Exception as ce:
+                            item["warn"].append("ក្លូនសំឡេងមិនបាន ប្រើសំឡេង AI ធម្មតា។ មូលហេតុ: " + str(ce)[:200])
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
-                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"])
+                    try:
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands)
+                    finally:
+                        if clone_voice:
+                            eleven_delete_voice(settings["eleven_key"], clone_voice)
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
@@ -2612,6 +2779,7 @@ def scroll_to_downloads():
 
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
 render_hero(MAX_VIDEOS)
 
@@ -2662,6 +2830,10 @@ with st.container(border=True):
     auto_gender = False
     voice_match = False
     emotion = False
+    clone_on = False
+    clone_file = None
+    timbre = False
+    timbre_file = None
 
     if dub_on:
         voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
@@ -2669,6 +2841,13 @@ with st.container(border=True):
         voice_match = st.checkbox("🧬 ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (ប្រហាក់ប្រហែល)", help="វាស់កម្រិតសំឡេង (ខ្ពស់/ទាប) របស់អ្នកនិយាយដើម រួចកែសំឡេង AI ឱ្យជិតគ្នា (កំណត់ត្រឹម ±៤ semitones)។")
         emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន", help="AI ចាត់ថ្នាក់អារម្មណ៍នៃឃ្លានីមួយៗតាមអត្ថបទ ហើយវាស់កម្លាំងសំឡេងដើមដើម្បីកំណត់កម្រិតខ្លាំង។")
         keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
+        if ELEVEN_KEY:
+            clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (ប្រើសំឡេងគំរូរបស់អ្នក)", help="សំឡេងអានទាំងអស់នឹងប្តូរទៅជាសំឡេងដូចសំឡេងគំរូ។ ប្រើតែសំឡេងខ្លួនឯង ឬសំឡេងដែលមានការអនុញ្ញាត។")
+            if clone_on:
+                clone_file = st.file_uploader("សំឡេងគំរូ (និយាយច្បាស់ ១–២ នាទី គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
+        timbre = st.checkbox("🎚 ធ្វើឱ្យពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)", help="មិនមែនក្លូនពិតទេ តែកែ 'ពណ៌' សំឡេង AI ឱ្យជិតសំឡេងគំរូ (ក្រាស់/ស្តើង/ភ្លឺ)។ បើមិន upload សំឡេងគំរូ នឹងប្រើសំឡេងក្នុងវីដេអូ។")
+        if timbre:
+            timbre_file = st.file_uploader("សំឡេងគំរូ (ជម្រើស — និយាយច្បាស់ ១៥ វិនាទីឡើង គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
 
     with st.expander("🎨 កំណត់អក្សរ"):
         font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
@@ -2718,6 +2897,9 @@ if run:
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         "keep_bg": keep_bg, "auto_gender": auto_gender,
         "voice_match": voice_match, "emotion": emotion,
+        "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
+        "eleven_key": ELEVEN_KEY,
+        "timbre": timbre, "timbre_sample": (timbre_file.getvalue() if (timbre and timbre_file) else None),
         "font_size": font_size, "outline_size": outline_size,
         "color": colors[font_color],
     }
