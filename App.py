@@ -9,6 +9,7 @@ import asyncio
 import zipfile
 import tempfile
 import threading
+import statistics
 import subprocess
 import urllib.error
 import urllib.parse
@@ -2159,7 +2160,7 @@ def split_by_speaker(segments, runs, default_voice):
 
 def plan_dub_voices(segments, pcm, default_voice, duration):
     """
-    ត្រឡប់ (ឃ្លាបន្ទាប់ពីបំបែក [(s,e,text,voice)], បន្ទាត់បង្ហាញ, info)។
+    ត្រឡប់ (ឃ្លាបន្ទាប់ពីបំបែក [(s,e,text,voice)], បន្ទាត់បង្ហាញ, info, runs)។
     """
     runs, info = gender_timeline(pcm, duration, default_voice)
     if runs is None:
@@ -2167,6 +2168,7 @@ def plan_dub_voices(segments, pcm, default_voice, duration):
             [(s, e, t, default_voice) for s, e, t in segments],
             [],
             info,
+            None,
         )
 
     dub = split_by_speaker(segments, runs, default_voice)
@@ -2176,14 +2178,103 @@ def plan_dub_voices(segments, pcm, default_voice, duration):
         hz = median_pitch(info, a, b)
         mark = "♂" if v == VOICE_MALE else "♀"
         lines.append(f"{mark} {int(hz) if hz else '?'}Hz  {t}")
-    return dub, lines, info
+    return dub, lines, info, runs
+
+
+# ---------- ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (កម្រិតសំឡេង) ----------
+
+MATCH_MIN = 0.8  # កំណត់ការកែកម្រិតសំឡេង ≈ ±៤ semitones
+MATCH_MAX = 1.25
+
+
+def gender_medians(info, runs):
+    """កម្រិតសំឡេងកណ្តាល (Hz) របស់ប្រុស និងស្រី ក្នុងវីដេអូទាំងមូល។"""
+    import numpy as np
+
+    t = info.get("times")
+    f = info.get("f0")
+    out = {}
+    if t is None or len(t) == 0 or not runs:
+        return out
+
+    for g in ("M", "F"):
+        m = np.zeros(len(t), dtype=bool)
+        for a, b, gg in runs:
+            if gg == g:
+                m |= (t >= a) & (t < b)
+        m &= f > 0
+        if int(m.sum()) >= 10:
+            out[g] = float(np.median(f[m]))
+    return out
+
+
+def compute_targets(dub_segments, seg_voices, info, runs):
+    """
+    កម្រិតសំឡេង (Hz) ដែលចង់បានសម្រាប់ឃ្លានីមួយៗ
+    = ពាក់កណ្តាលនៃអ្នកនិយាយ (ប្រុស/ស្រី) + ពាក់កណ្តាលនៃឃ្លានោះ។
+    """
+    import numpy as np
+
+    meds = gender_medians(info, runs) if runs else {}
+
+    allmed = None
+    f = info.get("f0")
+    if f is not None and len(f):
+        voiced = f[f > 0]
+        if len(voiced) >= 25:
+            allmed = float(np.median(voiced))
+
+    voices = seg_voices or [None] * len(dub_segments)
+    targets = []
+    for seg, v in zip(dub_segments, voices):
+        s, e = seg[0], seg[1]
+        g = "M" if v == VOICE_MALE else ("F" if v == VOICE_FEMALE else None)
+        base = meds.get(g) or allmed
+        own = median_pitch(info, s, e)
+        if base and own:
+            t = 0.5 * base + 0.5 * own
+        else:
+            t = base or own
+        targets.append(t)
+    return targets
+
+
+def tts_median_pitch(path):
+    """កម្រិតសំឡេងកណ្តាល (Hz) របស់សំឡេង AI មួយឃ្លា។"""
+    try:
+        import numpy as np
+
+        pcm = load_pcm(path)
+        _, f, _ = pitch_track(pcm)
+        if len(f) == 0:
+            return None
+        voiced = f[f > 0]
+        if len(voiced) < 8:
+            return None
+        return float(np.median(voiced))
+    except Exception:
+        return None
+
+
+def atempo_chain(x):
+    """atempo មួយបន្ទាត់ មិនលើស ០.៥–២.០ ក្នុងមួយជំហាន។"""
+    parts = []
+    while x > 2.0:
+        parts.append("atempo=2.0")
+        x /= 2.0
+    while x < 0.5:
+        parts.append("atempo=0.5")
+        x *= 2.0
+    parts.append(f"atempo={x:.4f}")
+    return ",".join(parts)
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
-             seg_voices=None):
+             seg_voices=None, targets=None, notes=None):
     """
     បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗ។
     បើ client = None (ម៉ាស៊ីនឥតគិតថ្លៃ) មិនបង្រួមប្រយោគទេ តែបង្កើនល្បឿនបន្ថែម។
+    បើមាន targets → កែកម្រិតសំឡេង AI ឱ្យជិតសំឡេងដើម។
     """
     inputs, filters = [], []
     n = 0
@@ -2195,9 +2286,10 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         n = 1
 
     first_voice = n
-    voices = 0
     cursor = 0.0  # ម៉ោងដែលឃ្លាមុនអានចប់ (កុំឱ្យសំឡេងជាន់គ្នា)
+    plan = []
 
+    # ជំហានទី ១៖ បង្កើតសំឡេង AI គ្រប់ឃ្លា ហើយវាស់កម្រិតសំឡេងរបស់វា
     for i, (s, e, t) in enumerate(segments):
         next_s = segments[i + 1][0] if i + 1 < len(segments) else duration
         start = max(s, cursor)
@@ -2223,18 +2315,71 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             continue
 
         speed = min(max_speed, max(1.0, d / slot))
-        delay = int(start * 1000)
         cursor = start + d / speed + 0.08
 
-        inputs += ["-i", name]
-        filters.append(
-            f"[{n}:a]atempo={speed:.3f},adelay={delay}:all=1[a{n}]"
-        )
-        n += 1
-        voices += 1
+        f0 = None
+        target = None
+        if targets is not None and i < len(targets) and targets[i]:
+            target = targets[i]
+            f0 = tts_median_pitch(path)
 
-    if voices == 0:
+        plan.append({
+            "name": name,
+            "start": start,
+            "speed": speed,
+            "voice": v,
+            "f0": f0,
+            "target": target,
+        })
+
+    if not plan:
         return False
+
+    # កម្រិតសំឡេងគោលរបស់ AI នីមួយៗ (ប្រុស/ស្រី)
+    base = {}
+    for v in set(p["voice"] for p in plan):
+        vals = [p["f0"] for p in plan if p["voice"] == v and p["f0"]]
+        if vals:
+            base[v] = float(statistics.median(vals))
+
+    stats = {}  # voice -> [ratios, targets]
+
+    # ជំហានទី ២៖ ដាក់ចូល filter (កែកម្រិតសំឡេង + ល្បឿន + ម៉ោងចាប់ផ្តើម)
+    for p in plan:
+        ratio = 1.0
+        if p["target"] and base.get(p["voice"]):
+            ratio = p["target"] / base[p["voice"]]
+            ratio = max(MATCH_MIN, min(MATCH_MAX, ratio))
+            if abs(ratio - 1.0) < 0.03:
+                ratio = 1.0
+            rec = stats.setdefault(p["voice"], [[], []])
+            rec[0].append(ratio)
+            rec[1].append(p["target"])
+
+        delay = int(p["start"] * 1000)
+        inputs += ["-i", p["name"]]
+
+        if ratio == 1.0:
+            chain = f"atempo={p['speed']:.3f}"
+        else:
+            chain = (
+                "aresample=24000,"
+                f"asetrate={int(24000 * ratio)},"
+                "aresample=24000,"
+                + atempo_chain(p["speed"] / ratio)
+            )
+
+        filters.append(f"[{n}:a]{chain},adelay={delay}:all=1[a{n}]")
+        n += 1
+
+    if notes is not None:
+        for v, (ratios, tgts) in stats.items():
+            who = "ប្រុស" if v == VOICE_MALE else "ស្រី"
+            notes.append(
+                f"🧬 សំឡេង AI {who}៖ ~{int(base[v])}Hz → "
+                f"សំឡេងដើម ~{int(statistics.median(tgts))}Hz "
+                f"(កែ ×{statistics.mean(ratios):.2f})"
+            )
 
     labels = "[bg]" if keep_bg else ""
     labels += "".join(f"[a{k}]" for k in range(first_voice, n))
@@ -2519,33 +2664,57 @@ def run_worker(job, item, settings, fonts_data):
 
                     dub_segments = segments
                     seg_voices = None
+                    targets = None
+                    voice_notes = []
 
-                    if settings["auto_gender"]:
+                    if settings["auto_gender"] or settings["voice_match"]:
                         try:
-                            rep.write("🔍 កំពុងស្គាល់អ្នកនិយាយប្រុស/ស្រី...")
+                            rep.write(
+                                "🔍 កំពុងវិភាគសំឡេងអ្នកនិយាយដើម..."
+                            )
                             pcm = load_pcm(master_path)
-                            planned, lines, voice_info = plan_dub_voices(
-                                segments,
-                                pcm,
-                                settings["voice"],
-                                duration,
-                            )
-                            dub_segments = [
-                                (s, e, t) for s, e, t, _ in planned
-                            ]
-                            seg_voices = [v for _, _, _, v in planned]
-                            item["voice_lines"] = (
-                                [voice_info.get("summary", "")] + lines
-                            )
+                            runs_ = None
+
+                            if settings["auto_gender"]:
+                                planned, lines, voice_info, runs_ = (
+                                    plan_dub_voices(
+                                        segments,
+                                        pcm,
+                                        settings["voice"],
+                                        duration,
+                                    )
+                                )
+                                dub_segments = [
+                                    (s, e, t) for s, e, t, _ in planned
+                                ]
+                                seg_voices = [v for _, _, _, v in planned]
+                                pitch_inf = voice_info
+                                voice_notes = (
+                                    [voice_info.get("summary", "")] + lines
+                                )
+                            else:
+                                times, f0, _ = pitch_track(pcm)
+                                pitch_inf = {"times": times, "f0": f0}
+
+                            if settings["voice_match"]:
+                                targets = compute_targets(
+                                    dub_segments,
+                                    seg_voices,
+                                    pitch_inf,
+                                    runs_,
+                                )
                         except Exception:
                             dub_segments = segments
                             seg_voices = None
+                            targets = None
+                            voice_notes = []
                             item["warn"].append(
-                                "ស្គាល់សំឡេងប្រុស/ស្រីមិនបាន "
+                                "វិភាគសំឡេងអ្នកនិយាយមិនបាន "
                                 "ប្រើសំឡេងតែមួយតាមដែលបានជ្រើស។"
                             )
                         rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
 
+                    match_notes = []
                     dub_ok = make_dub(
                         folder,
                         dub_segments,
@@ -2555,7 +2724,10 @@ def run_worker(job, item, settings, fonts_data):
                         client,
                         used_model,
                         seg_voices=seg_voices,
+                        targets=targets,
+                        notes=match_notes,
                     )
+                    item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
                 if not dub_ok:
@@ -2764,7 +2936,7 @@ def download_area(job):
                     st.write(text)
 
             if it.get("voice_lines"):
-                with st.expander("👫 សំឡេងអានដែលបានជ្រើស (ប្រុស/ស្រី)"):
+                with st.expander("👫 ព័ត៌មានសំឡេងអាន (ប្រុស/ស្រី/កម្រិតសំឡេង)"):
                     for line in it["voice_lines"]:
                         st.write(line)
 
@@ -2904,6 +3076,7 @@ dub_on = st.checkbox("🎙 បន្ថែមសំឡេងអានជាភ�
 voice_label = list(TTS_VOICES.keys())[0]
 keep_bg = False
 auto_gender = False
+voice_match = False
 if dub_on:
     voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
     auto_gender = st.checkbox(
@@ -2913,6 +3086,16 @@ if dub_on:
             "ប្រុសនិយាយ → AI ប្រុស, ស្រីនិយាយ → AI ស្រី "
             "ហើយបំបែកឃ្លាត្រង់កន្លែងដែលអ្នកនិយាយប្តូរ។ "
             "បើមានអ្នកនិយាយម្នាក់ វាប្រើសំឡេងតែមួយពេញវីដេអូ។"
+        ),
+    )
+    voice_match = st.checkbox(
+        "🧬 ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (ប្រហាក់ប្រហែល)",
+        help=(
+            "វាស់កម្រិតសំឡេង (ខ្ពស់/ទាប) របស់អ្នកនិយាយដើម រួចកែសំឡេង AI "
+            "ឱ្យជិតគ្នា (កំណត់ត្រឹម ±៤ semitones)។ "
+            "នេះមិនមែនក្លូនសំឡេងពិតទេ៖ ពណ៌សំឡេង និងសំនៀងនៅដដែល "
+            "មានតែកម្រិតខ្ពស់/ទាបប៉ុណ្ណោះដែលប្រែ។ "
+            "ដំណើរការល្អបំផុតជាមួយ 👫 ប្រុស/ស្រីស្វ័យប្រវត្តិ។"
         ),
     )
     keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
@@ -2989,6 +3172,7 @@ if run:
         "voice": TTS_VOICES[voice_label],
         "keep_bg": keep_bg,
         "auto_gender": auto_gender,
+        "voice_match": voice_match,
         "font_size": font_size,
         "outline_size": outline_size,
         "color": colors[font_color],
