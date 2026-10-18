@@ -2638,35 +2638,6 @@ def run_worker(job, item, settings, fonts_data):
             if item.get("path"):
                 shutil.move(item["path"], source)
                 item["path"] = None
-class Job:
-    def __init__(self, items, folder):
-        self.id = uuid.uuid4().hex[:8]
-        self.items = items
-        self.folder = folder
-        self.render_slots = threading.Semaphore(MAX_RENDER_AT_ONCE)
-        self.zip = None
-        self.zip_done = False
-        self.scrolled = False
-    def running(self):
-        return any(it["state"] in ("queued", "running") for it in self.items)
-
-
-def engine_name(engine):
-    return "ឥតគិតថ្លៃ (Groq)" if engine == "free" else "Gemini"
-
-
-def run_worker(job, item, settings, fonts_data):
-    rep = Reporter(item)
-    item["t0"] = time.time()
-    item["state"] = "running"
-    try:
-        with tempfile.TemporaryDirectory() as folder:
-            source = os.path.join(folder, "input.mp4")
-            audio_path = os.path.join(folder, "audio.mp3")
-            master_path = os.path.join(folder, "master.flac")
-            if item.get("path"):
-                shutil.move(item["path"], source)
-                item["path"] = None
             else:
                 item["pct"] = 0.03
                 rep.write("កំពុងទាញយកវីដេអូ...")
@@ -2957,33 +2928,6 @@ with st.container(border=True):
 
     uploaded_files = []
     link_text = ""
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
-GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
-ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
-
-USER_ID = get_user_id()
-render_token_bar(USER_ID)
-render_hero(MAX_VIDEOS)
-
-if not GEMINI_KEY and not GROQ_KEY:
-    st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
-    st.stop()
-
-colors = {"ស": "&H00FFFFFF", "លឿង": "&H0000FFFF", "បៃតង": "&H0000FF00", "ខៀវ": "&H00FF0000"}
-
-ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
-ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
-
-current_job = st.session_state.get("job")
-busy = bool(current_job and current_job.running())
-
-st.subheader("① 🎞️ ជ្រើសវីដេអូ")
-with st.container(border=True):
-
-    mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True, label_visibility="collapsed")
-
-    uploaded_files = []
-    link_text = ""
 
     if mode.startswith("📁"):
         uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
@@ -3139,4 +3083,3 @@ if job:
             job.scrolled = True
             if any(it["state"] == "done" for it in job.items):
                 scroll_to_downloads()
-    
