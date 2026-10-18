@@ -2679,7 +2679,6 @@ items = []
 too_many = False
 
 if uploaded_files:
-    if uploaded_files:
     too_many = len(uploaded_files) > MAX_VIDEOS
     for f in uploaded_files[:MAX_VIDEOS]:
         items.append({"name": f.name, "file": f, "url": None})
