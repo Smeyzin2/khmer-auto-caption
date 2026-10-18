@@ -1294,7 +1294,7 @@ def translate_texts(texts, groq_key=None):
         except Exception as e:
             errors.append(f"google: {e}"[:200])
             google_blocked = True
-        time.sleep(0.5)
+        time.sleep(0.2)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
         for k in range(0, len(missing), 20):
@@ -1434,12 +1434,11 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
     folder = os.path.dirname(audio_path)
     base = os.path.basename(audio_path)
     chunks = plan_short_chunks(duration, speech)
-    out = []
-    got = 0
-    errors_in_row = 0
-    for i, (a, b) in enumerate(chunks):
-        if b - a < 0.5:
-            continue
+    todo = [(i, a, b) for i, (a, b) in enumerate(chunks) if b - a >= 0.5]
+    counter = {"n": 0}
+
+    def one(item):
+        i, a, b = item
         name = f"gs_{i}.flac"
         try:
             run_ffmpeg(["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", base, "-ac", "1", "-ar", "16000", "-c:a", "flac", name], cwd=folder)
@@ -1449,23 +1448,34 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
             for attempt in range(2):
                 try:
                     text = google_speech_request(data)
-                    errors_in_row = 0
                     break
                 except urllib.error.HTTPError as e:
                     if e.code in (429, 503) and attempt == 0:
-                        time.sleep(4)
+                        time.sleep(3)
                         continue
                     raise
-            if text:
-                got += 1
-                out.extend(retime_by_speech([(a, b, text)], speech, duration, pad=0.0))
-        except Exception:
-            errors_in_row += 1
-            if errors_in_row >= 3:
-                raise
-        status.write(f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({i + 1}/{len(chunks)})")
-        time.sleep(0.6)
+            res = retime_by_speech([(a, b, text)], speech, duration, pad=0.0) if text else []
+            return res, None
+        except Exception as ex_:
+            return [], ex_
+        finally:
+            counter["n"] += 1
+            status.write(f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({counter['n']}/{len(todo)})")
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(one, todo))
+    out = []
+    got = 0
+    errs = 0
+    for res, err in results:
+        if err is not None:
+            errs += 1
+        if res:
+            got += 1
+            out.extend(res)
     if got == 0:
+        if errs >= 3:
+            raise RuntimeError("Google Speech បរាជ័យ")
         return []
     out.sort(key=lambda x: x[0])
     return out
@@ -2172,46 +2182,62 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         filters.append("[0:a]volume=0.15[bg]")
         n = 1
     first_voice = n
+    n_seg = len(segments)
+    voices_ = [seg_voices[i] if seg_voices else voice for i in range(n_seg)]
+    pros = []
+    for i in range(n_seg):
+        p = None
+        if emotions is not None and i < len(emotions):
+            label, inten = emotions[i]
+            p = emotion_prosody(label, inten, use_pitch=(targets is None))
+        pros.append(p)
+
+    def gen(i):
+        s_, e_, t_ = segments[i]
+        next_s_ = segments[i + 1][0] if i + 1 < n_seg else duration
+        slot0 = max(0.6, min(next_s_ - 0.08, e_ + 1.0) - s_)
+        path_ = os.path.join(folder, f"tts_{i}.mp3")
+        try:
+            if not tts_retry(t_, voices_[i], path_, pros[i]):
+                return None
+            d_, _, _ = probe_media(path_)
+            if d_ > slot0 * 1.2:
+                t2 = t_
+                if client is not None:
+                    t2 = shorten_khmer(client, model, t_, slot0)
+                elif groq_key:
+                    t2 = shorten_groq(groq_key, t_, slot0)
+                if t2 != t_ and tts_retry(t2, voices_[i], path_, pros[i]):
+                    d_, _, _ = probe_media(path_)
+            f0_ = None
+            if targets is not None and i < len(targets) and targets[i]:
+                f0_ = tts_median_pitch(path_)
+            return d_, f0_
+        except Exception:
+            return None
+
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        results = list(pool.map(gen, range(n_seg)))
+
     cursor = 0.0
     plan = []
     skipped = 0
-    for i, (s, e, t) in enumerate(segments):
-        next_s = segments[i + 1][0] if i + 1 < len(segments) else duration
+    for i, res in enumerate(results):
+        s, e, t = segments[i]
+        if res is None:
+            skipped += 1
+            continue
+        d, f0 = res
+        next_s = segments[i + 1][0] if i + 1 < n_seg else duration
         start = max(s, cursor)
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + 1.0) - start)
-        name = f"tts_{i}.mp3"
-        path = os.path.join(folder, name)
-        v = seg_voices[i] if seg_voices else voice
-        prosody = None
-        if emotions is not None and i < len(emotions):
-            label, inten = emotions[i]
-            prosody = emotion_prosody(label, inten, use_pitch=(targets is None))
-        try:
-            if not tts_retry(t, v, path, prosody):
-                skipped += 1
-                continue
-            d, _, _ = probe_media(path)
-            if d > slot * 1.2:
-                t2 = t
-                if client is not None:
-                    t2 = shorten_khmer(client, model, t, slot)
-                elif groq_key:
-                    t2 = shorten_groq(groq_key, t, slot)
-                if t2 != t and tts_retry(t2, v, path, prosody):
-                    d, _, _ = probe_media(path)
-        except Exception:
-            skipped += 1
-            continue
         speed = min(1.7, max(1.0, d / slot))
         cursor = start + d / speed + 0.08
-        f0 = None
-        target = None
-        if targets is not None and i < len(targets) and targets[i]:
-            target = targets[i]
-            f0 = tts_median_pitch(path)
-        plan.append({"name": name, "start": start, "speed": speed, "voice": v, "f0": f0, "target": target})
+        target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
+        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
+                     "voice": voices_[i], "f0": f0 if target else None, "target": target})
     if notes is not None and skipped:
         notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
     if not plan:
@@ -2653,6 +2679,7 @@ items = []
 too_many = False
 
 if uploaded_files:
+    if uploaded_files:
     too_many = len(uploaded_files) > MAX_VIDEOS
     for f in uploaded_files[:MAX_VIDEOS]:
         items.append({"name": f.name, "file": f, "url": None})
