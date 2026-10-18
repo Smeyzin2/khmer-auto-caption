@@ -74,7 +74,14 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
   font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif !important;
   color-scheme: light;
 }
-.stApp * { font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif; }
+.stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp li, .stApp small,
+.stApp textarea, .stApp input, .stApp button p, .stApp a,
+.stApp [data-baseweb="select"] div, .stApp [data-testid="stMarkdownContainer"] {
+  font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif;
+}
+[data-testid="stIconMaterial"], [class*="material-symbols"], .material-icons {
+  font-family: 'Material Symbols Rounded', 'Material Icons' !important;
+}
 [data-testid="stHeader"] { background: transparent; }
 .block-container { max-width: 720px; padding: 1rem 1rem 4rem; }
 
@@ -157,7 +164,7 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p {
 /* ---------- Section headings ---------- */
 [data-testid="stHeading"] h3, .stApp h3 {
   font-size: 1.12rem !important;
-  font-weight: 700 !important;
+  font-weight: 600 !important;
   margin: 1.6rem 0 .6rem !important;
   padding: 0 !important;
   border: none !important;
@@ -213,8 +220,10 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 .stTextArea textarea:focus { border-color: var(--ink) !important; box-shadow: 0 0 0 3px rgba(29,33,69,.10) !important; }
 
 /* ---------- Radio => pills ---------- */
-[data-testid="stRadio"] [role="radiogroup"] { gap: 8px; flex-wrap: wrap; }
+[data-testid="stRadio"] [role="radiogroup"] { gap: 8px; flex-wrap: nowrap; width: 100%; }
 [data-testid="stRadio"] label {
+  flex: 1 1 0;
+  justify-content: center;
   background: #F6F8FD;
   border: 1.5px solid var(--line);
   border-radius: 999px;
@@ -329,7 +338,6 @@ def render_hero(max_videos=5):
           <h1>Khmer Auto Caption</h1>
           <p>ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ
              (រហូតដល់ {max_videos} វីដេអូស្មើគ្នា)</p>
-          <div class="kac-frame"><div class="kac-cap">សួស្តី! នេះគឺជាអក្សររត់ខ្មែរ</div></div>
           <div class="kac-pills">
             <span>🎙 ស្តាប់ និងបកប្រែ</span>
             <span>🗣 សំឡេងអានខ្មែរ</span>
@@ -2529,7 +2537,7 @@ busy = bool(current_job and current_job.running())
 st.subheader("① 🎞️ ជ្រើសវីដេអូ")
 with st.container(border=True):
 
-    mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload ឯកសារ", "🔗 បិទភ្ជាប់តំណ (Link)"], horizontal=True, label_visibility="collapsed")
+    mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True, label_visibility="collapsed")
 
     uploaded_files = []
     link_text = ""
