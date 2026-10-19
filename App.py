@@ -493,6 +493,11 @@ def today_stats():
     return rec or {"videos": 0, "done": 0, "failed": 0, "users": []}
 
 
+def is_admin():
+    key = str(st.secrets.get("ADMIN_KEY", "") or "")
+    return bool(key) and str(st.query_params.get("admin", "")) == key
+
+
 def render_token_bar(uid):
     balance = token_balance(uid)
     st.markdown(
@@ -509,7 +514,8 @@ def render_token_bar(uid):
         unsafe_allow_html=True,
     )
     st.caption(f"Token ថ្ងៃនេះ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញដោយស្វ័យប្រវត្តិ។")
-    st.caption(f"🎬 ថ្ងៃនេះមានគេបង្កើតវីដេអូសរុប {today_stats()['videos']:,}")
+    if is_admin():
+        st.caption(f"🔐 (ម្ចាស់ប៉ុណ្ណោះ) 🎬 ថ្ងៃនេះមានគេបង្កើតវីដេអូសរុប {today_stats()['videos']:,}")
 
 
 def render_hero(max_videos=5):
@@ -3174,3 +3180,4 @@ if ADMIN_KEY and st.query_params.get("admin", "") == ADMIN_KEY:
     ]
     if rows:
         st.table(rows)
+ 
