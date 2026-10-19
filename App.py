@@ -397,6 +397,32 @@ def get_user_id():
     return str(uid)
 
 
+def sync_browser_id(uid):
+    """ចងចាំលេខកូដអ្នកប្រើក្នុង browser (localStorage) ដើម្បីកុំឱ្យអូសកម្មវិធីចោលរួច Token ត្រឡប់មកវិញ"""
+    js = """
+    <script>
+    (function () {
+      try {
+        var uid = "__UID__";
+        var w = window.parent;
+        var key = "kac_uid";
+        var saved = w.localStorage.getItem(key);
+        if (saved && /^[A-Za-z0-9]{8,32}$/.test(saved)) {
+          if (saved !== uid) {
+            var url = new URL(w.location.href);
+            url.searchParams.set("u", saved);
+            w.location.replace(url.toString());
+          }
+        } else {
+          w.localStorage.setItem(key, uid);
+        }
+      } catch (e) {}
+    })();
+    </script>
+    """
+    components.html(js.replace("__UID__", uid), height=0)
+
+
 def _load_tokens():
     try:
         with open(TOKEN_FILE, "r", encoding="utf-8") as f:
@@ -2949,6 +2975,74 @@ def download_area(job):
                     st.text("\n".join(it["log"][-30:]))
 
 
+TT_ID_RE = re.compile(r"/video/(\d{8,25})")
+
+
+@st.cache_data(show_spinner=False, ttl=86400)
+def tiktok_video_id(url):
+    url = str(url or "").strip()
+    if re.fullmatch(r"\d{8,25}", url):
+        return url
+    m = TT_ID_RE.search(url)
+    if m:
+        return m.group(1)
+    if "tiktok.com" in url:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=12) as r:
+                m = TT_ID_RE.search(r.geturl())
+                if m:
+                    return m.group(1)
+        except Exception:
+            pass
+    return None
+
+
+def render_tiktok_box():
+    with st.expander("🎵 មើល TikTok ពេលរង់ចាំ", expanded=True):
+        default_links = st.secrets.get("TIKTOK_LINKS", [])
+        if isinstance(default_links, str):
+            default_links = [default_links]
+        default_text = "\n".join(str(x) for x in list(default_links))
+        if "tt_text" not in st.session_state:
+            st.session_state["tt_text"] = default_text
+        text = st.text_area(
+            "តំណវីដេអូ TikTok (មួយបន្ទាត់ ១ តំណ)",
+            key="tt_text", height=90,
+            placeholder="https://www.tiktok.com/@user/video/...",
+        )
+        ids = []
+        for ln in text.splitlines():
+            if not ln.strip():
+                continue
+            vid = tiktok_video_id(ln)
+            if vid and vid not in ids:
+                ids.append(vid)
+        if not ids:
+            st.caption("បិទភ្ជាប់តំណវីដេអូ TikTok ខាងលើ ដើម្បីមើលពេលរង់ចាំ។")
+            return
+        idx = st.session_state.get("tt_idx", 0) % len(ids)
+        c1, c2, c3 = st.columns([1, 2, 1])
+        if c1.button("⏮", key="tt_prev", use_container_width=True):
+            idx = (idx - 1) % len(ids)
+        if c3.button("⏭", key="tt_next", use_container_width=True):
+            idx = (idx + 1) % len(ids)
+        st.session_state["tt_idx"] = idx
+        c2.caption(f"វីដេអូ {idx + 1} / {len(ids)}")
+        components.html(
+            f"""
+            <div style="display:flex;justify-content:center;">
+              <iframe src="https://www.tiktok.com/embed/v2/{ids[idx]}"
+                      width="325" height="740"
+                      style="border:0;border-radius:14px;max-width:100%;"
+                      allow="autoplay; fullscreen; encrypted-media"
+                      allowfullscreen></iframe>
+            </div>
+            """,
+            height=760,
+        )
+
+
 def scroll_to_downloads():
     components.html(
         f"""
@@ -2977,6 +3071,7 @@ GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
 USER_ID = get_user_id()
+sync_browser_id(USER_ID)
 render_token_bar(USER_ID)
 render_hero(MAX_VIDEOS)
 
@@ -3142,6 +3237,8 @@ if job:
     st.divider()
     st.subheader("③ ⚙️ កន្លែងធ្វើការ")
     st.fragment(run_every=refresh)(work_area)(job, running)
+    if running:
+        render_tiktok_box()
     st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
     st.divider()
     st.subheader("④ ⬇️ កន្លែងទាញយក")
@@ -3180,4 +3277,4 @@ if ADMIN_KEY and st.query_params.get("admin", "") == ADMIN_KEY:
     ]
     if rows:
         st.table(rows)
- 
+            
