@@ -2975,6 +2975,12 @@ def download_area(job):
                     st.text("\n".join(it["log"][-30:]))
 
 
+# ដាក់តំណវីដេអូ TikTok ដែលអ្នកចង់ឱ្យអ្នកប្រើមើលពេលរង់ចាំ នៅទីនេះ (មួយតំណក្នុងមួយបន្ទាត់)
+TIKTOK_VIDEOS = [
+    # "https://www.tiktok.com/@username/video/1234567890123456789",
+    # "https://vm.tiktok.com/xxxxxxx/",
+]
+
 TT_ID_RE = re.compile(r"/video/(\d{8,25})")
 
 
@@ -2998,41 +3004,47 @@ def tiktok_video_id(url):
     return None
 
 
+def tiktok_playlist():
+    links = list(TIKTOK_VIDEOS)
+    extra = st.secrets.get("TIKTOK_LINKS", [])
+    if isinstance(extra, str):
+        extra = [extra]
+    links += [str(x) for x in list(extra)]
+    ids = []
+    for ln in links:
+        if not str(ln).strip():
+            continue
+        vid = tiktok_video_id(ln)
+        if vid and vid not in ids:
+            ids.append(vid)
+    return ids
+
+
 def render_tiktok_box():
+    import random
+    ids = tiktok_playlist()
+    if not ids:
+        if is_admin():
+            st.info("🔐 (ម្ចាស់ប៉ុណ្ណោះ) មិនទាន់មានវីដេអូ TikTok ទេ។ សូមដាក់តំណក្នុង TIKTOK_VIDEOS (ក្នុងកូដ) ឬ TIKTOK_LINKS (ក្នុង Secrets)។")
+        return
+    order = st.session_state.get("tt_order")
+    if not order or set(order) != set(ids):
+        order = random.sample(ids, len(ids))
+        st.session_state["tt_order"] = order
+        st.session_state["tt_idx"] = 0
+    idx = st.session_state.get("tt_idx", 0) % len(order)
     with st.expander("🎵 មើល TikTok ពេលរង់ចាំ", expanded=True):
-        default_links = st.secrets.get("TIKTOK_LINKS", [])
-        if isinstance(default_links, str):
-            default_links = [default_links]
-        default_text = "\n".join(str(x) for x in list(default_links))
-        if "tt_text" not in st.session_state:
-            st.session_state["tt_text"] = default_text
-        text = st.text_area(
-            "តំណវីដេអូ TikTok (មួយបន្ទាត់ ១ តំណ)",
-            key="tt_text", height=90,
-            placeholder="https://www.tiktok.com/@user/video/...",
-        )
-        ids = []
-        for ln in text.splitlines():
-            if not ln.strip():
-                continue
-            vid = tiktok_video_id(ln)
-            if vid and vid not in ids:
-                ids.append(vid)
-        if not ids:
-            st.caption("បិទភ្ជាប់តំណវីដេអូ TikTok ខាងលើ ដើម្បីមើលពេលរង់ចាំ។")
-            return
-        idx = st.session_state.get("tt_idx", 0) % len(ids)
         c1, c2, c3 = st.columns([1, 2, 1])
         if c1.button("⏮", key="tt_prev", use_container_width=True):
-            idx = (idx - 1) % len(ids)
-        if c3.button("⏭", key="tt_next", use_container_width=True):
-            idx = (idx + 1) % len(ids)
+            idx = (idx - 1) % len(order)
+        if c3.button("⏭ បន្ទាប់", key="tt_next", type="primary", use_container_width=True):
+            idx = (idx + 1) % len(order)
         st.session_state["tt_idx"] = idx
-        c2.caption(f"វីដេអូ {idx + 1} / {len(ids)}")
+        c2.caption(f"វីដេអូ {idx + 1} / {len(order)}")
         components.html(
             f"""
             <div style="display:flex;justify-content:center;">
-              <iframe src="https://www.tiktok.com/embed/v2/{ids[idx]}"
+              <iframe src="https://www.tiktok.com/embed/v2/{order[idx]}"
                       width="325" height="740"
                       style="border:0;border-radius:14px;max-width:100%;"
                       allow="autoplay; fullscreen; encrypted-media"
@@ -3277,4 +3289,3 @@ if ADMIN_KEY and st.query_params.get("admin", "") == ADMIN_KEY:
     ]
     if rows:
         st.table(rows)
-            
