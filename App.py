@@ -437,6 +437,62 @@ def spend_tokens(uid, amount):
     return True
 
 
+STATS_FILE = os.path.join(tempfile.gettempdir(), "kac_stats.json")
+_stats_lock = threading.Lock()
+
+
+def _load_stats():
+    try:
+        with open(STATS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_stats(data):
+    keep = sorted(data.keys())[-30:]
+    data = {k: data[k] for k in keep}
+    tmp = STATS_FILE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f)
+    os.replace(tmp, STATS_FILE)
+
+
+def _day_rec(data, day):
+    return data.setdefault(day, {"videos": 0, "done": 0, "failed": 0, "users": []})
+
+
+def record_start(uid, count):
+    with _stats_lock:
+        data = _load_stats()
+        rec = _day_rec(data, _today())
+        rec["videos"] += count
+        if uid not in rec["users"]:
+            rec["users"].append(uid)
+        try:
+            _save_stats(data)
+        except Exception:
+            pass
+
+
+def record_result(ok):
+    with _stats_lock:
+        data = _load_stats()
+        rec = _day_rec(data, _today())
+        rec["done" if ok else "failed"] += 1
+        try:
+            _save_stats(data)
+        except Exception:
+            pass
+
+
+def today_stats():
+    with _stats_lock:
+        rec = _load_stats().get(_today())
+    return rec or {"videos": 0, "done": 0, "failed": 0, "users": []}
+
+
 def render_token_bar(uid):
     balance = token_balance(uid)
     st.markdown(
@@ -453,6 +509,7 @@ def render_token_bar(uid):
         unsafe_allow_html=True,
     )
     st.caption(f"Token ថ្ងៃនេះ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញដោយស្វ័យប្រវត្តិ។")
+    st.caption(f"🎬 ថ្ងៃនេះមានគេបង្កើតវីដេអូសរុប {today_stats()['videos']:,}")
 
 
 def render_hero(max_videos=5):
@@ -2352,7 +2409,7 @@ def eq_filters(ref, tts, limit=6.0):
     return ",".join(parts)
 
 
-def merge_for_dub(segments, max_chars=80, max_gap=0.6, max_len=8.0):
+def merge_for_dub(segments, max_chars=45, max_gap=0.35, max_len=4.5):
     """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
     out = []
     for s, e, t in segments:
@@ -2409,6 +2466,9 @@ def shorten_groq(api_key, text, max_seconds):
     return text
 
 
+BG_VOLUME = 0.07
+
+
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
              clone_voice=None, eleven_key=None, ref_bands=None):
@@ -2416,7 +2476,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     n = 0
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
-        filters.append("[0:a]volume=0.15[bg]")
+        filters.append(f"[0:a]volume={BG_VOLUME}[bg]")
         n = 1
     first_voice = n
     n_seg = len(segments)
@@ -2434,13 +2494,13 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     def gen(i):
         s_, e_, t_ = segments[i]
         next_s_ = segments[i + 1][0] if i + 1 < n_seg else duration
-        slot0 = max(0.6, min(next_s_ - 0.08, e_ + 1.0) - s_)
+        slot0 = max(0.6, min(next_s_ - 0.08, e_ + 0.3) - s_)
         path_ = os.path.join(folder, f"tts_{i}.mp3")
         try:
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
-            if d_ > slot0 * 1.2:
+            if d_ > slot0 * 1.05:
                 t2 = t_
                 if client is not None:
                     t2 = shorten_khmer(client, model, t_, slot0)
@@ -2499,8 +2559,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         start = max(s, cursor)
         if start >= duration - 0.3:
             break
-        slot = max(0.6, min(next_s - 0.08, e + 1.0) - start)
-        speed = min(1.7, max(1.0, d / slot))
+        slot = max(0.6, min(next_s - 0.08, e + 0.3) - start)
+        speed = min(1.8, max(1.0, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -2532,6 +2592,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             chain = atempo_chain(p["speed"])
         else:
             chain = ("aresample=24000," f"asetrate={int(24000 * ratio)}," "aresample=24000," + atempo_chain(p["speed"] / ratio))
+        chain = "silenceremove=start_periods=1:start_duration=0:start_threshold=-45dB," + chain
         if p.get("eq"):
             chain += "," + p["eq"]
         filters.append(f"[{n}:a]{chain},adelay={delay}:all=1[a{n}]")
@@ -2791,6 +2852,10 @@ def run_worker(job, item, settings, fonts_data):
             item["error"] = "ការបង្កើតវីដេអូមិនបានសម្រេច។ សូមសាកម្តងទៀត។"
             item["state"] = "error"
         try:
+            record_result(item["state"] == "done")
+        except Exception:
+            pass
+        try:
             if item.get("path") and os.path.exists(item["path"]):
                 os.remove(item["path"])
         except Exception:
@@ -3027,6 +3092,7 @@ if run:
     if not spend_tokens(USER_ID, len(items) * TOKEN_COST):
         st.error(f"Token មិនគ្រប់ទេ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
         st.stop()
+    record_start(USER_ID, len(items))
     settings = {
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
         "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
@@ -3083,3 +3149,28 @@ if job:
             job.scrolled = True
             if any(it["state"] == "done" for it in job.items):
                 scroll_to_downloads()
+
+
+ADMIN_KEY = st.secrets.get("ADMIN_KEY", "")
+if ADMIN_KEY and st.query_params.get("admin", "") == ADMIN_KEY:
+    st.divider()
+    st.subheader("📊 ស្ថិតិ (Admin)")
+    today_rec = today_stats()
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("🎬 វីដេអូ", today_rec["videos"])
+    a2.metric("👥 អ្នកប្រើ", len(today_rec["users"]))
+    a3.metric("✅ ជោគជ័យ", today_rec["done"])
+    a4.metric("❌ បរាជ័យ", today_rec["failed"])
+    all_stats = _load_stats()
+    rows = [
+        {
+            "ថ្ងៃ": day,
+            "វីដេអូ": all_stats[day]["videos"],
+            "អ្នកប្រើ": len(all_stats[day]["users"]),
+            "ជោគជ័យ": all_stats[day]["done"],
+            "បរាជ័យ": all_stats[day]["failed"],
+        }
+        for day in sorted(all_stats.keys(), reverse=True)[:14]
+    ]
+    if rows:
+        st.table(rows)
