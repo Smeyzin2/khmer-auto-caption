@@ -27,7 +27,7 @@ from google import genai
 from google.genai import types
 
 st.set_page_config(
-    page_title="Khmer Auto Caption",
+    page_title="បកប្រែរឿងមកនិយាយភាសាខ្មែរ",
     page_icon="🎬",
     layout="centered",
 )
