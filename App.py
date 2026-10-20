@@ -2526,7 +2526,7 @@ def eq_filters(ref, tts, limit=6.0):
     return ",".join(parts)
 
 
-def merge_for_dub(segments, max_chars=45, max_gap=0.35, max_len=4.5):
+def merge_for_dub(segments, max_chars=55, max_gap=0.4, max_len=5.5):
     """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
     out = []
     for s, e, t in segments:
@@ -2583,7 +2583,14 @@ def shorten_groq(api_key, text, max_seconds):
     return text
 
 
-BG_VOLUME = 0.07
+# សំឡេងដើមក្នុងផ្ទៃខាងក្រោយ (បន្ថយពី 0.07 ទៅ 0.035) + បន្ថយស្វ័យប្រវត្តិពេល AI កំពុងនិយាយ
+BG_VOLUME = 0.035
+
+# ល្បឿនសំឡេងអាន៖ មិនបន្ថយយឺតពេក មិនបង្កើនលឿនពេក ដើម្បីឱ្យស្តាប់ទៅធម្មជាតិ
+SPEED_MIN = 0.93
+SPEED_MAX = 1.5
+# ទុកពេលបន្ថែមក្រោយមាត់និយាយចប់ (វិនាទី) ឱ្យសំឡេងអានមិនកាត់ចុងឃ្លា
+TAIL_PAD = 0.25
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
@@ -2593,7 +2600,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     n = 0
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
-        filters.append(f"[0:a]volume={BG_VOLUME}[bg]")
+        filters.append(f"[0:a]aresample=24000,volume={BG_VOLUME}[bg]")
         n = 1
     first_voice = n
     n_seg = len(segments)
@@ -2611,13 +2618,14 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     def gen(i):
         s_, e_, t_ = segments[i]
         next_s_ = segments[i + 1][0] if i + 1 < n_seg else duration
-        slot0 = max(0.6, min(next_s_ - 0.08, e_ + 0.3) - s_)
+        slot0 = max(0.6, min(next_s_ - 0.08, e_ + TAIL_PAD) - s_)
         path_ = os.path.join(folder, f"tts_{i}.mp3")
         try:
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
-            if d_ > slot0 * 1.05:
+            # បើវែងពេកហួសកម្រិតដែលអាចបង្កើនល្បឿនបានស្រួល → កាត់ឃ្លាឱ្យខ្លី ជាជាងអានលឿនពេក
+            if d_ > slot0 * 1.2:
                 t2 = t_
                 if client is not None:
                     t2 = shorten_khmer(client, model, t_, slot0)
@@ -2673,14 +2681,15 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             continue
         d, f0, _tb = res
         next_s = segments[i + 1][0] if i + 1 < n_seg else duration
+        # ចាប់ផ្តើមពេលមាត់ដើមចាប់ផ្តើមនិយាយ (មិនមុនពេលសំឡេងមុនចប់)
         start = max(s, cursor)
         if start >= duration - 0.3:
             break
-        slot = max(0.6, min(next_s - 0.08, e + 0.15) - start)
-        speed = min(1.8, max(0.85, d / slot))
-        cursor = start + d / speed + 0.08
+        slot = max(0.6, min(next_s - 0.08, e + TAIL_PAD) - start)
+        speed = min(SPEED_MAX, max(SPEED_MIN, d / slot))
+        cursor = start + d / speed + 0.04
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
-        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
+        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed, "dur": d / speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
                      "eq": voice_eq.get(voices_[i], "")})
     if notes is not None and skipped:
@@ -2712,18 +2721,44 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         chain = "silenceremove=start_periods=1:start_duration=0:start_threshold=-45dB," + chain
         if p.get("eq"):
             chain += "," + p["eq"]
+        # fade ចូល/ចេញ តិចៗ ដើម្បីកុំឱ្យមានសំឡេងគ្រើម/ខ្ទាតនៅចន្លោះឃ្លា
+        fade_out_at = max(0.0, p["dur"] - 0.12)
+        chain += f",afade=t=in:st=0:d=0.02,afade=t=out:st={fade_out_at:.3f}:d=0.06"
         filters.append(f"[{n}:a]{chain},adelay={delay}:all=1[a{n}]")
         n += 1
     if notes is not None:
         for v, (ratios, tgts) in stats.items():
             who = "ប្រុស" if v == VOICE_MALE else "ស្រី"
             notes.append(f"🧬 សំឡេង AI {who}៖ ~{int(base[v])}Hz → " f"សំឡេងដើម ~{int(statistics.median(tgts))}Hz " f"(កែ ×{statistics.mean(ratios):.2f})")
-    labels = "[bg]" if keep_bg else ""
-    labels += "".join(f"[a{k}]" for k in range(first_voice, n))
-    limiter = ",alimiter=limit=0.95" if emotions is not None else ""
-    fc = (";".join(filters) + f";{labels}amix=inputs={n}:dropout_transition=0," f"volume={n}{limiter}[out]")
-    run_ffmpeg(inputs + ["-filter_complex", fc, "-map", "[out]", "-t", f"{duration:.2f}", "dub.wav"], cwd=folder)
-    return os.path.exists(os.path.join(folder, "dub.wav"))
+
+    vlabels = "".join(f"[a{k}]" for k in range(first_voice, n))
+    voice_count = n - first_voice
+    base_graph = ";".join(filters)
+
+    # ទម្រង់ធម្មតា (គ្មាន ducking) — ប្រើជាបម្រុង
+    plain_labels = ("[bg]" if keep_bg else "") + vlabels
+    fc_plain = (base_graph + f";{plain_labels}amix=inputs={n}:dropout_transition=0,"
+                f"volume={n},alimiter=limit=0.95[out]")
+
+    out_path = os.path.join(folder, "dub.wav")
+    used_duck = False
+    if keep_bg:
+        # Ducking៖ សំឡេងដើមធ្លាក់ចុះស្វ័យប្រវត្តិពេល AI កំពុងនិយាយ ហើយឡើងវិញពេលស្ងាត់
+        fc_duck = (base_graph
+                   + f";{vlabels}amix=inputs={voice_count}:dropout_transition=0,volume={voice_count}[v]"
+                   + ";[v]asplit=2[v1][v2]"
+                   + ";[bg][v1]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=350[bgd]"
+                   + ";[bgd][v2]amix=inputs=2:dropout_transition=0,volume=2,alimiter=limit=0.95[out]")
+        try:
+            run_ffmpeg(inputs + ["-filter_complex", fc_duck, "-map", "[out]", "-t", f"{duration:.2f}", "dub.wav"], cwd=folder)
+            used_duck = os.path.exists(out_path)
+        except RuntimeError:
+            used_duck = False
+    if not used_duck:
+        run_ffmpeg(inputs + ["-filter_complex", fc_plain, "-map", "[out]", "-t", f"{duration:.2f}", "dub.wav"], cwd=folder)
+    if notes is not None and keep_bg and used_duck:
+        notes.append("🔉 សំឡេងដើមបន្ថយស្វ័យប្រវត្តិពេល AI កំពុងនិយាយ")
+    return os.path.exists(out_path)
 
 
 def build_video_filter(max_side):
