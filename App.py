@@ -678,6 +678,22 @@ def khmer_ratio(segments):
     return sum(1 for _, _, t in segments if has_khmer(t)) / len(segments)
 
 
+SITE_PREFIX_RE = re.compile(
+    r"^(ssstik[._\-\s]*io|snaptik|tikmate|savetik|musicaldown|tikwm|ttdown|tiktok)[._\-\s]*",
+    re.I,
+)
+
+
+def clean_name(name):
+    out = str(name or "")
+    for _ in range(3):
+        new = SITE_PREFIX_RE.sub("", out)
+        if new == out:
+            break
+        out = new
+    return out.strip() or "Video"
+
+
 def safe_filename(name):
     base = os.path.splitext(str(name))[0]
     base = re.sub(r"[^\w\-]+", "_", base).strip("_")[:40]
@@ -833,8 +849,62 @@ def normalize_link(url):
     return url
 
 
+def is_tiktok_url(url):
+    try:
+        return "tiktok.com" in urllib.parse.urlparse(url).netloc.lower()
+    except Exception:
+        return False
+
+
+def download_tiktok(url, path, progress):
+    try:
+        import yt_dlp
+    except Exception:
+        raise UserError("មិនទាន់បានដំឡើង yt-dlp ទេ។ សូមបន្ថែម yt-dlp ក្នុង requirements.txt។")
+    limit = MAX_DOWNLOAD_MB * 1024 * 1024
+    folder = os.path.dirname(path)
+    out_tpl = os.path.join(folder, "tt_download.%(ext)s")
+
+    def hook(d):
+        try:
+            if d.get("status") == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                if total:
+                    progress.progress(min(1.0, d.get("downloaded_bytes", 0) / total))
+        except Exception:
+            pass
+
+    opts = {
+        "outtmpl": out_tpl,
+        "format": "best[ext=mp4]/best",
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "max_filesize": limit,
+        "socket_timeout": 30,
+        "progress_hooks": [hook],
+    }
+    got = None
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(url, download=True)
+            got = ydl.prepare_filename(info)
+    except Exception:
+        raise UserError("ទាញយកវីដេអូ TikTok មិនបានទេ។ សូមពិនិត្យតំណ ឬសាកម្តងទៀត។")
+    if not got or not os.path.exists(got):
+        import glob
+        found = glob.glob(os.path.join(folder, "tt_download.*"))
+        got = found[0] if found else None
+    if not got or os.path.getsize(got) < 1000:
+        raise UserError("ទាញយកវីដេអូ TikTok មិនបានទេ។")
+    shutil.move(got, path)
+    progress.progress(1.0)
+
+
 def download_video(url, path, progress):
     url = normalize_link(url)
+    if is_tiktok_url(url):
+        return download_tiktok(url, path, progress)
     limit = MAX_DOWNLOAD_MB * 1024 * 1024
     try:
         request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -3125,7 +3195,7 @@ with st.container(border=True):
     if mode.startswith("📁"):
         uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
     else:
-        link_text = st.text_area("តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
+        link_text = st.text_area("តំណវីដេអូ (TikTok, .mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
 
 st.subheader("② ⚙️ ការកំណត់")
 with st.container(border=True):
@@ -3179,13 +3249,12 @@ too_many = False
 if uploaded_files:
     too_many = len(uploaded_files) > MAX_VIDEOS
     for f in uploaded_files[:MAX_VIDEOS]:
-        items.append({"name": f.name, "file": f, "url": None})
+        items.append({"name": clean_name(f.name), "file": f, "url": None})
 else:
     lines = [ln.strip() for ln in link_text.splitlines() if ln.strip().lower().startswith(("http://", "https://"))]
     too_many = len(lines) > MAX_VIDEOS
     for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
-        tail = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
-        items.append({"name": tail or f"តំណទី {i}", "file": None, "url": url})
+        items.append({"name": f"Video {i}", "file": None, "url": url})
 
 if too_many:
     st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
