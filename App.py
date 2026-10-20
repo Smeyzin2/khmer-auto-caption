@@ -548,7 +548,7 @@ def render_hero(max_videos=5):
     st.markdown(
         f"""
         <div class="kac-hero">
-          <h1>Khmer Auto Caption</h1>
+          <h1>បកប្រែរឿងមកនិយាយភាសាខ្មែរ</h1>
           <p>ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ
              (រហូតដល់ {max_videos} វីដេអូស្មើគ្នា)</p>
           <div class="kac-pills">
@@ -1330,6 +1330,7 @@ def groq_request(api_key, audio_path, model, language):
     fields = [
         ("model", model), ("response_format", "verbose_json"),
         ("temperature", "0"), ("timestamp_granularities[]", "segment"),
+        ("timestamp_granularities[]", "word"),
     ]
     if language:
         fields.append(("language", language))
@@ -1705,6 +1706,19 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             return gs, "Google Speech (km-KH)", 0
     data, model = groq_transcribe(groq_key, audio_path, code, status)
     detected = str(data.get("language", "") or "").lower()
+    words = []
+    for w in data.get("words") or []:
+        try:
+            words.append((float(w.get("start", 0)), float(w.get("end", 0))))
+        except Exception:
+            continue
+
+    def refine(s0, e0):
+        ws = [(a, b) for a, b in words if s0 - 0.05 <= (a + b) / 2 <= e0 + 0.05]
+        if not ws:
+            return s0, e0
+        return max(0.0, min(a for a, _ in ws)), max(b for _, b in ws)
+
     keep = []
     for sg in data.get("segments") or []:
         text = str(sg.get("text", "")).strip()
@@ -1717,6 +1731,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             e = float(sg.get("end", 0))
         except Exception:
             continue
+        s, e = refine(s, e)
         s = min(max(0.0, s), duration)
         e = min(max(e, s + 0.4), duration + 0.5)
         keep.append((s, e, text))
@@ -2591,8 +2606,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         start = max(s, cursor)
         if start >= duration - 0.3:
             break
-        slot = max(0.6, min(next_s - 0.08, e + 0.3) - start)
-        speed = min(1.8, max(1.0, d / slot))
+        slot = max(0.6, min(next_s - 0.08, e + 0.15) - start)
+        speed = min(1.8, max(0.85, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
