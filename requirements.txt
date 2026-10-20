@@ -4,3 +4,4 @@ imageio-ffmpeg
 fonttools
 edge-tts
 deep-translator
+yt-dlp
