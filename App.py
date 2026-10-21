@@ -2718,7 +2718,7 @@ BG_VOLUME = 0.07
 
 # ល្បឿនអានធម្មតា៖ មិនឱ្យលឿនពេក ឬយឺតពេក
 SPEED_MIN = 0.95
-SPEED_MAX = 1.25
+SPEED_MAX = 1.4
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
@@ -3685,7 +3685,7 @@ def workspace(page_id):
                     dub_on = st.checkbox("បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)", key=f"dub_{page_id}")
                 if dub_on:
                     voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()), key="voice")
-                    speed = st.slider("ល្បឿនអាន", 0.8, 1.2, 1.0, 0.05, key="spd", format="%.2fx")
+                    speed = st.slider("ល្បឿនអាន", 0.8, 1.4, 1.0, 0.05, key="spd", format="%.2fx")
                     st.caption("💡 ដើម្បីឱ្យ AI និយាយធម្មតា និងរលូនបំផុត សូមកុំបើកជម្រើសបន្ថែម។")
                     with st.expander("⚙ ជម្រើសបន្ថែម"):
                         auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយ", key="auto_gender")
