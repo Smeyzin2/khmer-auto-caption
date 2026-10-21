@@ -32,6 +32,13 @@ st.set_page_config(
     layout="centered",
 )
 
+# ទំហំ Upload អតិបរមា (MB) = 1GB
+MAX_UPLOAD_MB = 1024
+try:
+    st._config.set_option("server.maxUploadSize", MAX_UPLOAD_MB)
+except Exception:
+    pass
+
 # =====================================================================
 #  THEME (ស្បែកថ្មី v2)
 # =====================================================================
@@ -568,7 +575,7 @@ DEBUG = bool(st.secrets.get("DEBUG", False))
 
 REQUEST_TIMEOUT_MS = 120000
 MAX_CAPTION_CHARS = 26
-MAX_DOWNLOAD_MB = 300
+MAX_DOWNLOAD_MB = 1024
 MAX_VIDEOS = 5
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
@@ -3228,7 +3235,7 @@ with st.container(border=True):
     link_text = ""
 
     if mode.startswith("📁"):
-        uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
+        uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន · អតិបរមា 1GB ក្នុងមួយឯកសារ)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="អាច Upload បានដល់ 1GB ក្នុងមួយឯកសារ។ បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
     else:
         link_text = st.text_area("តំណវីដេអូ (TikTok, .mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
 
