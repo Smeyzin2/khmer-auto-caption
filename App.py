@@ -338,6 +338,12 @@ hr { border-color: var(--line) !important; margin: 1.2rem 0 !important; }
   .kac-feats { display: none !important; }
   .kac-rotate { display: none !important; }
 }
+
+/* ---------- កែបញ្ហាមាតិកាមិនពេញអេក្រង់ ---------- */
+[data-testid="stAppViewContainer"], [data-testid="stMain"] {
+  overflow-y: auto !important;
+}
+html, body { min-height: 100%; background: var(--bg) !important; }
 </style>
 """
 
@@ -2464,7 +2470,6 @@ def eleven_delete_voice(key, voice_id):
         pass
 
 
-
 EQ_CENTERS = [150, 250, 400, 630, 1000, 1600, 2500, 4000, 6300]
 
 
@@ -3162,6 +3167,7 @@ USER_ID = get_user_id()
 sync_browser_id(USER_ID)
 
 # បង្ហាញជាទំព័រ PC លើទូរសព្ទ៖ បង្រួមទាំងមូលតាមទទឹងអេក្រង់ (ដេក និងឈរ)
+# កែ៖ ពេលបង្រួម (zoom) ត្រូវបង្កើនកម្ពស់ឱ្យស្មើ innerHeight / zoom ដើម្បីឱ្យមាតិកាពេញអេក្រង់
 components.html(
     """
     <script>
@@ -3169,12 +3175,31 @@ components.html(
       var TARGET = 1100;
       function fit() {
         try {
-          var w = window.parent.innerWidth || 1200;
+          var p = window.parent;
+          var d = p.document;
+          var w = p.innerWidth || 1200;
           var z = w >= TARGET ? 1 : Math.max(0.4, w / TARGET);
-          window.parent.document.documentElement.style.zoom = z;
+          d.documentElement.style.zoom = z;
+          var h = Math.round((p.innerHeight || 800) / z) + "px";
+          var sels = [
+            '[data-testid="stApp"]',
+            '[data-testid="stAppViewContainer"]',
+            '[data-testid="stMain"]',
+            'section.main'
+          ];
+          sels.forEach(function (sel) {
+            var el = d.querySelector(sel);
+            if (el) {
+              el.style.height = h;
+              el.style.minHeight = h;
+            }
+          });
         } catch (e) {}
       }
       fit();
+      setTimeout(fit, 300);
+      setTimeout(fit, 1000);
+      setTimeout(fit, 2500);
       try { window.parent.addEventListener("resize", fit); } catch (e) {}
       try { window.parent.addEventListener("orientationchange", function () { setTimeout(fit, 250); }); } catch (e) {}
     })();
