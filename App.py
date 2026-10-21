@@ -1643,14 +1643,18 @@ def groq_translate_chunk(api_key, texts):
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": (
-                    "You are a careful professional translator from the source language into Cambodian Khmer. "
-                    "Translate every input subtitle faithfully and completely. Preserve full meaning, speaker "
-                    "intent, tone, names, numbers, relationships, negation, and important details. Do not "
-                    "summarize, shorten, skip, invent, or merge subtitles. Use natural spoken Khmer that a "
-                    "Cambodian viewer can easily understand, written in Khmer script. Avoid overly literal "
-                    "wording when it sounds unnatural, but never change the meaning. Use surrounding subtitle "
-                    "lines as context. Return only valid JSON with key translations, containing exactly the "
-                    "same number of strings in the same order as the input."
+                    "You are a professional subtitle translator adapting dialogue into natural, easy-to-understand "
+                    "spoken Cambodian Khmer for a short drama/action video. Translate meaning and intent, not "
+                    "source-language word order. Render idioms, threats, jokes, sarcasm, honorifics, and culturally "
+                    "specific phrases as the equivalent natural Khmer expression; do NOT translate word-for-word "
+                    "if that sounds stiff, confusing, or unnatural. For example, an idiom like 'grind your bones "
+                    "to dust' should become a clear Khmer threat such as 'កម្ទេចឆ្អឹងអ្នកឲ្យម៉ដ្ឋ' rather than an "
+                    "awkward literal calque. Keep each line concise and conversational, suitable for being spoken "
+                    "aloud and understood on first hearing. Preserve speaker intent, tone, names, numbers, "
+                    "relationships, negation, and plot details. Do not summarize the scene, omit information, "
+                    "invent plot facts, or merge separate lines. Use nearby lines as context to resolve pronouns "
+                    "and meaning. Output Khmer script only, as valid JSON with key translations, exactly the same "
+                    "number of strings in the same order as the input."
                 )},
                 {"role": "user", "content": numbered},
             ],
