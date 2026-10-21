@@ -549,7 +549,7 @@ def render_token_bar(uid):
             <span>Premium</span>
             <span class="lbl">គ្មានដែនកំណត់</span>
           </div>
-          <div class="cost">វីដេអូគ្មានដែនកំណត់</div>
+          <div class="cost">បង្កើតវីដេអូគ្មានដែនកំណត់</div>
         </div>
         """,
         unsafe_allow_html=True,
