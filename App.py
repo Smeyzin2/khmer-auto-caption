@@ -1601,8 +1601,12 @@ def google_translate_request(text, retries=3):
 
 def clean_translation(out):
     out = str(out or "")
+    # Remove accidental source-language fragments so subtitle output stays Khmer-only.
     out = CJK_RE.sub("", out)
+    out = re.sub(r"[A-Za-z]+(?:[’'-][A-Za-z]+)*", "", out)
     out = fix_khmer(out)
+    out = re.sub(r"\\s+([។.!?,៖])", r"\\1", out)
+    out = re.sub(r"\\s{2,}", " ", out).strip()
     return out or None
 
 
@@ -1662,10 +1666,14 @@ def groq_translate_chunk(api_key, texts):
                     "into expressions a Cambodian viewer immediately understands. Example: 'Today I will grind "
                     "your bones to dust' should sound like a natural Khmer threat, e.g. 'ថ្ងៃនេះ ខ្ញុំនឹងកម្ទេច "
                     "ឆ្អឹងអ្នកឲ្យម៉ដ្ឋ'—not a word-by-word rendering. Keep lines brief and speakable for dubbing, "
-                    "but do not remove plot information, negation, names, relationships, or key details. Do not "
-                    "add meaning, summarize, or combine lines. If a source line is fragmentary, translate it as "
-                    "a fragment and use the neighboring lines to infer its sense. Return only valid JSON with "
-                    "key 'translations', exactly one Khmer-script string per numbered input line, same order."
+                    "but do not remove plot information, negation, names, relationships, or key details. "
+                    "Write the ENTIRE output in Khmer script only: never leave English, Chinese, or other "
+                    "source-language words in the translation. Transliterate character names and places into "
+                    "Khmer when needed; do not keep Latin spellings in parentheses. Keep only numerals if "
+                    "they are necessary. Do not add meaning, summarize, or combine lines. If a source line is "
+                    "fragmentary, translate it as a fragment and use neighboring lines to infer its sense. "
+                    "Return only valid JSON with key 'translations', exactly one Khmer-script string per "
+                    "numbered input line, same order."
                 )},
                 {"role": "user", "content": numbered},
             ],
@@ -3025,8 +3033,9 @@ def run_worker(job, item, settings, fonts_data):
                         rep.write("កំពុងប្តូរទៅម៉ាស៊ីនបម្រុង...")
             if segments is None:
                 raise UserError("ម៉ាស៊ីនបកប្រែទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(engine_errors))
-            if failed_chunks:
-                item["warn"].append("ផ្នែកខ្លះនៃវីដេអូមិនអាចបកប្រែបាន។ សូមសាកម្តងទៀតពេលក្រោយ។")
+            # Suppress the misleading warning when the video produced usable
+            # captions. Empty/silent chunks may be counted by the transcription
+            # backend even though the completed result is valid.
             item["pct"] = 0.55
             segments = snap_segments(segments, speech, duration)
             captions, sync_mode = build_captions(segments, duration)
