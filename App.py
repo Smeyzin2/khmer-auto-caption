@@ -1523,6 +1523,17 @@ def groq_request(api_key, audio_path, model, language):
     ]
     if language:
         fields.append(("language", language))
+        # Whisper prompt helps keep names and language-specific writing stable.
+        asr_hint = (
+            "Transcribe the audio in its original language exactly as spoken. "
+            "Do not translate it. Preserve names, short words, negations, and complete phrases. "
+            "Use punctuation naturally. If speech is unclear, do not invent words."
+        )
+        fields.append(("prompt", asr_hint))
+    else:
+        fields.append(("prompt",
+            "First identify the spoken language, then transcribe exactly in that language. "
+            "Do not translate or paraphrase. Preserve names, negations, and complete phrases."))
     parts = []
     for name, value in fields:
         parts.append((f"--{boundary}\r\n" f'Content-Disposition: form-data; name="{name}"\r\n\r\n' f"{value}\r\n").encode("utf-8"))
@@ -1643,18 +1654,18 @@ def groq_translate_chunk(api_key, texts):
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": (
-                    "You are a professional subtitle translator adapting dialogue into natural, easy-to-understand "
-                    "spoken Cambodian Khmer for a short drama/action video. Translate meaning and intent, not "
-                    "source-language word order. Render idioms, threats, jokes, sarcasm, honorifics, and culturally "
-                    "specific phrases as the equivalent natural Khmer expression; do NOT translate word-for-word "
-                    "if that sounds stiff, confusing, or unnatural. For example, an idiom like 'grind your bones "
-                    "to dust' should become a clear Khmer threat such as 'កម្ទេចឆ្អឹងអ្នកឲ្យម៉ដ្ឋ' rather than an "
-                    "awkward literal calque. Keep each line concise and conversational, suitable for being spoken "
-                    "aloud and understood on first hearing. Preserve speaker intent, tone, names, numbers, "
-                    "relationships, negation, and plot details. Do not summarize the scene, omit information, "
-                    "invent plot facts, or merge separate lines. Use nearby lines as context to resolve pronouns "
-                    "and meaning. Output Khmer script only, as valid JSON with key translations, exactly the same "
-                    "number of strings in the same order as the input."
+                    "You are translating consecutive subtitle dialogue from a Chinese/English drama into "
+                    "natural spoken Cambodian Khmer. The numbered source lines are in chronological order; "
+                    "read them together as a short conversation so pronouns, threats, insults, and replies make "
+                    "sense. Translate the intended meaning and emotional tone, NOT the source-language grammar "
+                    "or word order. Avoid stiff calques and textbook Khmer. Convert idioms and figurative threats "
+                    "into expressions a Cambodian viewer immediately understands. Example: 'Today I will grind "
+                    "your bones to dust' should sound like a natural Khmer threat, e.g. 'ថ្ងៃនេះ ខ្ញុំនឹងកម្ទេច "
+                    "ឆ្អឹងអ្នកឲ្យម៉ដ្ឋ'—not a word-by-word rendering. Keep lines brief and speakable for dubbing, "
+                    "but do not remove plot information, negation, names, relationships, or key details. Do not "
+                    "add meaning, summarize, or combine lines. If a source line is fragmentary, translate it as "
+                    "a fragment and use the neighboring lines to infer its sense. Return only valid JSON with "
+                    "key 'translations', exactly one Khmer-script string per numbered input line, same order."
                 )},
                 {"role": "user", "content": numbered},
             ],
