@@ -3179,8 +3179,10 @@ components.html(
           var d = p.document;
           var w = p.innerWidth || 1200;
           var z = w >= TARGET ? 1 : Math.max(0.4, w / TARGET);
-          d.documentElement.style.zoom = z;
           var h = Math.round((p.innerHeight || 800) / z) + "px";
+          if (p.__kacZ === z && p.__kacH === h) { return; }
+          p.__kacZ = z; p.__kacH = h;
+          d.documentElement.style.zoom = z;
           var sels = [
             '[data-testid="stApp"]',
             '[data-testid="stAppViewContainer"]',
@@ -3198,8 +3200,6 @@ components.html(
       }
       fit();
       setTimeout(fit, 300);
-      setTimeout(fit, 1000);
-      setTimeout(fit, 2500);
       try { window.parent.addEventListener("resize", fit); } catch (e) {}
       try { window.parent.addEventListener("orientationchange", function () { setTimeout(fit, 250); }); } catch (e) {}
     })();
@@ -3544,14 +3544,15 @@ def workspace(page_id):
         with preview_ph:
             with st.container(border=True):
                 st.markdown('<div class="kac-card-title">🎬 មើលជាមុន · Preview</div>', unsafe_allow_html=True)
-                if uploaded_files:
+                if uploaded_files and st.checkbox("▶ មើលវីដេអូដែលបានជ្រើស", key="prev_vid"):
                     try:
                         st.video(uploaded_files[0])
                     except Exception:
                         pass
                 px = max(12, int(font_size * 0.85))
-                shadow = ",".join(f"{dx}px {dy}px 0 #000" for dx in range(-outline_size, outline_size + 1)
-                                  for dy in range(-outline_size, outline_size + 1) if dx or dy)
+                o = outline_size
+                shadow = ",".join(f"{dx}px {dy}px 0 #000" for dx, dy in
+                                  [(-o, 0), (o, 0), (0, -o), (0, o), (-o, -o), (o, -o), (-o, o), (o, o)])
                 st.markdown(
                     f'<div class="kac-stage" style="align-items:{valign}">'
                     f'<div class="cap" style="color:{css_color};font-size:{px}px;text-shadow:{shadow}">'
