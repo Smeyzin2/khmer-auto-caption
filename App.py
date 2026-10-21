@@ -325,18 +325,14 @@ hr { border-color: var(--line) !important; margin: 1.2rem 0 !important; }
 }
 .kac-stage .cap { position: relative; z-index: 2; width: 100%; text-align: center; font-weight: 800; line-height: 1.3; }
 
-/* ---------- Landscape phone ---------- */
-@media (max-height: 540px) and (orientation: landscape) {
-  .block-container { padding: .4rem .8rem 2rem !important; }
-  .kac-hero { padding: 8px 14px; margin-bottom: 8px; }
-  .kac-hero h1 { font-size: 1.2rem !important; }
-  .kac-hero p, .kac-feats { display: none; }
-  [data-testid="stSidebar"] { min-width: 210px !important; max-width: 210px !important; }
-  .kac-brand .logo { width: 48px; height: 48px; font-size: 1.4rem; }
-  .kac-sec { margin: 10px 0 6px; }
-  .kac-stage { height: 110px; }
+/* ---------- Landscape phone: បង្ហាញដូច PC (បង្រួមទាំងមូល) ---------- */
+@media (orientation: landscape) and (max-width: 1100px) {
+  .block-container { padding: .6rem 1rem 3rem !important; }
+  .kac-hero { padding: 10px 16px; margin-bottom: 10px; }
+  .kac-hero p { display: none; }
+  .kac-stage { height: 120px; }
 }
-@media (max-width: 900px) {
+@media (max-width: 900px) and (orientation: portrait) {
   .block-container { padding: .6rem .6rem 3rem !important; }
   .kac-feats { display: none; }
 }
@@ -3162,6 +3158,23 @@ ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
 USER_ID = get_user_id()
 sync_browser_id(USER_ID)
+
+# បង្ខំឱ្យទូរសព្ទបង្ហាញជា "ទំព័រ PC" (ទទឹង ១៣០០) ទាំងដេក និងឈរ
+components.html(
+    """
+    <script>
+    (function () {
+      try {
+        var d = window.parent.document;
+        var m = d.querySelector('meta[name="viewport"]');
+        if (!m) { m = d.createElement('meta'); m.name = 'viewport'; d.head.appendChild(m); }
+        m.setAttribute('content', 'width=1300, initial-scale=0, user-scalable=yes');
+      } catch (e) {}
+    })();
+    </script>
+    """,
+    height=0,
+)
 
 if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
