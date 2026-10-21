@@ -1602,7 +1602,19 @@ def groq_translate_chunk(api_key, texts):
             "model": model, "temperature": 0.2,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": ("You translate subtitles into natural, fluent " "Khmer (Khmer script only). Translate meaning, " "not word for word. Return JSON: " "{\"translations\": [...]} with exactly the " "same number of items, in the same order.")},
+                {"role": "system", "content": (
+                    "You are a professional Khmer subtitle translator. Translate every "
+                    "input line into clear, natural, fluent spoken Cambodian Khmer, "
+                    "using Khmer script. Preserve the complete meaning of each line: "
+                    "do not omit words, facts, names, numbers, questions, or emotional "
+                    "tone; do not add information; do not summarize or merge lines. "
+                    "Use everyday Khmer phrasing that sounds natural when read aloud, "
+                    "not awkward word-for-word translation. Keep each translation in "
+                    "the same numbered position. If a name has no Khmer equivalent, "
+                    "write it phonetically in Khmer when practical. Return only JSON "
+                    "with exactly this shape: {\\\"translations\\\": [\\\"...\\\"]} "
+                    "and exactly the same number of translations as input lines."
+                )},
                 {"role": "user", "content": numbered},
             ],
         }).encode("utf-8")
@@ -2711,12 +2723,10 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             d_, _, _ = probe_media(path_)
             if d_ > slot0 * SPEED_MAX:
                 t2 = t_
-                if client is not None:
-                    t2 = shorten_khmer(client, model, t_, slot0)
-                elif groq_key:
-                    t2 = shorten_groq(groq_key, t_, slot0)
-                if t2 != t_ and tts_retry(t2, voices_[i], path_, pros[i]):
-                    d_, _, _ = probe_media(path_)
+                # Do not shorten Khmer dialogue to fit a timing slot: shortening can
+                # remove words and make the dubbed story skip information. Keep the
+                # complete sentence; the final timing pass adjusts playback speed.
+                pass
             if clone_voice:
                 try:
                     eleven_sts(eleven_key, clone_voice, path_)
@@ -2776,8 +2786,14 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
                      "eq": voice_eq.get(voices_[i], "")})
-    if notes is not None and skipped:
-        notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
+    if skipped:
+        if notes is not None:
+            notes.append(
+                f"⚠️ មិនអាចបង្កើតសំឡេងបាន {skipped} ឃ្លា។ "
+                "កម្មវិធីមិនបង្កើតសំឡេងអានដែលខ្វះឃ្លាទេ។"
+            )
+        # Do not render an incomplete dub: missing TTS clips would omit dialogue.
+        return False
     if not plan:
         return False
     base = {}
