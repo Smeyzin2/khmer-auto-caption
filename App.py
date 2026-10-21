@@ -30,7 +30,7 @@ st.set_page_config(
     page_title="បកប្រែរឿងមកនិយាយភាសាខ្មែរ",
     page_icon="🎬",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # =====================================================================
@@ -88,12 +88,12 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
 [data-testid="stIconMaterial"], [class*="material-symbols"], .material-icons {
   font-family: 'Material Symbols Rounded', 'Material Icons' !important;
 }
-[data-testid="stHeader"] { background: transparent; }
+[data-testid="stHeader"], [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] { display: none !important; }
 [data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] {
   display: flex !important; color: #fff !important;
 }
 [data-testid="stSidebarCollapsedControl"] *, [data-testid="collapsedControl"] * { color: #fff !important; }
-.block-container { max-width: 1500px; padding: 1rem 1.2rem 4rem; }
+.block-container { max-width: 100% !important; padding: .4rem 1.2rem 3rem !important; }
 
 .stMarkdown, .stMarkdown p, [data-testid="stText"], h1, h2, h3,
 label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p {
@@ -237,6 +237,8 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 }
 [data-testid="stMain"] [data-testid="stRadio"] label:has(input:checked) *, .main [data-testid="stRadio"] label:has(input:checked) * { color: #fff !important; }
 
+[data-testid="stMain"] [data-testid="stRadio"] [role="radiogroup"] label { min-height: 46px; align-items: center; }
+
 /* ---------- Checkbox ---------- */
 [data-testid="stCheckbox"] label > span:first-child, [data-baseweb="checkbox"] > span:first-child {
   border-radius: 7px !important; border: 1.5px solid #5F6BB5 !important; background-color: transparent !important;
@@ -325,16 +327,16 @@ hr { border-color: var(--line) !important; margin: 1.2rem 0 !important; }
 }
 .kac-stage .cap { position: relative; z-index: 2; width: 100%; text-align: center; font-weight: 800; line-height: 1.3; }
 
-/* ---------- Landscape phone: បង្ហាញដូច PC (បង្រួមទាំងមូល) ---------- */
-@media (orientation: landscape) and (max-width: 1100px) {
-  .block-container { padding: .6rem 1rem 3rem !important; }
-  .kac-hero { padding: 10px 16px; margin-bottom: 10px; }
-  .kac-hero p { display: none; }
-  .kac-stage { height: 120px; }
-}
-@media (max-width: 900px) and (orientation: portrait) {
-  .block-container { padding: .6rem .6rem 3rem !important; }
-  .kac-feats { display: none; }
+/* ---------- ទូរសព្ទ៖ រក្សា layout ដូច PC ---------- */
+@media (max-width: 1100px) {
+  [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; }
+  [data-testid="stColumn"], [data-testid="column"] { min-width: 0 !important; }
+  .block-container { padding: .3rem .8rem 3rem !important; }
+  .kac-hero { padding: 8px 14px !important; margin-bottom: 8px !important; }
+  .kac-hero h1 { font-size: 1.5rem !important; }
+  .kac-hero p { font-size: .8rem !important; margin-top: 2px !important; }
+  .kac-feats { display: none !important; }
+  .kac-rotate { display: none !important; }
 }
 </style>
 """
@@ -2644,33 +2646,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 eqs = eq_filters(ref_bands, np.mean(arrs, axis=0).tolist())
                 if eqs:
                     voice_eq[v_] = eqs
-        if notes is not None and voice_eq:
-            notes.append("🎚 ផ្គូផ្គងពណ៌សំឡេងស្រដៀងសំឡេងគំរូ")
-    if notes is not None and clone_voice:
-        notes.append(f"🧑‍🎤 ក្លូនសំឡេងបាន {clone_stats['ok']}/{n_seg} ឃ្លា"
-                     + (f" (បរាជ័យ: {clone_stats['err']})" if clone_stats["fail"] else ""))
-    cursor = 0.0
-    plan = []
-    skipped = 0
-    for i, res in enumerate(results):
-        s, e, t = segments[i]
-        if res is None:
-            skipped += 1
-            continue
-        d, f0, _tb = res
-        next_s = segments[i + 1][0] if i + 1 < n_seg else duration
-        start = max(s, cursor)
-        if start >= duration - 0.3:
-            break
-        slot = max(0.8, min(next_s - 0.05, e + 0.5) - start)
-        # ល្បឿនជិតធម្មតា (១.០) បើវែងពេកទើបបង្កើនបន្តិច មិនលើសកំណត់
-        speed = min(SPEED_MAX, max(SPEED_MIN, d / slot))
-        cursor = start + d / speed + 0.12
-        target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
-        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
-                     "voice": voices_[i], "f0": f0 if target else None, "target": target,
-                     "eq": voice_eq.get(voices_[i], "")})
-    if notes is not None and skipped:
+        if notes is not None and skipped:
         notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
     if not plan:
         return False
@@ -3159,17 +3135,22 @@ ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 USER_ID = get_user_id()
 sync_browser_id(USER_ID)
 
-# បង្ខំឱ្យទូរសព្ទបង្ហាញជា "ទំព័រ PC" (ទទឹង ១៣០០) ទាំងដេក និងឈរ
+# បង្ហាញជាទំព័រ PC លើទូរសព្ទ៖ បង្រួមទាំងមូលតាមទទឹងអេក្រង់ (ដេក និងឈរ)
 components.html(
     """
     <script>
     (function () {
-      try {
-        var d = window.parent.document;
-        var m = d.querySelector('meta[name="viewport"]');
-        if (!m) { m = d.createElement('meta'); m.name = 'viewport'; d.head.appendChild(m); }
-        m.setAttribute('content', 'width=1300, initial-scale=0, user-scalable=yes');
-      } catch (e) {}
+      var TARGET = 1100;
+      function fit() {
+        try {
+          var w = window.parent.innerWidth || 1200;
+          var z = w >= TARGET ? 1 : Math.max(0.4, w / TARGET);
+          window.parent.document.documentElement.style.zoom = z;
+        } catch (e) {}
+      }
+      fit();
+      try { window.parent.addEventListener("resize", fit); } catch (e) {}
+      try { window.parent.addEventListener("orientationchange", function () { setTimeout(fit, 250); }); } catch (e) {}
     })();
     </script>
     """,
@@ -3184,12 +3165,12 @@ if not GEMINI_KEY and not GROQ_KEY:
 #  ជម្រើសផ្សេងៗ
 # ---------------------------------------------------------------------
 PAGE_LABELS = {
-    "home": "🏠  ទំព័រដើម · Home",
-    "sub": "💬  ដាក់អក្សរខ្មែរ · Subtitle",
-    "dub": "🎙  សំឡេង AI · Dubbing",
-    "batch": "📚  ច្រើនវីដេអូ · Batch",
-    "videos": "🎞  វីដេអូរបស់ខ្ញុំ · My Videos",
-    "help": "❓  ជំនួយ · Help",
+    "home": "🏠 ទំព័រដើម",
+    "sub": "💬 អក្សរខ្មែរ",
+    "dub": "🎙 សំឡេង AI",
+    "batch": "📚 ច្រើនវីដេអូ",
+    "videos": "🎞 វីដេអូខ្ញុំ",
+    "help": "❓ ជំនួយ",
 }
 PAGE_IDS = list(PAGE_LABELS.keys())
 
@@ -3228,25 +3209,14 @@ def fmt_mb(n):
 # ---------------------------------------------------------------------
 #  Sidebar (ម៉ឺនុយ)
 # ---------------------------------------------------------------------
-with st.sidebar:
-    st.markdown(
-        '<div class="kac-brand"><div class="logo">🎬</div><b>Khmer Auto Caption</b>'
-        '<span class="tag">Subtitle + Dubbing</span>'
-        '<small>បង្កើតវីដេអូមានអក្សរខ្មែរ និងសំឡេង AI</small></div>',
-        unsafe_allow_html=True,
-    )
-    page_id = st.radio("ម៉ឺនុយ", PAGE_IDS, format_func=lambda k: PAGE_LABELS[k],
-                       label_visibility="collapsed", key="page")
-    render_token_bar(USER_ID)
 
 # ---------------------------------------------------------------------
 #  Header
 # ---------------------------------------------------------------------
 st.markdown(
     '<div class="kac-hero"><div>'
-    '<h1>Khmer <span>Auto Caption</span></h1>'
-    '<p><b class="pill">Subtitle + Dubbing</b>បង្កើតវីដេអូមានអក្សរខ្មែរ និងសំឡេង AI '
-    f'(រហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា)</p></div>'
+    '<h1>បកប្រែរឿងមក<span>និយាយភាសាខ្មែរ</span></h1>'
+    '<p>បង្កើតវីដេអូមានអក្សរខ្មែរ និងសំឡេងអាន AI · ប្រើបានគ្មានដែនកំណត់</p></div>'
     '<div class="kac-feats">'
     '<div><i>💬</i><b>Auto Subtitle</b><small>បង្កើតអក្សរខ្មែរ</small></div>'
     '<div><i>🎙</i><b>AI Dubbing</b><small>បញ្ចូលសំឡេង AI</small></div>'
@@ -3256,6 +3226,40 @@ st.markdown(
     '<div class="kac-rotate">📱 សូមបង្វិលទូរសព្ទដេក (ផ្ដេក) ដើម្បីប្រើបានស្រួលជាងនេះ</div>',
     unsafe_allow_html=True,
 )
+
+nav_col, fs_col = st.columns([6, 1])
+with nav_col:
+    page_id = st.radio("ម៉ឺនុយ", PAGE_IDS, format_func=lambda k: PAGE_LABELS[k],
+                       horizontal=True, label_visibility="collapsed", key="page")
+with fs_col:
+    components.html(
+        """
+        <style>
+          html, body { margin: 0; background: transparent; }
+          button {
+            width: 100%; height: 46px; border-radius: 12px; border: 1.5px solid #2A3270;
+            background: #1A2158; color: #EEF2FF; font-weight: 700; font-size: 15px;
+            font-family: system-ui, sans-serif; cursor: pointer;
+          }
+          button:active { background: #2F6BFF; }
+        </style>
+        <button id="fs">⛶ ពេញអេក្រង់</button>
+        <script>
+          document.getElementById("fs").onclick = function () {
+            try {
+              var d = window.parent.document;
+              var el = d.documentElement;
+              if (d.fullscreenElement || d.webkitFullscreenElement) {
+                (d.exitFullscreen || d.webkitExitFullscreen).call(d);
+              } else {
+                (el.requestFullscreen || el.webkitRequestFullscreen).call(el);
+              }
+            } catch (e) {}
+          };
+        </script>
+        """,
+        height=50,
+    )
 
 
 def section(title, extra=""):
@@ -3368,9 +3372,6 @@ def start_job(items, settings):
         st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
         st.stop()
     prepare_home_font(fonts_data)
-    if not spend_tokens(USER_ID, len(items) * TOKEN_COST):
-        st.error(f"Token មិនគ្រប់ទេ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
-        st.stop()
     record_start(USER_ID, len(items))
     old = st.session_state.get("job")
     if old:
@@ -3498,27 +3499,19 @@ def workspace(page_id):
                                         help="បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា កម្មវិធីនឹងប្តូរទៅមួយទៀតដោយស្វ័យប្រវត្តិ។")
 
         # ----- ប៊ូតុងចាប់ផ្តើម -----
-        affordable = token_balance(USER_ID) // TOKEN_COST
         run = False
         if too_many:
             st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ នឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
         st.markdown('<div class="kac-start">', unsafe_allow_html=True)
         if busy:
             st.button("⏳ កំពុងធ្វើការ... សូមរង់ចាំ", disabled=True, use_container_width=True, key="start_busy")
-        elif affordable <= 0:
-            st.error(f"😅 Token ថ្ងៃនេះអស់ហើយ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
-            st.button("🔒 Token អស់ — ស្អែកមកវិញ", disabled=True, use_container_width=True, key="start_out")
         elif not items:
             st.button("✨ ចាប់ផ្តើមដំណើរការ", disabled=True, use_container_width=True, key="start_none")
             st.caption("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
         else:
-            if len(items) > affordable:
-                st.warning(f"Token នៅសល់គ្រាន់តែ {affordable} វីដេអូប៉ុណ្ណោះ។ នឹងធ្វើតែ {affordable} ដំបូង។")
-                items = items[:affordable]
             label = "✨ ចាប់ផ្តើមដំណើរការ"
             if len(items) > 1:
                 label += f" ({len(items)} វីដេអូ)"
-            label += f" · 🪙 {len(items) * TOKEN_COST} Token"
             run = st.button(label, type="primary", use_container_width=True, key="start_go")
         st.markdown('</div>', unsafe_allow_html=True)
 
