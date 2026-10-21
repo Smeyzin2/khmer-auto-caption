@@ -885,6 +885,12 @@ def get_font_family(path, default):
 def make_fontconfig_env(folder):
     cache_dir = os.path.join(folder, "fc-cache")
     os.makedirs(cache_dir, exist_ok=True)
+    # Rebuild cache for fonts copied into this job's temporary folder.
+    try:
+        subprocess.run(["fc-cache", "-f", folder], stdout=subprocess.PIPE,
+                       stderr=subprocess.PIPE, timeout=15, check=False)
+    except Exception:
+        pass
     conf_path = os.path.join(folder, "fonts.conf")
     conf = (
         '<?xml version="1.0"?>\n'
@@ -1210,12 +1216,17 @@ def build_captions(segments, duration):
 
 
 def write_ass(path, captions, font_family, font_size, outline_size, primary_color, width, height, alignment=2):
+    # libass/fontconfig sometimes fails with family names containing spaces or
+    # metadata aliases. Keep the selected font family explicit and text NFC.
+    font_family = str(font_family or "Battambang").replace(",", " ").strip()
+    if not font_family:
+        font_family = "Battambang"
     play_res_y = 288
     play_res_x = max(100, int(round(play_res_y * width / max(1, height))))
     header = [
         "[Script Info]", "ScriptType: v4.00+",
         f"PlayResX: {play_res_x}", f"PlayResY: {play_res_y}",
-        "WrapStyle: 0", "ScaledBorderAndShadow: yes", "",
+        "WrapStyle: 2", "ScaledBorderAndShadow: yes", "",
         "[V4+ Styles]",
         "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, "
         "OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, "
@@ -1236,7 +1247,7 @@ def write_ass(path, captions, font_family, font_size, outline_size, primary_colo
             f"Dialogue: 0,{time_ass(start)},"
             f"{time_ass(max(start + 0.25, end))},Default,,0,0,0,,{clean}"
         )
-    with open(path, "w", encoding="utf-8") as f:
+    with open(path, "w", encoding="utf-8-sig") as f:
         f.write("\n".join(header + events) + "\n")
 
 
@@ -2756,14 +2767,10 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
-            if d_ > slot0 * SPEED_MAX:
-                t2 = t_
-                if client is not None:
-                    t2 = shorten_khmer(client, model, t_, slot0)
-                elif groq_key:
-                    t2 = shorten_groq(groq_key, t_, slot0)
-                if t2 != t_ and tts_retry(t2, voices_[i], path_, pros[i]):
-                    d_, _, _ = probe_media(path_)
+            # Preserve the complete Khmer sentence. Timing is fitted later with
+            # FFmpeg atempo (maximum SPEED_MAX=1.4), rather than rewriting/omitting words.
+            # If the speech is much longer than its slot, keep it intact and let
+            # the placement planner use the bounded playback speed.
             if clone_voice:
                 try:
                     eleven_sts(eleven_key, clone_voice, path_)
