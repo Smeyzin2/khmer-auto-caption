@@ -145,6 +145,15 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p {
   white-space: nowrap;
 }
 
+.kac-token.premium {
+  background: linear-gradient(135deg, #FFF4DC 0%, #FFFFFF 70%);
+  border-color: var(--saffron);
+}
+.kac-token.premium .cost {
+  background: var(--ink);
+  color: #fff !important;
+}
+
 /* ---------- Hero ---------- */
 .kac-hero {
   background: linear-gradient(160deg, #232958 0%, #1A1E45 100%);
@@ -532,21 +541,19 @@ def is_admin():
 
 
 def render_token_bar(uid):
-    balance = token_balance(uid)
     st.markdown(
-        f"""
-        <div class="kac-token">
+        """
+        <div class="kac-token premium">
           <div class="bal">
-            <span class="coin">🪙</span>
-            <span>{balance:,}</span>
-            <span class="lbl">/ {DAILY_TOKENS:,} Token</span>
+            <span class="coin">💎</span>
+            <span>Premium</span>
+            <span class="lbl">គ្មានដែនកំណត់</span>
           </div>
-          <div class="cost">១ វីដេអូ = {TOKEN_COST} Token</div>
+          <div class="cost">វីដេអូគ្មានដែនកំណត់</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.caption(f"Token ថ្ងៃនេះ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញដោយស្វ័យប្រវត្តិ។")
     if is_admin():
         st.caption(f"🔐 (ម្ចាស់ប៉ុណ្ណោះ) 🎬 ថ្ងៃនេះមានគេបង្កើតវីដេអូសរុប {today_stats()['videos']:,}")
 
@@ -3302,23 +3309,15 @@ if too_many:
     st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
 
 run = False
-affordable = token_balance(USER_ID) // TOKEN_COST
 if busy:
     st.button("⏳ កំពុងធ្វើការ... សូមរង់ចាំ", disabled=True, use_container_width=True)
 elif not items:
     if not current_job:
         st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
-elif affordable <= 0:
-    st.error(f"😅 Token ថ្ងៃនេះអស់ហើយ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
-    st.button("🔒 Token អស់ — ស្អែកមកវិញ", disabled=True, use_container_width=True)
 else:
-    if len(items) > affordable:
-        st.warning(f"Token នៅសល់គ្រាន់តែ {affordable} វីដេអូប៉ុណ្ណោះ។ កម្មវិធីនឹងធ្វើតែ {affordable} ដំបូង។")
-        items = items[:affordable]
     label = "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ"
     if len(items) > 1:
         label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
-    label += f" · 🪙 {len(items) * TOKEN_COST} Token"
     run = st.button(label, type="primary", use_container_width=True)
 
 if run:
@@ -3328,9 +3327,6 @@ if run:
         st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
         st.stop()
     prepare_home_font(fonts_data)
-    if not spend_tokens(USER_ID, len(items) * TOKEN_COST):
-        st.error(f"Token មិនគ្រប់ទេ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
-        st.stop()
     record_start(USER_ID, len(items))
     settings = {
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
