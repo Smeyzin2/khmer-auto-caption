@@ -29,25 +29,19 @@ from google.genai import types
 st.set_page_config(
     page_title="បកប្រែរឿងមកនិយាយភាសាខ្មែរ",
     page_icon="🎬",
-    layout="centered",
+    layout="wide",
+    initial_sidebar_state="expanded",
 )
-
-# ទំហំ Upload អតិបរមា (MB) = 1GB
-MAX_UPLOAD_MB = 1024
-try:
-    st._config.set_option("server.maxUploadSize", MAX_UPLOAD_MB)
-except Exception:
-    pass
 
 # =====================================================================
 #  THEME (ស្បែកថ្មី v2)
 # =====================================================================
 for _k, _v in {
-    "theme.base": "light",
-    "theme.primaryColor": "#1D2145",
-    "theme.backgroundColor": "#F4F6FB",
-    "theme.secondaryBackgroundColor": "#FFFFFF",
-    "theme.textColor": "#1D2145",
+    "theme.base": "dark",
+    "theme.primaryColor": "#2F6BFF",
+    "theme.backgroundColor": "#0A0F2C",
+    "theme.secondaryBackgroundColor": "#121842",
+    "theme.textColor": "#EEF2FF",
 }.items():
     try:
         st._config.set_option(_k, _v)
@@ -59,17 +53,21 @@ THEME_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700;800&display=swap');
 
 :root {
-  --ink: #1D2145;
-  --ink-2: #2E3566;
-  --ink-soft: #666C8F;
-  --paper: #F3F5FA;
-  --surface: #FFFFFF;
-  --line: #E3E7F2;
-  --saffron: #F5A524;
-  --saffron-soft: #FFF4DC;
-  --r-lg: 22px;
+  --bg: #0A0F2C;
+  --bg2: #0D1336;
+  --panel: #121842;
+  --panel2: #1A2158;
+  --line: #2A3270;
+  --text: #EEF2FF;
+  --muted: #9AA6D8;
+  --blue: #2F6BFF;
+  --blue2: #1F54E0;
+  --green: #2ED47A;
+  --red: #FF5470;
+  --gold: #F5A524;
+  --r-lg: 18px;
   --r-md: 14px;
-  --r-sm: 12px;
+  --r-sm: 10px;
 }
 
 #MainMenu, footer, [data-testid="stToolbar"], [data-testid="stDecoration"],
@@ -77,13 +75,13 @@ THEME_CSS = """
 [data-testid="manage-app-button"] { display: none !important; }
 
 html, body, .stApp, [data-testid="stAppViewContainer"] {
-  background: var(--paper) !important;
-  color: var(--ink);
+  background: radial-gradient(1200px 600px at 70% -10%, #17205a 0%, var(--bg) 60%) !important;
+  color: var(--text);
   font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif !important;
-  color-scheme: light;
+  color-scheme: dark;
 }
 .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp li, .stApp small,
-.stApp textarea, .stApp input, .stApp button p, .stApp a,
+.stApp textarea, .stApp input, .stApp button p, .stApp a, .stApp span,
 .stApp [data-baseweb="select"] div, .stApp [data-testid="stMarkdownContainer"] {
   font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif;
 }
@@ -91,301 +89,257 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
   font-family: 'Material Symbols Rounded', 'Material Icons' !important;
 }
 [data-testid="stHeader"] { background: transparent; }
-.block-container { max-width: 720px; padding: 1rem 1rem 4rem; }
+[data-testid="stSidebarCollapsedControl"], [data-testid="collapsedControl"] {
+  display: flex !important; color: #fff !important;
+}
+[data-testid="stSidebarCollapsedControl"] *, [data-testid="collapsedControl"] * { color: #fff !important; }
+.block-container { max-width: 1500px; padding: 1rem 1.2rem 4rem; }
 
 .stMarkdown, .stMarkdown p, [data-testid="stText"], h1, h2, h3,
 label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p {
-  color: var(--ink) !important;
+  color: var(--text) !important;
 }
-[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--ink-soft) !important; }
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { color: var(--muted) !important; }
+
+/* ---------- Sidebar ---------- */
+[data-testid="stSidebar"] {
+  background: linear-gradient(180deg, #0E1540 0%, #090E2B 100%) !important;
+  border-right: 1px solid var(--line);
+}
+[data-testid="stSidebar"] > div { padding-top: .6rem; }
+.kac-brand { text-align: center; padding: 6px 4px 12px; }
+.kac-brand .logo {
+  width: 74px; height: 74px; margin: 0 auto 8px; border-radius: 20px;
+  display: flex; align-items: center; justify-content: center; font-size: 2.2rem;
+  background: linear-gradient(145deg, #2F6BFF, #7C3AED);
+  box-shadow: 0 8px 22px rgba(47,107,255,.45);
+}
+.kac-brand b { display: block; font-size: 1.2rem; font-weight: 800; color: #fff !important; }
+.kac-brand .tag {
+  display: inline-block; margin-top: 6px; padding: 3px 14px; border-radius: 999px;
+  background: linear-gradient(90deg, #6D4CFF, #2F6BFF); font-size: .78rem; font-weight: 700; color: #fff !important;
+}
+.kac-brand small { display: block; margin-top: 6px; color: var(--muted) !important; }
+
+[data-testid="stSidebar"] [data-testid="stRadio"] [role="radiogroup"] {
+  flex-direction: column !important; flex-wrap: nowrap !important; gap: 6px; width: 100%;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label {
+  flex: none !important; width: 100%; justify-content: flex-start !important;
+  background: rgba(255,255,255,.04); border: 1px solid transparent; border-radius: 14px;
+  padding: 12px 14px !important; margin: 0 !important; cursor: pointer;
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label:hover { background: rgba(255,255,255,.09); }
+[data-testid="stSidebar"] [data-testid="stRadio"] label > div:first-child { display: none !important; }
+[data-testid="stSidebar"] [data-testid="stRadio"] label:has(input:checked) {
+  background: linear-gradient(90deg, #2F6BFF, #1F54E0); border-color: #5B8DFF;
+  box-shadow: 0 6px 16px rgba(47,107,255,.35);
+}
+[data-testid="stSidebar"] [data-testid="stRadio"] label p { font-weight: 600; font-size: .95rem; }
 
 /* ---------- Token bar ---------- */
 .kac-token {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 8px 10px 8px 14px;
-  margin: 0 0 14px;
-  box-shadow: 0 2px 10px rgba(29,33,69,.06);
+  display: flex; flex-direction: column; gap: 8px; margin: 12px 0 4px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 12px 14px;
 }
-.kac-token .bal {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 800;
-  font-size: 1rem;
-  color: var(--ink) !important;
-}
+.kac-token .bal { display: flex; align-items: center; gap: 8px; font-weight: 800; font-size: 1.05rem; color: var(--text) !important; }
 .kac-token .coin {
-  width: 26px; height: 26px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: .85rem;
-  background: radial-gradient(circle at 35% 35%, #FFD27A, #F5A524 75%);
-  box-shadow: 0 0 0 3px var(--saffron-soft);
+  width: 26px; height: 26px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center;
+  font-size: .85rem; background: radial-gradient(circle at 35% 35%, #FFD27A, #F5A524 75%);
 }
-.kac-token .lbl {
-  font-weight: 500;
-  font-size: .78rem;
-  color: var(--ink-soft) !important;
-}
+.kac-token .lbl { font-weight: 500; font-size: .78rem; color: var(--muted) !important; }
 .kac-token .cost {
-  background: var(--saffron-soft);
-  color: var(--ink) !important;
-  border-radius: 999px;
-  padding: 5px 12px;
-  font-size: .78rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-
-.kac-token.premium {
-  background: linear-gradient(135deg, #FFF4DC 0%, #FFFFFF 70%);
-  border-color: var(--saffron);
-}
-.kac-token.premium .cost {
-  background: var(--ink);
-  color: #fff !important;
+  background: rgba(245,165,36,.15); color: #FFD27A !important; border-radius: 999px;
+  padding: 4px 12px; font-size: .78rem; font-weight: 700; text-align: center;
 }
 
 /* ---------- Hero ---------- */
 .kac-hero {
-  background: linear-gradient(160deg, #232958 0%, #1A1E45 100%);
-  border-radius: 26px;
-  padding: 26px 22px 22px;
-  margin-bottom: 18px;
-  box-shadow: 0 14px 34px rgba(29,33,69,.22);
+  display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap;
+  background: linear-gradient(120deg, #141B52 0%, #0F1544 100%);
+  border: 1px solid var(--line); border-radius: 22px; padding: 16px 22px; margin-bottom: 16px;
 }
-.kac-hero h1 {
-  font-weight: 800 !important;
-  font-size: clamp(1.7rem, 7vw, 2.3rem) !important;
-  line-height: 1.25 !important;
-  letter-spacing: -0.01em;
-  margin: 0 0 8px !important;
-  padding: 0 !important;
-  color: #fff !important;
+.kac-hero h1 { margin: 0 !important; padding: 0 !important; font-size: clamp(1.4rem, 3.4vw, 2.3rem) !important; font-weight: 800 !important; color: #fff !important; }
+.kac-hero h1 span { color: #4D86FF !important; }
+.kac-hero p { margin: 6px 0 0; color: var(--muted) !important; font-size: .95rem; }
+.kac-hero .pill {
+  display: inline-block; padding: 3px 12px; border-radius: 8px; margin-right: 8px;
+  background: linear-gradient(90deg, #6D4CFF, #2F6BFF); color: #fff !important; font-size: .82rem;
 }
-.kac-hero p {
-  margin: 0;
-  color: #C7CCEA !important;
-  font-size: .98rem;
-  line-height: 1.75;
+.kac-feats { display: flex; gap: 14px; flex-wrap: wrap; }
+.kac-feats div { text-align: center; min-width: 78px; }
+.kac-feats i {
+  display: flex; width: 44px; height: 44px; margin: 0 auto 4px; border-radius: 12px; font-style: normal;
+  align-items: center; justify-content: center; font-size: 1.3rem; background: linear-gradient(145deg, #2F6BFF, #7C3AED);
 }
-.kac-frame {
-  margin-top: 18px;
-  border-radius: 16px;
-  height: 132px;
-  background: linear-gradient(180deg, #343B7A 0%, #262C60 70%);
-  position: relative;
-  overflow: hidden;
+.kac-feats b { display: block; font-size: .72rem; color: #fff !important; }
+.kac-feats small { display: block; font-size: .66rem; color: var(--muted) !important; }
+
+.kac-rotate {
+  display: none; align-items: center; gap: 10px; margin-bottom: 12px; padding: 10px 14px;
+  background: rgba(245,165,36,.14); border: 1px solid rgba(245,165,36,.4); border-radius: 12px;
+  color: #FFD27A !important; font-size: .9rem; font-weight: 600;
 }
-.kac-frame::before {            /* ព្រះអាទិត្យ */
-  content: "";
-  position: absolute;
-  left: 50%; top: 18px;
-  width: 64px; height: 64px;
-  transform: translateX(-50%);
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 35%, #FFD27A, #F5A524 70%);
-  box-shadow: 0 0 40px 10px rgba(245,165,36,.35);
-}
-.kac-frame::after {             /* ដី */
-  content: "";
-  position: absolute;
-  left: 0; right: 0; bottom: 0; height: 30px;
-  background: #161A3D;
-}
-.kac-cap {
-  position: absolute;
-  left: 50%; bottom: 12px;
-  transform: translateX(-50%);
-  z-index: 2;
-  background: rgba(255,255,255,.96);
-  color: var(--ink) !important;
-  padding: 6px 14px;
-  border-radius: 8px;
-  font-size: .92rem;
-  font-weight: 700;
-  white-space: nowrap;
-}
-.kac-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
-.kac-pills span {
-  background: rgba(255,255,255,.08);
-  border: 1px solid rgba(255,255,255,.14);
-  color: #E6E9FA;
-  padding: 5px 12px;
-  border-radius: 999px;
-  font-size: .8rem;
-}
+.kac-rotate * { color: #FFD27A !important; }
+@media (orientation: portrait) and (max-width: 700px) { .kac-rotate { display: flex; } }
 
 /* ---------- Section headings ---------- */
-[data-testid="stHeading"] h3, .stApp h3 {
-  font-size: 1.12rem !important;
-  font-weight: 600 !important;
-  margin: 1.6rem 0 .6rem !important;
-  padding: 0 !important;
-  border: none !important;
-}
-[data-testid="stHeading"] h3::after {
-  content: "";
-  display: block;
-  width: 34px; height: 4px;
-  border-radius: 4px;
-  background: var(--saffron);
-  margin-top: 6px;
-}
+.kac-sec { display: flex; align-items: center; gap: 10px; margin: 18px 0 8px; font-weight: 700; font-size: 1.08rem; color: #fff !important; }
+.kac-sec::before { content: ""; width: 5px; height: 22px; border-radius: 4px; background: var(--blue); }
+.kac-sec b { color: var(--muted) !important; font-weight: 600; }
+.kac-card-title { font-weight: 700; font-size: 1.02rem; margin: 2px 0 8px; color: #fff !important; }
 
 /* ---------- Cards ---------- */
 div[data-testid="stVerticalBlockBorderWrapper"] {
-  background: var(--surface) !important;
-  border: 1px solid var(--line) !important;
-  border-radius: var(--r-lg) !important;
-  box-shadow: 0 2px 10px rgba(29,33,69,.05);
-  padding: 6px 4px;
+  background: var(--panel) !important; border: 1px solid var(--line) !important;
+  border-radius: var(--r-lg) !important; box-shadow: 0 4px 18px rgba(0,0,0,.25); padding: 8px 6px;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlockBorderWrapper"] {
-  box-shadow: none; background: #FAFBFE !important;
+  background: var(--panel2) !important; box-shadow: none;
 }
 
 /* ---------- Select ---------- */
-[data-testid="stSelectbox"] [data-baseweb="select"] > div,
-[data-testid="stSelectbox"] [data-baseweb="select"] > div > div,
-[data-baseweb="select"] > div {
-  background-color: #F6F8FD !important;
-  border: 1.5px solid var(--line) !important;
-  border-radius: var(--r-sm) !important;
-  color: var(--ink) !important;
-  min-height: 48px;
+[data-baseweb="select"] > div, [data-testid="stSelectbox"] [data-baseweb="select"] > div {
+  background-color: var(--panel2) !important; border: 1.5px solid var(--line) !important;
+  border-radius: var(--r-sm) !important; color: var(--text) !important; min-height: 46px;
 }
 [data-baseweb="select"] > div:focus-within, [data-baseweb="select"] > div:hover {
-  border-color: var(--ink) !important;
-  box-shadow: 0 0 0 3px rgba(29,33,69,.10) !important;
+  border-color: var(--blue) !important; box-shadow: 0 0 0 3px rgba(47,107,255,.25) !important;
 }
-[data-baseweb="select"] * { color: var(--ink) !important; }
+[data-baseweb="select"] * { color: var(--text) !important; }
+[data-baseweb="select"] svg { fill: var(--text) !important; }
+[data-baseweb="popover"], [data-baseweb="popover"] > div { background: transparent !important; }
 [data-baseweb="popover"] ul, [data-baseweb="popover"] li, [data-baseweb="menu"] {
-  background: #fff !important; color: var(--ink) !important;
+  background: #161D4D !important; color: var(--text) !important;
 }
-[data-baseweb="popover"] li:hover { background: var(--saffron-soft) !important; }
+[data-baseweb="popover"] li:hover { background: rgba(47,107,255,.35) !important; }
 
-/* ---------- Text area ---------- */
-.stTextArea textarea, [data-baseweb="textarea"], [data-baseweb="textarea"] > div {
-  background: #F6F8FD !important;
-  border: 1.5px solid var(--line) !important;
-  border-radius: var(--r-sm) !important;
-  color: var(--ink) !important;
+/* ---------- Inputs ---------- */
+.stTextArea textarea, .stTextInput input, [data-baseweb="textarea"], [data-baseweb="textarea"] > div,
+[data-baseweb="input"], [data-baseweb="input"] > div {
+  background: var(--panel2) !important; border: 1.5px solid var(--line) !important;
+  border-radius: var(--r-sm) !important; color: var(--text) !important;
 }
-.stTextArea textarea:focus { border-color: var(--ink) !important; box-shadow: 0 0 0 3px rgba(29,33,69,.10) !important; }
+.stTextArea textarea:focus, .stTextInput input:focus { border-color: var(--blue) !important; box-shadow: 0 0 0 3px rgba(47,107,255,.25) !important; }
+::placeholder { color: #6E79B8 !important; }
 
-/* ---------- Radio => pills ---------- */
-[data-testid="stRadio"] [role="radiogroup"] { gap: 8px; flex-wrap: nowrap; width: 100%; }
-[data-testid="stRadio"] label {
-  flex: 1 1 0;
-  justify-content: center;
-  background: #F6F8FD;
-  border: 1.5px solid var(--line);
-  border-radius: 999px;
-  padding: 8px 16px !important;
-  margin: 0 !important;
-  cursor: pointer;
+/* ---------- Radio => pills (main) ---------- */
+[data-testid="stMain"] [data-testid="stRadio"] [role="radiogroup"], .main [data-testid="stRadio"] [role="radiogroup"] {
+  gap: 8px; flex-wrap: wrap; width: 100%;
 }
-[data-testid="stRadio"] label > div:first-child { display: none !important; }
-[data-testid="stRadio"] label:has(input:checked) {
-  background: var(--ink);
-  border-color: var(--ink);
+[data-testid="stMain"] [data-testid="stRadio"] label, .main [data-testid="stRadio"] label {
+  flex: 1 1 auto; justify-content: center; background: var(--panel2); border: 1.5px solid var(--line);
+  border-radius: 12px; padding: 9px 14px !important; margin: 0 !important; cursor: pointer;
 }
-[data-testid="stRadio"] label:has(input:checked) *,
-[data-testid="stRadio"] label:has(input:checked) p { color: #fff !important; }
+[data-testid="stMain"] [data-testid="stRadio"] label > div:first-child, .main [data-testid="stRadio"] label > div:first-child { display: none !important; }
+[data-testid="stMain"] [data-testid="stRadio"] label:has(input:checked), .main [data-testid="stRadio"] label:has(input:checked) {
+  background: linear-gradient(180deg, #2F6BFF, #1F54E0); border-color: #5B8DFF;
+}
+[data-testid="stMain"] [data-testid="stRadio"] label:has(input:checked) *, .main [data-testid="stRadio"] label:has(input:checked) * { color: #fff !important; }
 
 /* ---------- Checkbox ---------- */
-[data-testid="stCheckbox"] label > span:first-child,
-[data-baseweb="checkbox"] > span:first-child {
-  border-radius: 7px !important;
-  border: 1.5px solid #B9C0DD !important;
-  background-color: #fff !important;
+[data-testid="stCheckbox"] label > span:first-child, [data-baseweb="checkbox"] > span:first-child {
+  border-radius: 7px !important; border: 1.5px solid #5F6BB5 !important; background-color: transparent !important;
 }
-[data-testid="stCheckbox"] label:has(input:checked) > span:first-child,
-[data-baseweb="checkbox"]:has(input:checked) > span:first-child {
-  background-color: var(--ink) !important;
-  border-color: var(--ink) !important;
+[data-testid="stCheckbox"] label:has(input:checked) > span:first-child, [data-baseweb="checkbox"]:has(input:checked) > span:first-child {
+  background-color: var(--blue) !important; border-color: var(--blue) !important;
 }
 
 /* ---------- Slider ---------- */
-[data-testid="stSlider"] [role="slider"] { background: var(--ink) !important; border-color: var(--ink) !important; }
-[data-testid="stSlider"] [data-testid="stThumbValue"] { color: var(--ink) !important; }
+[data-testid="stSlider"] [role="slider"] { background: var(--blue) !important; border-color: var(--blue) !important; }
+[data-testid="stSlider"] [data-testid="stThumbValue"], [data-testid="stSliderTickBarMin"], [data-testid="stSliderTickBarMax"] { color: var(--text) !important; }
 
 /* ---------- Uploader ---------- */
 [data-testid="stFileUploaderDropzone"] {
-  background: #F9FAFE;
-  border: 2px dashed #B9C0DD;
-  border-radius: var(--r-lg);
-  padding: 22px 16px;
+  background: rgba(47,107,255,.07); border: 2px dashed #4D6BD6; border-radius: var(--r-lg); padding: 24px 16px;
 }
-[data-testid="stFileUploaderDropzone"]:hover { border-color: var(--saffron); background: #FFFBF2; }
-[data-testid="stFileUploaderDropzone"] * { color: var(--ink) !important; }
+[data-testid="stFileUploaderDropzone"]:hover { border-color: #7FA2FF; background: rgba(47,107,255,.14); }
+[data-testid="stFileUploaderDropzone"] * { color: var(--text) !important; }
 [data-testid="stFileUploaderDropzone"] button {
-  background: var(--ink) !important; color: #fff !important;
-  border-radius: var(--r-sm) !important; border: none !important;
+  background: linear-gradient(180deg, #2F6BFF, #1F54E0) !important; color: #fff !important;
+  border-radius: 12px !important; border: none !important; min-height: 44px; font-weight: 700;
 }
 [data-testid="stFileUploaderDropzone"] button * { color: #fff !important; }
+[data-testid="stFileUploaderFile"] * { color: var(--text) !important; }
 
 /* ---------- Buttons ---------- */
 .stButton > button, .stDownloadButton > button {
-  border-radius: var(--r-md);
-  border: 1.5px solid var(--line);
-  background: var(--surface);
-  color: var(--ink);
-  font-weight: 700;
-  min-height: 50px;
-  transition: transform .12s ease, box-shadow .12s ease;
+  border-radius: 12px; border: 1.5px solid var(--line); background: var(--panel2); color: var(--text);
+  font-weight: 700; min-height: 46px; transition: transform .12s ease, box-shadow .12s ease;
 }
 .stButton > button *, .stDownloadButton > button * { color: inherit !important; }
+.stButton > button:hover, .stDownloadButton > button:hover { transform: translateY(-1px); border-color: #5B8DFF; }
 .stButton > button[kind="primary"], .stDownloadButton > button[kind="primary"] {
-  background: linear-gradient(180deg, #2E3566, #1D2145) !important;
-  border: none !important;
-  color: #fff !important;
-  min-height: 56px;
-  font-size: 1.05rem;
-  box-shadow: 0 8px 20px rgba(29,33,69,.28);
+  background: linear-gradient(180deg, #2F6BFF, #1F54E0) !important; border: none !important; color: #fff !important;
+  box-shadow: 0 8px 20px rgba(47,107,255,.4);
 }
 .stButton > button[kind="primary"] *, .stDownloadButton > button[kind="primary"] * { color: #fff !important; }
-.stButton > button:hover, .stDownloadButton > button:hover { transform: translateY(-1px); border-color: var(--ink); }
-.stButton > button:focus-visible { outline: 3px solid var(--saffron); outline-offset: 2px; }
-.stButton > button:disabled { background: #E9ECF5 !important; color: #8A90AD !important; box-shadow: none; transform: none; }
+.kac-start .stButton > button[kind="primary"] { min-height: 62px; font-size: 1.1rem; border-radius: 16px; }
+.stButton > button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
+.stButton > button:disabled { background: #1B2250 !important; color: #6E79B8 !important; box-shadow: none; transform: none; border-color: var(--line) !important; }
 
 /* ---------- Progress ---------- */
-[data-testid="stProgress"] > div > div { background: #E4E8F3 !important; border-radius: 999px; }
-[data-testid="stProgress"] > div > div > div { background: var(--saffron) !important; border-radius: 999px; }
+[data-testid="stProgress"] > div > div { background: #232B66 !important; border-radius: 999px; }
+[data-testid="stProgress"] > div > div > div { background: var(--blue) !important; border-radius: 999px; }
 
-/* ---------- Metrics ---------- */
-[data-testid="stMetric"] {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
-  padding: 12px 14px;
-}
-[data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-weight: 800; color: var(--ink) !important; }
-[data-testid="stMetricLabel"] p { color: var(--ink-soft) !important; font-weight: 500; }
-
-/* ---------- Alerts ---------- */
+/* ---------- Metrics / alerts / expander ---------- */
+[data-testid="stMetric"] { background: var(--panel2); border: 1px solid var(--line); border-radius: var(--r-md); padding: 12px 14px; }
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-weight: 800; color: var(--text) !important; }
+[data-testid="stMetricLabel"] p { color: var(--muted) !important; }
 [data-testid="stAlert"] { border-radius: var(--r-md); border: none; }
-[data-testid="stAlert"][kind="info"], div[data-baseweb="notification"][kind="info"] { background: #EAF0FF; }
-
-/* ---------- Expander ---------- */
-[data-testid="stExpander"] {
-  background: #FAFBFE;
-  border: 1.5px solid var(--line) !important;
-  border-radius: var(--r-md);
-}
-[data-testid="stExpander"] * { color: var(--ink) !important; }
-
+[data-testid="stExpander"] { background: var(--panel2); border: 1.5px solid var(--line) !important; border-radius: var(--r-md); }
+[data-testid="stExpander"] * { color: var(--text) !important; }
 [data-testid="stVideo"] video { border-radius: var(--r-md); background: #000; }
-hr { border-color: var(--line) !important; margin: 1.6rem 0 !important; }
+hr { border-color: var(--line) !important; margin: 1.2rem 0 !important; }
+[data-testid="stTable"] table, [data-testid="stTable"] th, [data-testid="stTable"] td { color: var(--text) !important; border-color: var(--line) !important; }
+
+/* ---------- Processing rows ---------- */
+.kac-row {
+  display: flex; align-items: center; gap: 14px; background: var(--panel2);
+  border: 1px solid var(--line); border-radius: 14px; padding: 10px 14px;
+}
+.kac-row .ring {
+  --p: 0; flex: none; width: 50px; height: 50px; border-radius: 50%; display: grid; place-items: center; position: relative;
+  background: conic-gradient(var(--blue) calc(var(--p) * 1%), #2A3270 0);
+}
+.kac-row .ring::before { content: ""; position: absolute; inset: 5px; background: var(--panel2); border-radius: 50%; }
+.kac-row .ring span { position: relative; font-size: .72rem; font-weight: 800; color: #fff !important; }
+.kac-row .meta { flex: 1; min-width: 0; }
+.kac-row .meta b { display: block; font-size: .95rem; color: #fff !important; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kac-row .meta .track { height: 7px; border-radius: 999px; background: #2A3270; margin: 6px 0 4px; overflow: hidden; }
+.kac-row .meta .track i { display: block; height: 100%; background: linear-gradient(90deg, #2F6BFF, #7FA2FF); border-radius: 999px; }
+.kac-row .meta small { color: var(--muted) !important; font-size: .78rem; }
+.kac-row .secs { flex: none; color: var(--muted) !important; font-size: .78rem; }
+
+.kac-vname b { display: block; color: #fff !important; font-size: .95rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.kac-vname small { color: var(--muted) !important; font-size: .78rem; }
+
+/* ---------- Caption preview ---------- */
+.kac-stage {
+  position: relative; height: 150px; border-radius: 14px; overflow: hidden; margin-top: 8px;
+  background: linear-gradient(180deg, #2A3A86 0%, #1A2358 62%, #101638 100%); display: flex; padding: 10px 12px;
+}
+.kac-stage::before {
+  content: ""; position: absolute; left: 50%; top: 22px; width: 54px; height: 54px; transform: translateX(-50%);
+  border-radius: 50%; background: radial-gradient(circle at 35% 35%, #FFD27A, #F5A524 70%); box-shadow: 0 0 36px 8px rgba(245,165,36,.3);
+}
+.kac-stage .cap { position: relative; z-index: 2; width: 100%; text-align: center; font-weight: 800; line-height: 1.3; }
+
+/* ---------- Landscape phone ---------- */
+@media (max-height: 540px) and (orientation: landscape) {
+  .block-container { padding: .4rem .8rem 2rem !important; }
+  .kac-hero { padding: 8px 14px; margin-bottom: 8px; }
+  .kac-hero h1 { font-size: 1.2rem !important; }
+  .kac-hero p, .kac-feats { display: none; }
+  [data-testid="stSidebar"] { min-width: 210px !important; max-width: 210px !important; }
+  .kac-brand .logo { width: 48px; height: 48px; font-size: 1.4rem; }
+  .kac-sec { margin: 10px 0 6px; }
+  .kac-stage { height: 110px; }
+}
+@media (max-width: 900px) {
+  .block-container { padding: .6rem .6rem 3rem !important; }
+  .kac-feats { display: none; }
+}
 </style>
 """
 
@@ -541,19 +495,21 @@ def is_admin():
 
 
 def render_token_bar(uid):
+    balance = token_balance(uid)
     st.markdown(
-        """
-        <div class="kac-token premium">
+        f"""
+        <div class="kac-token">
           <div class="bal">
-            <span class="coin">💎</span>
-            <span>Premium</span>
-            <span class="lbl">គ្មានដែនកំណត់</span>
+            <span class="coin">🪙</span>
+            <span>{balance:,}</span>
+            <span class="lbl">/ {DAILY_TOKENS:,} Token</span>
           </div>
-          <div class="cost">បង្កើតវីដេអូគ្មានដែនកំណត់</div>
+          <div class="cost">១ វីដេអូ = {TOKEN_COST} Token</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
+    st.caption(f"Token ថ្ងៃនេះ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញដោយស្វ័យប្រវត្តិ។")
     if is_admin():
         st.caption(f"🔐 (ម្ចាស់ប៉ុណ្ណោះ) 🎬 ថ្ងៃនេះមានគេបង្កើតវីដេអូសរុប {today_stats()['videos']:,}")
 
@@ -582,7 +538,7 @@ DEBUG = bool(st.secrets.get("DEBUG", False))
 
 REQUEST_TIMEOUT_MS = 120000
 MAX_CAPTION_CHARS = 26
-MAX_DOWNLOAD_MB = 1024
+MAX_DOWNLOAD_MB = 300
 MAX_VIDEOS = 5
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
@@ -1150,7 +1106,7 @@ def build_captions(segments, duration):
     return items, "តាមម៉ោងពី AI (កែតម្រឹមតាមសំឡេង)"
 
 
-def write_ass(path, captions, font_family, font_size, outline_size, primary_color, width, height):
+def write_ass(path, captions, font_family, font_size, outline_size, primary_color, width, height, alignment=2):
     play_res_y = 288
     play_res_x = max(100, int(round(play_res_y * width / max(1, height))))
     header = [
@@ -1164,7 +1120,7 @@ def write_ass(path, captions, font_family, font_size, outline_size, primary_colo
         "Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Default,{font_family},{font_size},{primary_color},"
         f"&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,"
-        f"{outline_size},1,2,20,20,35,1", "",
+        f"{outline_size},1,{alignment},20,20,35,1", "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
         "MarginV, Effect, Text",
@@ -1184,10 +1140,15 @@ def write_ass(path, captions, font_family, font_size, outline_size, primary_colo
 class Reporter:
     def __init__(self, item):
         self.item = item
+    def _check(self):
+        if self.item.get("cancel"):
+            raise UserError("បានបោះបង់ដោយអ្នកប្រើ។")
     def write(self, message):
+        self._check()
         self.item["stage"] = message
         self.item["log"].append(message)
     def progress(self, value):
+        self._check()
         self.item["pct"] = 0.03 + 0.09 * max(0.0, min(1.0, value))
 
 
@@ -1255,8 +1216,9 @@ def build_prompt(clip_duration, source_language, concise=False):
     if concise:
         concise_rule = (
             "Each Khmer line must be short enough to be spoken naturally "
-            "within its own time range: at most about 11 Khmer "
-            "characters per second of that segment. Prefer concise wording. "
+            "and calmly within its own time range: at most about 9 Khmer "
+            "characters per second of that segment. Prefer concise, "
+            "everyday spoken wording. "
         )
     return (
         task
@@ -1875,13 +1837,14 @@ def tts_segment(text, voice, path, prosody=None):
 
 
 def shorten_khmer(client, model, text, max_seconds):
-    limit = max(6, int(max_seconds * 11))
+    limit = max(6, int(max_seconds * 9))
     try:
         response = client.models.generate_content(
             model=model,
             contents=(
                 f"Shorten this Khmer sentence to at most {limit} "
-                "characters. Keep the meaning. Khmer script only. "
+                "characters. Keep the meaning. Use natural everyday "
+                "spoken Khmer. Khmer script only. "
                 f"Return only the sentence.\n{text}"
             ),
         )
@@ -2159,8 +2122,9 @@ def plan_dub_voices(segments, pcm, default_voice, duration, tracks=None):
     return dub, lines, info, runs
 
 
-MATCH_MIN = 0.8
-MATCH_MAX = 1.25
+# ---- កែតម្រឹមសំឡេងឱ្យជិតសំឡេងដើម តែតិចតួចប៉ុណ្ណោះ ដើម្បីកុំឱ្យស្តាប់មិនធម្មតា ----
+MATCH_MIN = 0.92
+MATCH_MAX = 1.10
 
 
 def gender_medians(info, runs):
@@ -2236,10 +2200,11 @@ EMO_LABELS = ["neutral", "happy", "excited", "angry", "sad", "fear", "whisper"]
 EMO_HIGH = ("happy", "excited", "angry", "fear")
 EMO_LOW = ("sad", "whisper")
 
+# អារម្មណ៍ស្រាលៗ ដើម្បីឱ្យសំឡេង AI នៅតែស្តាប់ទៅធម្មតា (rate %, pitch Hz, volume %)
 EMO_PRESETS = {
-    "neutral": (0, 0, 0), "happy": (8, 12, 5), "excited": (15, 18, 15),
-    "angry": (12, 4, 30), "sad": (-12, -10, -15), "fear": (10, 20, -5),
-    "whisper": (-8, -4, -45),
+    "neutral": (0, 0, 0), "happy": (3, 4, 2), "excited": (6, 6, 5),
+    "angry": (4, 2, 8), "sad": (-5, -4, -6), "fear": (4, 6, -2),
+    "whisper": (-3, -2, -15),
 }
 
 EMO_NAMES = {
@@ -2354,13 +2319,13 @@ def label_emotions(texts, groq_key, gemini_key):
 
 def combine_emotion(text_label, arousal):
     if text_label in EMO_HIGH:
-        return text_label, max(0.3, min(1.4, 0.6 + 0.5 * arousal))
+        return text_label, max(0.3, min(1.0, 0.6 + 0.3 * arousal))
     if text_label in EMO_LOW:
-        return text_label, max(0.3, min(1.4, 0.6 - 0.5 * arousal))
-    if arousal > 0.35:
-        return "excited", min(1.2, 0.4 + (arousal - 0.35) * 0.9)
-    if arousal < -0.35:
-        return "sad", min(1.2, 0.4 + (-arousal - 0.35) * 0.9)
+        return text_label, max(0.3, min(1.0, 0.6 - 0.3 * arousal))
+    if arousal > 0.5:
+        return "excited", min(0.8, 0.4 + (arousal - 0.5) * 0.6)
+    if arousal < -0.5:
+        return "sad", min(0.8, 0.4 + (-arousal - 0.5) * 0.6)
     return "neutral", 0.0
 
 
@@ -2419,9 +2384,9 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
 def emotion_prosody(label, intensity, use_pitch=True):
     rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
     k = max(0.0, float(intensity))
-    rate = int(max(-30, min(30, rate * k)))
-    pitch = int(max(-30, min(30, pitch * k))) if use_pitch else 0
-    vol = int(max(-50, min(50, vol * k)))
+    rate = int(max(-10, min(10, rate * k)))
+    pitch = int(max(-8, min(8, pitch * k))) if use_pitch else 0
+    vol = int(max(-20, min(15, vol * k)))
     if rate == 0 and pitch == 0 and vol == 0:
         return None
     return {"rate": f"{rate:+d}%", "pitch": f"{pitch:+d}Hz", "volume": f"{vol:+d}%"}
@@ -2529,7 +2494,7 @@ def band_levels(pcm, sr=16000):
     return out
 
 
-def eq_filters(ref, tts, limit=6.0):
+def eq_filters(ref, tts, limit=4.0):
     if not ref or not tts:
         return ""
     import numpy as np
@@ -2540,8 +2505,8 @@ def eq_filters(ref, tts, limit=6.0):
     return ",".join(parts)
 
 
-def merge_for_dub(segments, max_chars=55, max_gap=0.4, max_len=5.5):
-    """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
+def merge_for_dub(segments, max_chars=80, max_gap=0.6, max_len=8.0):
+    """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូនដូចមនុស្សនិយាយ មិនកាត់ៗ"""
     out = []
     for s, e, t in segments:
         if out:
@@ -2567,7 +2532,7 @@ def tts_retry(text, voice, path, prosody=None, tries=3):
 
 
 def shorten_groq(api_key, text, max_seconds):
-    limit = max(6, int(max_seconds * 11))
+    limit = max(6, int(max_seconds * 9))
     try:
         models = groq_chat_models(api_key)[:3]
     except Exception:
@@ -2577,7 +2542,7 @@ def shorten_groq(api_key, text, max_seconds):
             body = json.dumps({
                 "model": model, "temperature": 0.2,
                 "messages": [
-                    {"role": "system", "content": f"Shorten the Khmer sentence to at most {limit} characters. Keep the meaning. Khmer script only. Return only the sentence."},
+                    {"role": "system", "content": f"Shorten the Khmer sentence to at most {limit} characters. Keep the meaning. Use natural everyday spoken Khmer. Khmer script only. Return only the sentence."},
                     {"role": "user", "content": text},
                 ],
             }).encode("utf-8")
@@ -2597,24 +2562,21 @@ def shorten_groq(api_key, text, max_seconds):
     return text
 
 
-# សំឡេងដើមក្នុងផ្ទៃខាងក្រោយ (បន្ថយពី 0.07 ទៅ 0.035) + បន្ថយស្វ័យប្រវត្តិពេល AI កំពុងនិយាយ
-BG_VOLUME = 0.035
+BG_VOLUME = 0.07
 
-# ល្បឿនសំឡេងអាន៖ មិនបន្ថយយឺតពេក មិនបង្កើនលឿនពេក ដើម្បីឱ្យស្តាប់ទៅធម្មជាតិ
-SPEED_MIN = 0.93
-SPEED_MAX = 1.5
-# ទុកពេលបន្ថែមក្រោយមាត់និយាយចប់ (វិនាទី) ឱ្យសំឡេងអានមិនកាត់ចុងឃ្លា
-TAIL_PAD = 0.25
+# ល្បឿនអានធម្មតា៖ មិនឱ្យលឿនពេក ឬយឺតពេក
+SPEED_MIN = 0.95
+SPEED_MAX = 1.25
 
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             clone_voice=None, eleven_key=None, ref_bands=None):
+             clone_voice=None, eleven_key=None, ref_bands=None, base_rate=0):
     inputs, filters = [], []
     n = 0
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
-        filters.append(f"[0:a]aresample=24000,volume={BG_VOLUME}[bg]")
+        filters.append(f"[0:a]volume={BG_VOLUME}[bg]")
         n = 1
     first_voice = n
     n_seg = len(segments)
@@ -2626,20 +2588,26 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             label, inten = emotions[i]
             p = emotion_prosody(label, inten, use_pitch=(targets is None))
         pros.append(p)
+    if base_rate:
+        for i in range(n_seg):
+            p = dict(pros[i] or {"rate": "+0%", "pitch": "+0Hz", "volume": "+0%"})
+            r = int(p["rate"].replace("%", "")) + int(base_rate)
+            p["rate"] = f"{max(-50, min(50, r)):+d}%"
+            pros[i] = p
 
     clone_stats = {"ok": 0, "fail": 0, "err": ""}
 
     def gen(i):
         s_, e_, t_ = segments[i]
         next_s_ = segments[i + 1][0] if i + 1 < n_seg else duration
-        slot0 = max(0.6, min(next_s_ - 0.08, e_ + TAIL_PAD) - s_)
+        # ទុកពេលឱ្យអានបានយូរជាងមុន ដើម្បីកុំចាំបាច់បង្កើនល្បឿន
+        slot0 = max(0.8, min(next_s_ - 0.05, e_ + 0.8) - s_)
         path_ = os.path.join(folder, f"tts_{i}.mp3")
         try:
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
-            # បើវែងពេកហួសកម្រិតដែលអាចបង្កើនល្បឿនបានស្រួល → កាត់ឃ្លាឱ្យខ្លី ជាជាងអានលឿនពេក
-            if d_ > slot0 * 1.2:
+            if d_ > slot0 * SPEED_MAX:
                 t2 = t_
                 if client is not None:
                     t2 = shorten_khmer(client, model, t_, slot0)
@@ -2695,15 +2663,15 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             continue
         d, f0, _tb = res
         next_s = segments[i + 1][0] if i + 1 < n_seg else duration
-        # ចាប់ផ្តើមពេលមាត់ដើមចាប់ផ្តើមនិយាយ (មិនមុនពេលសំឡេងមុនចប់)
         start = max(s, cursor)
         if start >= duration - 0.3:
             break
-        slot = max(0.6, min(next_s - 0.08, e + TAIL_PAD) - start)
+        slot = max(0.8, min(next_s - 0.05, e + 0.5) - start)
+        # ល្បឿនជិតធម្មតា (១.០) បើវែងពេកទើបបង្កើនបន្តិច មិនលើសកំណត់
         speed = min(SPEED_MAX, max(SPEED_MIN, d / slot))
-        cursor = start + d / speed + 0.04
+        cursor = start + d / speed + 0.12
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
-        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed, "dur": d / speed,
+        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
                      "eq": voice_eq.get(voices_[i], "")})
     if notes is not None and skipped:
@@ -2721,7 +2689,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if p["target"] and base.get(p["voice"]):
             ratio = p["target"] / base[p["voice"]]
             ratio = max(MATCH_MIN, min(MATCH_MAX, ratio))
-            if abs(ratio - 1.0) < 0.03:
+            if abs(ratio - 1.0) < 0.04:
                 ratio = 1.0
             rec = stats.setdefault(p["voice"], [[], []])
             rec[0].append(ratio)
@@ -2735,44 +2703,18 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         chain = "silenceremove=start_periods=1:start_duration=0:start_threshold=-45dB," + chain
         if p.get("eq"):
             chain += "," + p["eq"]
-        # fade ចូល/ចេញ តិចៗ ដើម្បីកុំឱ្យមានសំឡេងគ្រើម/ខ្ទាតនៅចន្លោះឃ្លា
-        fade_out_at = max(0.0, p["dur"] - 0.12)
-        chain += f",afade=t=in:st=0:d=0.02,afade=t=out:st={fade_out_at:.3f}:d=0.06"
         filters.append(f"[{n}:a]{chain},adelay={delay}:all=1[a{n}]")
         n += 1
     if notes is not None:
         for v, (ratios, tgts) in stats.items():
             who = "ប្រុស" if v == VOICE_MALE else "ស្រី"
             notes.append(f"🧬 សំឡេង AI {who}៖ ~{int(base[v])}Hz → " f"សំឡេងដើម ~{int(statistics.median(tgts))}Hz " f"(កែ ×{statistics.mean(ratios):.2f})")
-
-    vlabels = "".join(f"[a{k}]" for k in range(first_voice, n))
-    voice_count = n - first_voice
-    base_graph = ";".join(filters)
-
-    # ទម្រង់ធម្មតា (គ្មាន ducking) — ប្រើជាបម្រុង
-    plain_labels = ("[bg]" if keep_bg else "") + vlabels
-    fc_plain = (base_graph + f";{plain_labels}amix=inputs={n}:dropout_transition=0,"
-                f"volume={n},alimiter=limit=0.95[out]")
-
-    out_path = os.path.join(folder, "dub.wav")
-    used_duck = False
-    if keep_bg:
-        # Ducking៖ សំឡេងដើមធ្លាក់ចុះស្វ័យប្រវត្តិពេល AI កំពុងនិយាយ ហើយឡើងវិញពេលស្ងាត់
-        fc_duck = (base_graph
-                   + f";{vlabels}amix=inputs={voice_count}:dropout_transition=0,volume={voice_count}[v]"
-                   + ";[v]asplit=2[v1][v2]"
-                   + ";[bg][v1]sidechaincompress=threshold=0.02:ratio=8:attack=20:release=350[bgd]"
-                   + ";[bgd][v2]amix=inputs=2:dropout_transition=0,volume=2,alimiter=limit=0.95[out]")
-        try:
-            run_ffmpeg(inputs + ["-filter_complex", fc_duck, "-map", "[out]", "-t", f"{duration:.2f}", "dub.wav"], cwd=folder)
-            used_duck = os.path.exists(out_path)
-        except RuntimeError:
-            used_duck = False
-    if not used_duck:
-        run_ffmpeg(inputs + ["-filter_complex", fc_plain, "-map", "[out]", "-t", f"{duration:.2f}", "dub.wav"], cwd=folder)
-    if notes is not None and keep_bg and used_duck:
-        notes.append("🔉 សំឡេងដើមបន្ថយស្វ័យប្រវត្តិពេល AI កំពុងនិយាយ")
-    return os.path.exists(out_path)
+    labels = "[bg]" if keep_bg else ""
+    labels += "".join(f"[a{k}]" for k in range(first_voice, n))
+    limiter = ",alimiter=limit=0.95" if emotions is not None else ""
+    fc = (";".join(filters) + f";{labels}amix=inputs={n}:dropout_transition=0," f"volume={n}{limiter}[out]")
+    run_ffmpeg(inputs + ["-filter_complex", fc, "-map", "[out]", "-t", f"{duration:.2f}", "dub.wav"], cwd=folder)
+    return os.path.exists(os.path.join(folder, "dub.wav"))
 
 
 def build_video_filter(max_side):
@@ -2784,7 +2726,7 @@ def build_video_filter(max_side):
 
 
 def render_with_fonts(folder, fonts, captions, font_size, outline_size,
-                      color, vid_w, vid_h, quality, status, dub=False):
+                      color, vid_w, vid_h, quality, status, dub=False, alignment=2):
     ass_path = os.path.join(folder, "captions.ass")
     output_path = os.path.join(folder, "output.mp4")
     max_side, crf, preset = quality
@@ -2798,7 +2740,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         font_path, default_name = fonts[font_index]
         family = get_font_family(font_path, default_name)
         keys = [family.lower(), default_name.lower()]
-        write_ass(ass_path, captions, family, font_size, outline_size, color, vid_w, vid_h)
+        write_ass(ass_path, captions, family, font_size, outline_size, color, vid_w, vid_h, alignment)
         args = ["-i", "input.mp4"]
         if dub:
             args += ["-i", "dub.wav"]
@@ -2977,7 +2919,7 @@ def run_worker(job, item, settings, fonts_data):
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     try:
-                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands)
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, base_rate=settings.get("tts_rate", 0))
                     finally:
                         if clone_voice:
                             eleven_delete_voice(settings["eleven_key"], clone_voice)
@@ -2991,7 +2933,7 @@ def run_worker(job, item, settings, fonts_data):
             with job.render_slots:
                 item["pct"] = 0.82
                 rep.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
-                video, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok)
+                video, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, alignment=settings.get("position", 2))
             item["video"] = video
             item["captions"] = [t for _, _, t in captions]
             item["debug"] = {
@@ -3212,137 +3154,218 @@ def scroll_to_downloads():
     )
 
 
+import html as _html
+
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
 USER_ID = get_user_id()
 sync_browser_id(USER_ID)
-render_token_bar(USER_ID)
-render_hero(MAX_VIDEOS)
 
 if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
     st.stop()
 
-colors = {"ស": "&H00FFFFFF", "លឿង": "&H0000FFFF", "បៃតង": "&H0000FF00", "ខៀវ": "&H00FF0000"}
+# ---------------------------------------------------------------------
+#  ជម្រើសផ្សេងៗ
+# ---------------------------------------------------------------------
+PAGE_LABELS = {
+    "home": "🏠  ទំព័រដើម · Home",
+    "sub": "💬  ដាក់អក្សរខ្មែរ · Subtitle",
+    "dub": "🎙  សំឡេង AI · Dubbing",
+    "batch": "📚  ច្រើនវីដេអូ · Batch",
+    "videos": "🎞  វីដេអូរបស់ខ្ញុំ · My Videos",
+    "help": "❓  ជំនួយ · Help",
+}
+PAGE_IDS = list(PAGE_LABELS.keys())
+
+COLOR_OPTIONS = {
+    "⚪ ស": ("&H00FFFFFF", "#FFFFFF"),
+    "🟡 លឿង": ("&H0000FFFF", "#FFE600"),
+    "🟢 បៃតង": ("&H0000FF00", "#3DDC64"),
+    "🔵 ខៀវ": ("&H00FF0000", "#3D7BFF"),
+    "🔴 ក្រហម": ("&H000000FF", "#FF4D5E"),
+}
+POSITION_OPTIONS = {"⬇ ក្រោម": 2, "⏺ កណ្ដាល": 5, "⬆ លើ": 8}
+MODES = ["📁 Upload · ផ្ទុកវីដេអូ", "🔗 Link · តំណ", "📚 Batch · ច្រើនវីដេអូ"]
+VIDEO_TYPES = ["mp4", "mov", "mkv", "avi", "webm"]
 
 ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
 ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
 
-current_job = st.session_state.get("job")
-busy = bool(current_job and current_job.running())
+# រក្សាតម្លៃការកំណត់ ពេលប្តូរទំព័រ
+SETTING_KEYS = ["fs", "ol", "fc", "pos", "voice", "spd", "qual", "eng", "lang",
+                "auto_gender", "voice_match", "emotion", "keep_bg", "timbre"]
+for _k in SETTING_KEYS:
+    if _k in st.session_state:
+        st.session_state[_k] = st.session_state[_k]
 
-st.subheader("① 🎞️ ជ្រើសវីដេអូ")
-with st.container(border=True):
+st.session_state.setdefault("library", [])
 
-    mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True, label_visibility="collapsed")
 
-    uploaded_files = []
-    link_text = ""
+def esc(x):
+    return _html.escape(str(x or ""))
 
-    if mode.startswith("📁"):
-        uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន · អតិបរមា 1GB ក្នុងមួយឯកសារ)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="អាច Upload បានដល់ 1GB ក្នុងមួយឯកសារ។ បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
-    else:
-        link_text = st.text_area("តំណវីដេអូ (TikTok, .mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
 
-st.subheader("② ⚙️ ការកំណត់")
-with st.container(border=True):
+def fmt_mb(n):
+    return f"{n / (1024 * 1024):.1f}MB"
 
-    engine_options = []
-    if GROQ_KEY:
-        engine_options.append(ENGINE_FREE)
-    if GEMINI_KEY:
-        engine_options.append(ENGINE_GEMINI)
 
-    engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0, help="បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា កម្មវិធីនឹងប្តូរទៅម៉ាស៊ីនមួយទៀតដោយស្វ័យប្រវត្តិ។")
-    if engine_label == ENGINE_FREE:
-        st.caption("ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate អាចមិនទន់ភ្លន់ដូច Gemini ទេ។")
+# ---------------------------------------------------------------------
+#  Sidebar (ម៉ឺនុយ)
+# ---------------------------------------------------------------------
+with st.sidebar:
+    st.markdown(
+        '<div class="kac-brand"><div class="logo">🎬</div><b>Khmer Auto Caption</b>'
+        '<span class="tag">Subtitle + Dubbing</span>'
+        '<small>បង្កើតវីដេអូមានអក្សរខ្មែរ និងសំឡេង AI</small></div>',
+        unsafe_allow_html=True,
+    )
+    page_id = st.radio("ម៉ឺនុយ", PAGE_IDS, format_func=lambda k: PAGE_LABELS[k],
+                       label_visibility="collapsed", key="page")
+    render_token_bar(USER_ID)
 
-    language_label = st.selectbox("ភាសាក្នុងវីដេអូ", list(LANGUAGES.keys()), index=0, help="ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់។")
-    quality_label = st.selectbox("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1)
+# ---------------------------------------------------------------------
+#  Header
+# ---------------------------------------------------------------------
+st.markdown(
+    '<div class="kac-hero"><div>'
+    '<h1>Khmer <span>Auto Caption</span></h1>'
+    '<p><b class="pill">Subtitle + Dubbing</b>បង្កើតវីដេអូមានអក្សរខ្មែរ និងសំឡេង AI '
+    f'(រហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា)</p></div>'
+    '<div class="kac-feats">'
+    '<div><i>💬</i><b>Auto Subtitle</b><small>បង្កើតអក្សរខ្មែរ</small></div>'
+    '<div><i>🎙</i><b>AI Dubbing</b><small>បញ្ចូលសំឡេង AI</small></div>'
+    '<div><i>🅰</i><b>Custom Style</b><small>កំណត់ចេស្រស់</small></div>'
+    '<div><i>HD</i><b>High Quality</b><small>គុណភាពខ្ពស់</small></div>'
+    '</div></div>'
+    '<div class="kac-rotate">📱 សូមបង្វិលទូរសព្ទដេក (ផ្ដេក) ដើម្បីប្រើបានស្រួលជាងនេះ</div>',
+    unsafe_allow_html=True,
+)
 
-    dub_on = st.checkbox("🎙 បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)")
-    voice_label = list(TTS_VOICES.keys())[0]
-    keep_bg = False
-    auto_gender = False
-    voice_match = False
-    emotion = False
-    clone_on = False
-    clone_file = None
-    timbre = False
-    timbre_file = None
 
-    if dub_on:
-        voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
-        auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ", help="វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។")
-        voice_match = st.checkbox("🧬 ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (ប្រហាក់ប្រហែល)", help="វាស់កម្រិតសំឡេង (ខ្ពស់/ទាប) របស់អ្នកនិយាយដើម រួចកែសំឡេង AI ឱ្យជិតគ្នា (កំណត់ត្រឹម ±៤ semitones)។")
-        emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន", help="AI ចាត់ថ្នាក់អារម្មណ៍នៃឃ្លានីមួយៗតាមអត្ថបទ ហើយវាស់កម្លាំងសំឡេងដើមដើម្បីកំណត់កម្រិតខ្លាំង។")
-        keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
-        if ELEVEN_KEY:
-            clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (ប្រើសំឡេងគំរូរបស់អ្នក)", help="សំឡេងអានទាំងអស់នឹងប្តូរទៅជាសំឡេងដូចសំឡេងគំរូ។ ប្រើតែសំឡេងខ្លួនឯង ឬសំឡេងដែលមានការអនុញ្ញាត។")
-            if clone_on:
-                clone_file = st.file_uploader("សំឡេងគំរូ (និយាយច្បាស់ ១–២ នាទី គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
-        timbre = st.checkbox("🎚 ធ្វើឱ្យពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)", help="មិនមែនក្លូនពិតទេ តែកែ 'ពណ៌' សំឡេង AI ឱ្យជិតសំឡេងគំរូ (ក្រាស់/ស្តើង/ភ្លឺ)។ បើមិន upload សំឡេងគំរូ នឹងប្រើសំឡេងក្នុងវីដេអូ។")
-        if timbre:
-            timbre_file = st.file_uploader("សំឡេងគំរូ (ជម្រើស — និយាយច្បាស់ ១៥ វិនាទីឡើង គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
+def section(title, extra=""):
+    st.markdown(f'<div class="kac-sec">{title} <b>{extra}</b></div>', unsafe_allow_html=True)
 
-    with st.expander("🎨 កំណត់អក្សរ"):
-        font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
-        outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
-        font_color = st.selectbox("ពណ៌អក្សរ", list(colors.keys()))
 
-items = []
-too_many = False
+# ---------------------------------------------------------------------
+#  បន្ទាត់វីដេអូ (Completed / My Videos)
+# ---------------------------------------------------------------------
+def video_rows(entries, prefix):
+    if not entries:
+        st.info("មិនទាន់មានវីដេអូរួចរាល់ទេ។ វីដេអូណាដែលរួចរាល់ នឹងលេចឡើងនៅទីនេះភ្លាមៗ។")
+        return
+    for item, owner in entries:
+        k = f"{prefix}_{id(item)}"
+        with st.container(border=True):
+            c_name, c_play, c_dl, c_del = st.columns([3.2, 1.1, 1.5, 0.8])
+            secs = int(item.get("elapsed") or 0)
+            c_name.markdown(
+                f'<div class="kac-vname">✅ <b>{esc(item["name"])}</b>'
+                f'<small>⏱ {secs} វិនាទី · {fmt_mb(len(item["video"]))}</small></div>',
+                unsafe_allow_html=True,
+            )
+            playing = st.session_state.get(f"play_{k}", False)
+            if c_play.button("⏹ បិទ" if playing else "▶ មើល", key=f"pb_{k}", use_container_width=True):
+                playing = not playing
+                st.session_state[f"play_{k}"] = playing
+            with c_dl:
+                dl_button("⬇ ទាញយក", item["video"], f"{safe_filename(item['name'])}_khmer.mp4",
+                          "video/mp4", key=f"dl_{k}", type="primary", use_container_width=True)
+            if c_del.button("🗑", key=f"del_{k}", use_container_width=True, help="លុបវីដេអូនេះ"):
+                try:
+                    owner.remove(item)
+                except ValueError:
+                    pass
+                st.session_state.pop(f"play_{k}", None)
+                st.rerun()
+            if playing:
+                st.video(item["video"])
+            with st.expander("📝 មើលអត្ថបទខ្មែរ"):
+                for text in item["captions"]:
+                    st.write(text)
+            if item.get("voice_lines"):
+                with st.expander("👫 ព័ត៌មានសំឡេងអាន"):
+                    for line in item["voice_lines"]:
+                        st.write(line)
+            if DEBUG:
+                with st.expander("🛠 DEBUG"):
+                    for key, value in item["debug"].items():
+                        st.text(f"{key}: {value}")
+                    st.text("\n".join(item["log"][-30:]))
 
-if uploaded_files:
-    too_many = len(uploaded_files) > MAX_VIDEOS
-    for f in uploaded_files[:MAX_VIDEOS]:
-        items.append({"name": clean_name(f.name), "file": f, "url": None})
-else:
-    lines = [ln.strip() for ln in link_text.splitlines() if ln.strip().lower().startswith(("http://", "https://"))]
-    too_many = len(lines) > MAX_VIDEOS
-    for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
-        items.append({"name": f"Video {i}", "file": None, "url": url})
 
-if too_many:
-    st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
+def processing_panel(job, was_running):
+    items = job.items
+    active = [(i, it) for i, it in enumerate(items, start=1) if it["state"] in ("queued", "running")]
+    failed = [(i, it) for i, it in enumerate(items, start=1) if it["state"] == "error"]
+    done = sum(1 for it in items if it["state"] == "done")
+    head, btn = st.columns([3, 1.3])
+    head.markdown(
+        f'<div class="kac-sec">កំពុងដំណើរការ <b>({len(active)}) · ✅ {done} · ❌ {len(failed)}</b></div>',
+        unsafe_allow_html=True,
+    )
+    if active and btn.button("⛔ បោះបង់ទាំងអស់", key=f"cancel_all_{job.id}", use_container_width=True):
+        for _, it in active:
+            it["cancel"] = True
+    if not active:
+        st.caption("មិនមានការងារកំពុងដំណើរការទេ។")
+    for i, it in active:
+        c1, c2 = st.columns([4, 1.1])
+        pct = int(max(0.0, min(1.0, it["pct"])) * 100)
+        secs = int(time.time() - it["t0"]) if it["t0"] else 0
+        c1.markdown(
+            f'<div class="kac-row"><div class="ring" style="--p:{pct}"><span>{pct}%</span></div>'
+            f'<div class="meta"><b>{i}. {esc(it["name"])}</b>'
+            f'<div class="track"><i style="width:{pct}%"></i></div>'
+            f'<small>{esc(it["stage"])}</small></div>'
+            f'<div class="secs">⏱ {secs}s</div></div>',
+            unsafe_allow_html=True,
+        )
+        if c2.button("បោះបង់", key=f"cancel_{job.id}_{i}", use_container_width=True):
+            it["cancel"] = True
+            it["stage"] = "កំពុងបោះបង់..."
+    for i, it in failed:
+        st.error(f"❌ {i}. {it['name']} — {it['error'] or 'មិនបានសម្រេច។'}")
+        if DEBUG and it["raw_error"]:
+            st.text(it["raw_error"])
+    for i, it in enumerate(items, start=1):
+        for w in it["warn"]:
+            st.warning(f"{i}. {w}")
+    if was_running and not job.running():
+        st.rerun()
 
-run = False
-if busy:
-    st.button("⏳ កំពុងធ្វើការ... សូមរង់ចាំ", disabled=True, use_container_width=True)
-elif not items:
-    if not current_job:
-        st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
-else:
-    label = "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ"
-    if len(items) > 1:
-        label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
-    run = st.button(label, type="primary", use_container_width=True)
 
-if run:
+def completed_panel(job, query):
+    entries = [(it, job.items) for it in job.items if it["state"] == "done"]
+    q = (query or "").strip().lower()
+    if q:
+        entries = [(it, ow) for it, ow in entries if q in it["name"].lower()]
+    if job.zip:
+        dl_button("📦 ទាញយកទាំងអស់ (ZIP)", job.zip, "khmer_videos.zip", "application/zip",
+                  key=f"zip_{job.id}", use_container_width=True)
+    video_rows(entries, "c")
+
+
+def start_job(items, settings):
     try:
         fonts_data = load_font_bytes()
     except Exception:
         st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
         st.stop()
     prepare_home_font(fonts_data)
+    if not spend_tokens(USER_ID, len(items) * TOKEN_COST):
+        st.error(f"Token មិនគ្រប់ទេ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
+        st.stop()
     record_start(USER_ID, len(items))
-    settings = {
-        "engine": "free" if engine_label == ENGINE_FREE else "gemini",
-        "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
-        "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
-        "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
-        "keep_bg": keep_bg, "auto_gender": auto_gender,
-        "voice_match": voice_match, "emotion": emotion,
-        "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
-        "eleven_key": ELEVEN_KEY,
-        "timbre": timbre, "timbre_sample": (timbre_file.getvalue() if (timbre and timbre_file) else None),
-        "font_size": font_size, "outline_size": outline_size,
-        "color": colors[font_color],
-    }
     old = st.session_state.get("job")
     if old:
+        lib = st.session_state["library"]
+        for it in old.items:
+            if it["state"] == "done" and it["video"]:
+                lib.append(it)
+        del lib[:-8]
         shutil.rmtree(old.folder, ignore_errors=True)
     job_folder = tempfile.mkdtemp(prefix="kac_")
     job_items = []
@@ -3360,38 +3383,268 @@ if run:
         threading.Thread(target=run_worker, args=(job, item, settings, fonts_data), daemon=True).start()
     st.rerun()
 
-job = st.session_state.get("job")
 
-if job:
-    running = job.running()
-    if not running and not job.zip_done:
-        job.zip = build_zip(job.items)
-        job.zip_done = True
-    refresh = REFRESH_SECONDS if running else None
-    st.divider()
-    st.subheader("③ ⚙️ កន្លែងធ្វើការ")
-    st.fragment(run_every=refresh)(work_area)(job, running)
-    if running:
-        render_tiktok_box()
-    st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
-    st.divider()
-    st.subheader("④ ⬇️ កន្លែងទាញយក")
-    st.fragment(run_every=refresh)(download_area)(job)
-    if not running:
-        if st.button("🗑 លុបលទ្ធផលទាំងអស់"):
+# ---------------------------------------------------------------------
+#  ទំព័រធ្វើការ (Home / Subtitle / Dubbing / Batch)
+# ---------------------------------------------------------------------
+def workspace(page_id):
+    current_job = st.session_state.get("job")
+    busy = bool(current_job and current_job.running())
+    left, right = st.columns([1.55, 1], gap="medium")
+
+    # ----- ឆ្វេង៖ បញ្ចូលវីដេអូ -----
+    with left:
+        section("ផ្ទុកវីដេអូ", "Upload")
+        with st.container(border=True):
+            mode = st.radio("វិធីបញ្ចូល", MODES, index=2 if page_id == "batch" else 0,
+                            horizontal=True, label_visibility="collapsed", key=f"mode_{page_id}")
+            uploaded_files = []
+            link_text = ""
+            if mode.startswith("📁"):
+                one = st.file_uploader("ទាញវីដេអូមកទីនេះ ឬចុចជ្រើសរើស", type=VIDEO_TYPES, key=f"up1_{page_id}")
+                uploaded_files = [one] if one else []
+            elif mode.startswith("🔗"):
+                link_text = st.text_area(
+                    "តំណវីដេអូ (TikTok, .mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ",
+                    placeholder="https://...\nhttps://...", height=120, key=f"link_{page_id}")
+            else:
+                uploaded_files = st.file_uploader(
+                    f"ជ្រើសបានដល់ {MAX_VIDEOS} វីដេអូ ក្នុងពេលតែមួយ", type=VIDEO_TYPES,
+                    accept_multiple_files=True, key=f"upn_{page_id}") or []
+            st.caption(f"MP4, MOV, MKV, AVI, WEBM · វែងបំផុត {MAX_DURATION_MIN} នាទី")
+
+    items = []
+    too_many = False
+    if uploaded_files:
+        too_many = len(uploaded_files) > MAX_VIDEOS
+        for f in uploaded_files[:MAX_VIDEOS]:
+            items.append({"name": clean_name(f.name), "file": f, "url": None})
+    else:
+        lines = [ln.strip() for ln in link_text.splitlines()
+                 if ln.strip().lower().startswith(("http://", "https://"))]
+        too_many = len(lines) > MAX_VIDEOS
+        for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
+            items.append({"name": f"Video {i}", "file": None, "url": url})
+
+    # ----- ស្តាំ៖ មើលជាមុន + ការកំណត់ -----
+    with right:
+        preview_ph = st.container()
+
+        with st.container(border=True):
+            st.markdown('<div class="kac-card-title">🅰 កំណត់អក្សរ · Subtitle</div>', unsafe_allow_html=True)
+            font_size = st.slider("ទំហំអក្សរ", 16, 36, 22, key="fs")
+            outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2, key="ol")
+            color_label = st.radio("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), horizontal=True, key="fc")
+            pos_label = st.radio("ទីតាំងអក្សរ", list(POSITION_OPTIONS.keys()), horizontal=True, key="pos")
+
+        voice_label = list(TTS_VOICES.keys())[0]
+        speed = 1.0
+        keep_bg = auto_gender = voice_match = emotion = timbre = False
+        clone_on = False
+        clone_file = timbre_file = None
+        if page_id == "sub":
+            dub_on = False
+        else:
+            with st.container(border=True):
+                st.markdown('<div class="kac-card-title">🎙 សំឡេង AI · Dubbing</div>', unsafe_allow_html=True)
+                if page_id == "dub":
+                    dub_on = True
+                else:
+                    dub_on = st.checkbox("បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)", key=f"dub_{page_id}")
+                if dub_on:
+                    voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()), key="voice")
+                    speed = st.slider("ល្បឿនអាន", 0.8, 1.2, 1.0, 0.05, key="spd", format="%.2fx")
+                    st.caption("💡 ដើម្បីឱ្យ AI និយាយធម្មតា និងរលូនបំផុត សូមកុំបើកជម្រើសបន្ថែម។")
+                    with st.expander("⚙ ជម្រើសបន្ថែម"):
+                        auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយ", key="auto_gender")
+                        voice_match = st.checkbox("🧬 សំឡេងស្រដៀងសំឡេងដើម (បន្តិចបន្តួច)", key="voice_match")
+                        emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ស្រាលៗ", key="emotion")
+                        keep_bg = st.checkbox("🔈 រក្សាសំឡេងដើមតិចៗ", key="keep_bg")
+                        timbre = st.checkbox("🎚 ពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)", key="timbre")
+                        if timbre:
+                            timbre_file = st.file_uploader(
+                                "សំឡេងគំរូ (ជម្រើស — ១៥ វិនាទីឡើង គ្មានភ្លេង)",
+                                type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
+                        if ELEVEN_KEY:
+                            clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (សំឡេងខ្លួនឯង ឬមានការអនុញ្ញាត)", key=f"clone_{page_id}")
+                            if clone_on:
+                                clone_file = st.file_uploader(
+                                    "សំឡេងគំរូ (និយាយច្បាស់ ១–២ នាទី គ្មានភ្លេង)",
+                                    type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
+
+        with st.container(border=True):
+            st.markdown('<div class="kac-card-title">⚙ លទ្ធផល · Output</div>', unsafe_allow_html=True)
+            quality_label = st.selectbox("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1, key="qual")
+            language_label = st.selectbox("ភាសាក្នុងវីដេអូ", list(LANGUAGES.keys()), index=0, key="lang")
+            engine_options = []
+            if GROQ_KEY:
+                engine_options.append(ENGINE_FREE)
+            if GEMINI_KEY:
+                engine_options.append(ENGINE_GEMINI)
+            engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0, key="eng",
+                                        help="បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា កម្មវិធីនឹងប្តូរទៅមួយទៀតដោយស្វ័យប្រវត្តិ។")
+
+        # ----- ប៊ូតុងចាប់ផ្តើម -----
+        affordable = token_balance(USER_ID) // TOKEN_COST
+        run = False
+        if too_many:
+            st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ នឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
+        st.markdown('<div class="kac-start">', unsafe_allow_html=True)
+        if busy:
+            st.button("⏳ កំពុងធ្វើការ... សូមរង់ចាំ", disabled=True, use_container_width=True, key="start_busy")
+        elif affordable <= 0:
+            st.error(f"😅 Token ថ្ងៃនេះអស់ហើយ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញ។")
+            st.button("🔒 Token អស់ — ស្អែកមកវិញ", disabled=True, use_container_width=True, key="start_out")
+        elif not items:
+            st.button("✨ ចាប់ផ្តើមដំណើរការ", disabled=True, use_container_width=True, key="start_none")
+            st.caption("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
+        else:
+            if len(items) > affordable:
+                st.warning(f"Token នៅសល់គ្រាន់តែ {affordable} វីដេអូប៉ុណ្ណោះ។ នឹងធ្វើតែ {affordable} ដំបូង។")
+                items = items[:affordable]
+            label = "✨ ចាប់ផ្តើមដំណើរការ"
+            if len(items) > 1:
+                label += f" ({len(items)} វីដេអូ)"
+            label += f" · 🪙 {len(items) * TOKEN_COST} Token"
+            run = st.button(label, type="primary", use_container_width=True, key="start_go")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+        # ----- មើលជាមុន (បំពេញក្នុង container ខាងលើ) -----
+        css_color = COLOR_OPTIONS[color_label][1]
+        align = POSITION_OPTIONS[pos_label]
+        valign = {2: "flex-end", 5: "center", 8: "flex-start"}[align]
+        with preview_ph:
+            with st.container(border=True):
+                st.markdown('<div class="kac-card-title">🎬 មើលជាមុន · Preview</div>', unsafe_allow_html=True)
+                if uploaded_files:
+                    try:
+                        st.video(uploaded_files[0])
+                    except Exception:
+                        pass
+                px = max(12, int(font_size * 0.85))
+                shadow = ",".join(f"{dx}px {dy}px 0 #000" for dx in range(-outline_size, outline_size + 1)
+                                  for dy in range(-outline_size, outline_size + 1) if dx or dy)
+                st.markdown(
+                    f'<div class="kac-stage" style="align-items:{valign}">'
+                    f'<div class="cap" style="color:{css_color};font-size:{px}px;text-shadow:{shadow}">'
+                    'សួស្តី! នេះជាអក្សរគំរូ</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+    if run:
+        settings = {
+            "engine": "free" if engine_label == ENGINE_FREE else "gemini",
+            "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
+            "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
+            "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
+            "tts_rate": int(round((speed - 1.0) * 100)),
+            "keep_bg": keep_bg, "auto_gender": auto_gender,
+            "voice_match": voice_match, "emotion": emotion,
+            "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
+            "eleven_key": ELEVEN_KEY,
+            "timbre": timbre,
+            "timbre_sample": (timbre_file.getvalue() if (timbre and timbre_file) else None),
+            "font_size": font_size, "outline_size": outline_size,
+            "color": COLOR_OPTIONS[color_label][0], "position": align,
+        }
+        start_job(items, settings)
+
+    # ----- ឆ្វេង៖ កំពុងដំណើរការ + រួចរាល់ -----
+    with left:
+        job = st.session_state.get("job")
+        if not job:
+            section("កំពុងដំណើរការ", "Processing")
+            st.caption("នៅទំនេរ។ ជ្រើសវីដេអូ រួចចុច «ចាប់ផ្តើមដំណើរការ»។")
+            return
+        running = job.running()
+        if not running and not job.zip_done:
+            job.zip = build_zip(job.items)
+            job.zip_done = True
+        refresh = REFRESH_SECONDS if running else None
+        st.fragment(run_every=refresh)(processing_panel)(job, running)
+        if running:
+            render_tiktok_box()
+        st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
+        head, search = st.columns([2, 2])
+        head.markdown('<div class="kac-sec">រួចរាល់ <b>Completed</b></div>', unsafe_allow_html=True)
+        query = search.text_input("ស្វែងរក", placeholder="🔍 ស្វែងរកវីដេអូ...",
+                                  label_visibility="collapsed", key="q_home")
+        st.fragment(run_every=refresh)(completed_panel)(job, query)
+        if not running:
+            if st.button("🗑 លុបលទ្ធផលទាំងអស់", key="clear_job"):
+                shutil.rmtree(job.folder, ignore_errors=True)
+                st.session_state.pop("job", None)
+                st.rerun()
+            if not job.scrolled:
+                job.scrolled = True
+                if any(it["state"] == "done" for it in job.items):
+                    scroll_to_downloads()
+
+
+def videos_page():
+    section("វីដេអូរបស់ខ្ញុំ", "My Videos")
+    job = st.session_state.get("job")
+    entries = []
+    if job:
+        entries += [(it, job.items) for it in job.items if it["state"] == "done"]
+    lib = st.session_state["library"]
+    entries += [(it, lib) for it in reversed(lib)]
+    q = st.text_input("ស្វែងរក", placeholder="🔍 ស្វែងរកវីដេអូ...", label_visibility="collapsed", key="q_videos")
+    if q.strip():
+        entries = [(it, ow) for it, ow in entries if q.strip().lower() in it["name"].lower()]
+    if job and job.zip:
+        dl_button("📦 ទាញយកទាំងអស់ (ZIP)", job.zip, "khmer_videos.zip", "application/zip",
+                  key=f"zipv_{job.id}", use_container_width=True)
+    video_rows(entries, "v")
+    st.caption("វីដេអូត្រូវបានរក្សាទុកបណ្តោះអាសន្នក្នុងកម្មវិធី។ សូមទាញយកទុកភ្លាមៗ។")
+    if entries and st.button("🗑 លុបវីដេអូទាំងអស់", key="clear_all_videos"):
+        if job:
             shutil.rmtree(job.folder, ignore_errors=True)
             st.session_state.pop("job", None)
-            st.rerun()
-        if not job.scrolled:
-            job.scrolled = True
-            if any(it["state"] == "done" for it in job.items):
-                scroll_to_downloads()
+        st.session_state["library"] = []
+        st.rerun()
+
+
+def help_page():
+    section("ជំនួយ", "Help")
+    with st.container(border=True):
+        st.markdown(
+            "**របៀបប្រើ (៣ជំហាន)**\n\n"
+            "1. 📁 ជ្រើសវីដេអូ (Upload / Link / Batch)\n"
+            "2. ⚙ កំណត់អក្សរ និងសំឡេង (ឬទុកដូចដើម)\n"
+            "3. ✨ ចុច «ចាប់ផ្តើមដំណើរការ» រួចរង់ចាំ ហើយទាញយក\n"
+        )
+    with st.container(border=True):
+        st.markdown(
+            "**ម៉ឺនុយ**\n\n"
+            "- 🏠 ទំព័រដើម៖ ធ្វើបានទាំងអក្សរ និងសំឡេង\n"
+            "- 💬 ដាក់អក្សរខ្មែរ៖ តែអក្សររត់ប៉ុណ្ណោះ\n"
+            "- 🎙 សំឡេង AI៖ អក្សរ + សំឡេងអានខ្មែរ\n"
+            "- 📚 ច្រើនវីដេអូ៖ ធ្វើច្រើនវីដេអូស្មើគ្នា\n"
+            "- 🎞 វីដេអូរបស់ខ្ញុំ៖ មើល និងទាញយកវីដេអូដែលរួចរាល់\n"
+        )
+    with st.container(border=True):
+        st.markdown(
+            "**គន្លឹះ**\n\n"
+            "- 📱 ប្រើទូរសព្ទ សូមបង្វិលដេក (ផ្ដេក) ដើម្បីឃើញម៉ឺនុយ និងការកំណត់ពេញលេញ\n"
+            "- 🗣 ចង់ឱ្យ AI និយាយធម្មតា និងរលូន សូមកុំបើកជម្រើសបន្ថែមក្នុងផ្នែកសំឡេង\n"
+            "- ⏱ វីដេអូខ្លីៗ ធ្វើបានលឿន និងមានកំហុសតិច\n"
+            "- ⬇ សូមទាញយកវីដេអូភ្លាមៗពេលរួចរាល់\n"
+        )
+
+
+if page_id == "videos":
+    videos_page()
+elif page_id == "help":
+    help_page()
+else:
+    workspace(page_id)
 
 
 ADMIN_KEY = st.secrets.get("ADMIN_KEY", "")
 if ADMIN_KEY and st.query_params.get("admin", "") == ADMIN_KEY:
     st.divider()
-    st.subheader("📊 ស្ថិតិ (Admin)")
+    section("📊 ស្ថិតិ", "Admin")
     today_rec = today_stats()
     a1, a2, a3, a4 = st.columns(4)
     a1.metric("🎬 វីដេអូ", today_rec["videos"])
