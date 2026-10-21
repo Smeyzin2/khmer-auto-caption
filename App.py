@@ -2646,7 +2646,33 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 eqs = eq_filters(ref_bands, np.mean(arrs, axis=0).tolist())
                 if eqs:
                     voice_eq[v_] = eqs
-        if notes is not None and skipped:
+        if notes is not None and voice_eq:
+            notes.append("🎚 ផ្គូផ្គងពណ៌សំឡេងស្រដៀងសំឡេងគំរូ")
+    if notes is not None and clone_voice:
+        notes.append(f"🧑‍🎤 ក្លូនសំឡេងបាន {clone_stats['ok']}/{n_seg} ឃ្លា"
+                     + (f" (បរាជ័យ: {clone_stats['err']})" if clone_stats["fail"] else ""))
+    cursor = 0.0
+    plan = []
+    skipped = 0
+    for i, res in enumerate(results):
+        s, e, t = segments[i]
+        if res is None:
+            skipped += 1
+            continue
+        d, f0, _tb = res
+        next_s = segments[i + 1][0] if i + 1 < n_seg else duration
+        start = max(s, cursor)
+        if start >= duration - 0.3:
+            break
+        slot = max(0.8, min(next_s - 0.05, e + 0.5) - start)
+        # ល្បឿនជិតធម្មតា (១.០) បើវែងពេកទើបបង្កើនបន្តិច មិនលើសកំណត់
+        speed = min(SPEED_MAX, max(SPEED_MIN, d / slot))
+        cursor = start + d / speed + 0.12
+        target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
+        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
+                     "voice": voices_[i], "f0": f0 if target else None, "target": target,
+                     "eq": voice_eq.get(voices_[i], "")})
+    if notes is not None and skipped:
         notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
     if not plan:
         return False
