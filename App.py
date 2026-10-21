@@ -1631,7 +1631,16 @@ def groq_translate_chunk(api_key, texts):
             "model": model, "temperature": 0.2,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": ("You translate subtitles into natural, fluent " "Khmer (Khmer script only). Translate meaning, " "not word for word. Return JSON: " "{\"translations\": [...]} with exactly the " "same number of items, in the same order.")},
+                {"role": "system", "content": (
+                    "You are a careful professional translator from the source language into Cambodian Khmer. "
+                    "Translate every input subtitle faithfully and completely. Preserve full meaning, speaker "
+                    "intent, tone, names, numbers, relationships, negation, and important details. Do not "
+                    "summarize, shorten, skip, invent, or merge subtitles. Use natural spoken Khmer that a "
+                    "Cambodian viewer can easily understand, written in Khmer script. Avoid overly literal "
+                    "wording when it sounds unnatural, but never change the meaning. Use surrounding subtitle "
+                    "lines as context. Return only valid JSON with key translations, containing exactly the "
+                    "same number of strings in the same order as the input."
+                )},
                 {"role": "user", "content": numbered},
             ],
         }).encode("utf-8")
@@ -1661,64 +1670,52 @@ def groq_translate_chunk(api_key, texts):
 
 
 def translate_texts(texts, groq_key=None):
+    """
+    Translate in small contextual batches with the AI translator first.
+    Google Translate is a fallback, not the primary quality path.
+    Each source subtitle remains one output subtitle in the same order.
+    """
     errors = []
     outs = [None] * len(texts)
-    google_blocked = False
-    batches, cur, size = [], [], 0
-    for i, t in enumerate(texts):
-        flat = str(t).replace("\n", " ").strip()
-        if cur and size + len(flat) > 1200:
-            batches.append(cur)
-            cur, size = [], 0
-        cur.append((i, flat))
-        size += len(flat) + 1
-    if cur:
-        batches.append(cur)
-    for batch in batches:
-        if google_blocked:
-            break
-        try:
-            raw = google_translate_request("\n".join(t for _, t in batch))
-            lines = (raw or "").strip("\n").split("\n")
-            if len(lines) == len(batch):
-                for (i, _), line in zip(batch, lines):
-                    outs[i] = clean_translation(line)
-            else:
-                # Joined Google response sometimes loses line boundaries. Retry each
-                # subtitle separately so one malformed batch does not fail every line.
-                for i, source in batch:
-                    try:
-                        single = google_translate_request(source, retries=2)
-                        outs[i] = clean_translation(single)
-                    except Exception as single_error:
-                        errors.append(f"google-single: {single_error}"[:200])
-        except Exception as e:
-            errors.append(f"google: {e}"[:200])
-            google_blocked = True
-        time.sleep(0.2)
-    missing = [i for i, o in enumerate(outs) if o is None]
-    if missing and groq_key:
-        # First retry failed lines in smaller batches, then individually. This
-        # isolates a bad/too-long subtitle from the rest of the video.
-        for k in range(0, len(missing), 5):
-            idxs = missing[k:k + 5]
+
+    # AI-first: short batches preserve nearby context while limiting malformed responses.
+    if groq_key:
+        for k in range(0, len(texts), 5):
+            idxs = list(range(k, min(k + 5, len(texts))))
             try:
-                res = groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs])
-                for i, r in zip(idxs, res):
-                    if r:
-                        outs[i] = r
+                res = groq_translate_chunk(
+                    groq_key, [str(texts[i]).strip() for i in idxs]
+                )
+                if len(res) == len(idxs):
+                    for i, translated in zip(idxs, res):
+                        if translated and str(translated).strip():
+                            outs[i] = clean_translation(str(translated))
             except Exception as e:
-                errors.append(f"groq-retry: {e}"[:200])
-            time.sleep(0.5)
-        missing = [i for i, o in enumerate(outs) if o is None]
+                errors.append(f"groq-batch: {e}"[:200])
+            time.sleep(0.4)
+
+        # Isolate failed AI batches, one subtitle at a time.
+        missing = [i for i, value in enumerate(outs) if not value]
         for i in missing:
             try:
                 res = groq_translate_chunk(groq_key, [str(texts[i]).strip()])
-                if res and res[0]:
-                    outs[i] = res[0]
+                if res and res[0] and str(res[0]).strip():
+                    outs[i] = clean_translation(str(res[0]))
             except Exception as e:
                 errors.append(f"groq-single: {e}"[:200])
             time.sleep(0.3)
+
+    # Google fallback only for lines the AI could not translate.
+    missing = [i for i, value in enumerate(outs) if not value]
+    for i in missing:
+        try:
+            translated = google_translate_request(str(texts[i]).replace("\\n", " ").strip(), retries=3)
+            if translated and str(translated).strip():
+                outs[i] = clean_translation(translated)
+        except Exception as e:
+            errors.append(f"google-single: {e}"[:200])
+        time.sleep(0.2)
+
     return outs, errors
 
 
