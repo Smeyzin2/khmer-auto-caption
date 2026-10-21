@@ -1436,7 +1436,31 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
             data = f.read()
         if len(data) > 15 * 1024 * 1024:
             raise UserError("សំឡេងធំពេក។")
-        segs, model, errors = transcribe_clip(client, models, data, "audio/flac", end - start, source_language, concise, status)
+
+        # Retry a failed/empty chunk before declaring part of the video lost.
+        segs, model, errors = [], None, []
+        last_error = None
+        for attempt in range(3):
+            try:
+                segs, model, errors = transcribe_clip(
+                    client, models, data, "audio/flac", end - start,
+                    source_language, concise, status
+                )
+                if segs:
+                    break
+                # Empty result with explicit model errors may be a temporary
+                # provider/model failure; retry. A clean empty result means silence.
+                if not errors:
+                    break
+                last_error = " | ".join(errors[:2])
+            except Exception as e:
+                last_error = str(e)
+            if attempt < 2:
+                wait = 2 * (attempt + 1)
+                status.write(f"ផ្នែក {i + 1} បកមិនបាន កំពុងសាកម្ដងទៀត ({attempt + 2}/3)...")
+                time.sleep(wait)
+        if not segs and last_error:
+            errors = list(errors or []) + [f"chunk {i + 1}: {last_error}"]
         done_counter["n"] += 1
         if total > 1:
             status.write(f"៣/៤ កំពុងស្តាប់ និងបកប្រែ... ({done_counter['n']}/{total})")
@@ -1462,7 +1486,12 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
                 used_models.append(model)
                 for s, e, t in segs:
                     all_segments.append((min(s + start, duration), min(e + start, duration + 0.5), t))
-            elif any(k in err.lower() for err in errors for k in fatal_keys):
+            elif errors and any(k in err.lower() for err in errors for k in fatal_keys):
+                failed += 1
+                fatal_errors.extend(errors)
+            elif errors:
+                # Chunk produced no captions after its retries: count it as a
+                # failed part so the UI warning accurately reflects omissions.
                 failed += 1
                 fatal_errors.extend(errors)
     if not all_segments:
