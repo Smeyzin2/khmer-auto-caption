@@ -656,12 +656,31 @@ PREFERRED_MODELS = [
 
 GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
 
-FONT_SOURCES = [
-    ("Battambang.ttf", GF + "battambang/Battambang-Regular.ttf", "Battambang"),
-    ("Content.ttf", GF + "content/Content-Regular.ttf", "Content"),
-    ("Siemreap.ttf", GF + "siemreap/Siemreap-Regular.ttf", "Siemreap"),
-    ("Bokor.ttf", GF + "bokor/Bokor-Regular.ttf", "Bokor"),
-]
+# ពុម្ពអក្សរខ្មែរដែលអាចជ្រើសបាន៖ ឈ្មោះបង្ហាញ -> (ឈ្មោះឯកសារ, [ផ្លូវទាញយក...], ឈ្មោះ Font)
+FONT_CHOICES = {
+    "Battambang (ស្តង់ដារ)": ("Battambang.ttf", ["battambang/Battambang-Regular.ttf"], "Battambang"),
+    "Content": ("Content.ttf", ["content/Content-Regular.ttf"], "Content"),
+    "Siemreap": ("Siemreap.ttf", ["siemreap/Siemreap-Regular.ttf"], "Siemreap"),
+    "Bokor": ("Bokor.ttf", ["bokor/Bokor-Regular.ttf"], "Bokor"),
+    "Hanuman": ("Hanuman.ttf", ["hanuman/Hanuman-Regular.ttf", "hanuman/Hanuman%5Bwght%5D.ttf"], "Hanuman"),
+    "Nokora": ("Nokora.ttf", ["nokora/Nokora-Regular.ttf"], "Nokora"),
+    "Koulen (ក្រាស់)": ("Koulen.ttf", ["koulen/Koulen-Regular.ttf"], "Koulen"),
+    "Moul (ចម្លាក់)": ("Moul.ttf", ["moul/Moul-Regular.ttf"], "Moul"),
+    "Moulpali": ("Moulpali.ttf", ["moulpali/Moulpali-Regular.ttf"], "Moulpali"),
+    "Dangrek": ("Dangrek.ttf", ["dangrek/Dangrek-Regular.ttf"], "Dangrek"),
+    "Suwannaphum": ("Suwannaphum.ttf", ["suwannaphum/Suwannaphum-Regular.ttf"], "Suwannaphum"),
+    "Chenla": ("Chenla.ttf", ["chenla/Chenla-Regular.ttf"], "Chenla"),
+    "Taprom": ("Taprom.ttf", ["taprom/Taprom-Regular.ttf"], "Taprom"),
+    "Bayon": ("Bayon.ttf", ["bayon/Bayon-Regular.ttf"], "Bayon"),
+    "Angkor": ("Angkor.ttf", ["angkor/Angkor-Regular.ttf"], "Angkor"),
+    "Metal": ("Metal.ttf", ["metal/Metal-Regular.ttf"], "Metal"),
+    "Freehand (ដៃសរសេរ)": ("Freehand.ttf", ["freehand/Freehand-Regular.ttf"], "Freehand"),
+    "Fasthand (ដៃសរសេរ)": ("Fasthand.ttf", ["fasthand/Fasthand-Regular.ttf"], "Fasthand"),
+    "Odor Mean Chey": ("OdorMeanChey.ttf", ["odormeanchey/OdorMeanChey-Regular.ttf"], "Odor Mean Chey"),
+    "Preahvihear": ("Preahvihear.ttf", ["preahvihear/Preahvihear-Regular.ttf"], "Preahvihear"),
+}
+DEFAULT_FONT = "Battambang (ស្តង់ដារ)"
+FONT_BACKUP = [DEFAULT_FONT, "Content", "Siemreap"]
 
 QUALITY = {
     "⚡ លឿន": (480, 28, "ultrafast"),
@@ -798,20 +817,31 @@ def time_ass(seconds):
 
 
 @st.cache_resource(show_spinner=False)
-def load_font_bytes():
+def load_font_bytes(choice=DEFAULT_FONT):
+    """ទាញ Font ដែលបានជ្រើសមកមុន រួចទាញ Font បម្រុង (ប្រើពេល Font ដែលជ្រើសមិនដំណើរការ)"""
+    if choice not in FONT_CHOICES:
+        choice = DEFAULT_FONT
+    order = [choice] + [k for k in FONT_BACKUP if k != choice]
     out = []
-    for i, (filename, url, default_name) in enumerate(FONT_SOURCES):
-        try:
-            request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(request, timeout=25) as response:
-                data = response.read()
-            if len(data) < 1000:
-                raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
-        except Exception:
-            if i == 0:
-                raise
-            continue
-        out.append((filename, data, default_name))
+    for key in order:
+        filename, paths, default_name = FONT_CHOICES[key]
+        data = None
+        for path in paths:
+            try:
+                request = urllib.request.Request(GF + path, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(request, timeout=25) as response:
+                    got = response.read()
+                if len(got) >= 1000:
+                    data = got
+                    break
+            except Exception:
+                continue
+        if data:
+            out.append((filename, data, default_name))
+        if len(out) >= 3:
+            break
+    if not out:
+        raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
     return out
 
 
@@ -819,10 +849,11 @@ def prepare_home_font(fonts_data):
     try:
         home_fonts = os.path.expanduser("~/.fonts")
         os.makedirs(home_fonts, exist_ok=True)
-        dst = os.path.join(home_fonts, "Battambang-Regular.ttf")
-        if not os.path.exists(dst):
-            with open(dst, "wb") as f:
-                f.write(fonts_data[0][1])
+        for filename, data, _name in fonts_data:
+            dst = os.path.join(home_fonts, filename)
+            if not os.path.exists(dst):
+                with open(dst, "wb") as f:
+                    f.write(data)
     except Exception:
         pass
 
@@ -2518,6 +2549,123 @@ def eleven_sts(key, voice_id, path):
             with _eleven_sem:
                 out = _eleven_call(key, url, body, ctype, timeout=120)
             if len(out) < 500:
+def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
+    import numpy as np
+    texts = [seg[2] for seg in dub_segments]
+    labels = label_emotions(texts, groq_key, gemini_key)
+    t = f = r = None
+    if info:
+        t, f, r = info.get("times"), info.get("f0"), info.get("rms")
+    have_audio = (t is not None and f is not None and r is not None and len(t) > 0)
+    all_f = base_rms = None
+    meds = {}
+    if have_audio:
+        voiced = f > 0
+        if int(voiced.sum()) >= 25:
+            all_f = float(np.median(f[voiced]))
+            base_rms = float(np.median(r[voiced]))
+        if runs:
+            meds = gender_medians(info, runs)
+    def clip(x):
+        return float(np.clip(x, -1.5, 1.5))
+    voices = seg_voices or [None] * len(dub_segments)
+    result = []
+    for i, seg in enumerate(dub_segments):
+        s, e = seg[0], seg[1]
+        v = voices[i]
+        g = "M" if v == VOICE_MALE else ("F" if v == VOICE_FEMALE else None)
+        arousal = 0.0
+        if have_audio and all_f and base_rms:
+            m = (t >= s) & (t <= e) & (f > 0)
+            if int(m.sum()) >= 5:
+                own = float(np.median(f[m]))
+                base_f = meds.get(g) or all_f
+                loud_db = 20.0 * np.log10(max(float(np.mean(r[m])), 1e-6) / max(base_rms, 1e-6))
+                pitch_st = 12.0 * np.log2(own / base_f)
+                std_st = float(np.std(12.0 * np.log2(f[m] / own)))
+                arousal = (0.5 * clip(loud_db / 6.0) + 0.3 * clip(pitch_st / 4.0) + 0.2 * clip((std_st - 2.5) / 2.0))
+        text_label = labels[i] if labels else None
+        result.append(combine_emotion(text_label, arousal))
+    counts = Counter(lab for lab, _ in result)
+    source = ("តាមអត្ថបទ + សំឡេងដើម" if labels and have_audio else "តាមអត្ថបទតែប៉ុណ្ណោះ" if labels else "តាមសំឡេងដើមតែប៉ុណ្ណោះ" if have_audio else "មិនមានទិន្នន័យ")
+    summary = (f"🎭 អារម្មណ៍ ({source})៖ " + " · ".join(f"{EMO_NAMES[k]} {counts[k]}" for k in EMO_LABELS if counts.get(k)))
+    lines = [summary]
+    shown = 0
+    for (lab, inten), text in zip(result, texts):
+        if lab == "neutral":
+            continue
+        lines.append(f"{EMO_NAMES[lab]} ×{inten:.1f}  {text}")
+        shown += 1
+        if shown >= 40:
+            break
+    return result, lines
+
+
+def emotion_prosody(label, intensity, use_pitch=True):
+    rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
+    k = max(0.0, float(intensity))
+    rate = int(max(-10, min(10, rate * k)))
+    pitch = int(max(-8, min(8, pitch * k))) if use_pitch else 0
+    vol = int(max(-20, min(15, vol * k)))
+    if rate == 0 and pitch == 0 and vol == 0:
+        return None
+    return {"rate": f"{rate:+d}%", "pitch": f"{pitch:+d}Hz", "volume": f"{vol:+d}%"}
+
+
+
+
+_eleven_sem = threading.Semaphore(2)
+
+
+def _multipart(fields, files):
+    boundary = "----kac" + uuid.uuid4().hex
+    parts = []
+    for n, v in fields:
+        parts.append((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{n}\"\r\n\r\n{v}\r\n").encode("utf-8"))
+    for n, fn, data, ct in files:
+        parts.append((f"--{boundary}\r\nContent-Disposition: form-data; name=\"{n}\"; filename=\"{fn}\"\r\nContent-Type: {ct}\r\n\r\n").encode("utf-8"))
+        parts.append(data)
+        parts.append(b"\r\n")
+    parts.append(f"--{boundary}--\r\n".encode("utf-8"))
+    return b"".join(parts), f"multipart/form-data; boundary={boundary}"
+
+
+def _eleven_call(key, url, body=None, ctype=None, method="POST", timeout=120):
+    headers = {"xi-api-key": key, "User-Agent": "Mozilla/5.0"}
+    if ctype:
+        headers["Content-Type"] = ctype
+    request = urllib.request.Request(url, data=body, method=method, headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as r:
+            return r.read()
+    except urllib.error.HTTPError as e:
+        detail = e.read().decode("utf-8", "ignore")[:200]
+        raise RuntimeError(f"ElevenLabs HTTP {e.code}: {detail}")
+
+
+def eleven_add_voice(key, sample_bytes):
+    body, ctype = _multipart(
+        [("name", "kac_" + uuid.uuid4().hex[:8])],
+        [("files", "sample.mp3", sample_bytes, "audio/mpeg")],
+    )
+    raw = _eleven_call(key, "https://api.elevenlabs.io/v1/voices/add", body, ctype, timeout=90)
+    return json.loads(raw.decode("utf-8"))["voice_id"]
+
+
+def eleven_sts(key, voice_id, path):
+    with open(path, "rb") as f:
+        audio = f.read()
+    body, ctype = _multipart(
+        [("model_id", "eleven_multilingual_sts_v2")],
+        [("audio", "in.mp3", audio, "audio/mpeg")],
+    )
+    url = f"https://api.elevenlabs.io/v1/speech-to-speech/{voice_id}?output_format=mp3_44100_128"
+    last = None
+    for attempt in range(3):
+        try:
+            with _eleven_sem:
+                out = _eleven_call(key, url, body, ctype, timeout=120)
+            if len(out) < 500:
                 raise RuntimeError("ElevenLabs ឆ្លើយតបទទេ")
             with open(path, "wb") as f:
                 f.write(out)
@@ -2788,22 +2936,24 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     return os.path.exists(os.path.join(folder, "dub.wav"))
 
 
-def build_video_filter(max_side):
+def build_video_filter(max_side, subs=True):
     ass = "ass=filename=captions.ass:fontsdir=."
     if max_side and max_side > 0:
         scale = (f"scale=w='if(gt(iw,ih),-2,min({max_side},iw))':" f"h='if(gt(iw,ih),min({max_side},ih),-2)'")
-        return f"{scale},{ass},format=yuv420p"
-    return f"{ass},format=yuv420p"
+        return f"{scale},{ass},format=yuv420p" if subs else f"{scale},format=yuv420p"
+    return f"{ass},format=yuv420p" if subs else "format=yuv420p"
 
 
 def render_with_fonts(folder, fonts, captions, font_size, outline_size,
-                      color, vid_w, vid_h, quality, status, dub=False, alignment=2):
+                      color, vid_w, vid_h, quality, status, dub=False, alignment=2, subs=True):
     ass_path = os.path.join(folder, "captions.ass")
     output_path = os.path.join(folder, "output.mp4")
     max_side, crf, preset = quality
     conf_env = make_fontconfig_env(folder)
     plan = [(0, False), (0, True)]
     plan += [(i, True) for i in range(1, len(fonts))]
+    if not subs:
+        plan = [(0, False)]
     attempts = []
     have_output = False
     best = None
@@ -2811,11 +2961,12 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         font_path, default_name = fonts[font_index]
         family = get_font_family(font_path, default_name)
         keys = [family.lower(), default_name.lower()]
-        write_ass(ass_path, captions, family, font_size, outline_size, color, vid_w, vid_h, alignment)
+        if subs:
+            write_ass(ass_path, captions, family, font_size, outline_size, color, vid_w, vid_h, alignment)
         args = ["-i", "input.mp4"]
         if dub:
             args += ["-i", "dub.wav"]
-        args += ["-vf", build_video_filter(max_side)]
+        args += ["-vf", build_video_filter(max_side, subs)]
         if dub:
             args += ["-map", "0:v:0", "-map", "1:a:0"]
         args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"]
@@ -2826,7 +2977,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
             if not have_output and (font_index, use_conf) == plan[-1]:
                 raise
             continue
-        ok = font_was_used(log, keys)
+        ok = font_was_used(log, keys) if subs else True
         attempts.append(f"{family} conf={use_conf}: ok={ok}")
         have_output = True
         best = (family, log)
@@ -2885,6 +3036,9 @@ def run_worker(job, item, settings, fonts_data):
             item["pct"] = 0.12
             rep.write("១/៤ កំពុងរៀបចំ...")
             fonts = install_fonts(folder, fonts_data)
+            _want = settings.get("font_choice", DEFAULT_FONT)
+            if settings.get("subs_on", True) and _want in FONT_CHOICES and fonts_data[0][2] != FONT_CHOICES[_want][2]:
+                item["warn"].append(f"ទាញយក Font «{_want}» មិនបាន ប្រើ Font ស្តង់ដារជំនួស។")
             item["pct"] = 0.18
             rep.write("២/៤ កំពុងដកសំឡេង...")
             extract_audio(source, audio_path, master_path)
@@ -3004,7 +3158,7 @@ def run_worker(job, item, settings, fonts_data):
             with job.render_slots:
                 item["pct"] = 0.82
                 rep.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
-                video, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, alignment=settings.get("position", 2))
+                video, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, alignment=settings.get("position", 2), subs=settings.get("subs_on", True))
             item["video"] = video
             item["captions"] = [t for _, _, t in captions]
             item["debug"] = {
@@ -3227,7 +3381,7 @@ def scroll_to_downloads():
 
 import html as _html
 
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GEMINI_KEY = ""  # Gemini ត្រូវបានបិទ មិនដំណើរការទេ
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
@@ -3276,7 +3430,7 @@ components.html(
     height=0,
 )
 
-if not GEMINI_KEY and not GROQ_KEY:
+if not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
     st.stop()
 
@@ -3309,7 +3463,7 @@ ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមាន�
 
 # រក្សាតម្លៃការកំណត់ ពេលប្តូរទំព័រ
 SETTING_KEYS = ["fs", "ol", "fc", "pos", "voice", "spd", "qual", "eng", "lang",
-                "auto_gender", "voice_match", "emotion", "keep_bg", "timbre"]
+                "auto_gender", "voice_match", "emotion", "keep_bg", "timbre", "subs_on", "font_choice"]
 for _k in SETTING_KEYS:
     if _k in st.session_state:
         st.session_state[_k] = st.session_state[_k]
@@ -3486,7 +3640,7 @@ def completed_panel(job, query):
 
 def start_job(items, settings):
     try:
-        fonts_data = load_font_bytes()
+        fonts_data = load_font_bytes(settings.get("font_choice", DEFAULT_FONT))
     except Exception:
         st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
         st.stop()
@@ -3565,10 +3719,22 @@ def workspace(page_id):
 
         with st.container(border=True):
             st.markdown('<div class="kac-card-title">🅰 កំណត់អក្សរ · Subtitle</div>', unsafe_allow_html=True)
-            font_size = st.slider("ទំហំអក្សរ", 16, 36, 22, key="fs")
-            outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2, key="ol")
-            color_label = st.radio("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), horizontal=True, key="fc")
-            pos_label = st.radio("ទីតាំងអក្សរ", list(POSITION_OPTIONS.keys()), horizontal=True, key="pos")
+            if page_id == "sub":
+                subs_on = True
+            else:
+                subs_on = st.checkbox("ដាក់អក្សរខ្មែរលើវីដេអូ (Subtitle)", value=True, key="subs_on")
+            font_choice = DEFAULT_FONT
+            font_size, outline_size = 22, 2
+            color_label = list(COLOR_OPTIONS.keys())[0]
+            pos_label = list(POSITION_OPTIONS.keys())[0]
+            if subs_on:
+                font_choice = st.selectbox("ពុម្ពអក្សរខ្មែរ", list(FONT_CHOICES.keys()), key="font_choice")
+                font_size = st.slider("ទំហំអក្សរ", 16, 36, 22, key="fs")
+                outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2, key="ol")
+                color_label = st.radio("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), horizontal=True, key="fc")
+                pos_label = st.radio("ទីតាំងអក្សរ", list(POSITION_OPTIONS.keys()), horizontal=True, key="pos")
+            else:
+                st.caption("វីដេអូនឹងគ្មានអក្សរលើវីដេអូទេ។")
 
         voice_label = list(TTS_VOICES.keys())[0]
         speed = 1.0
@@ -3617,16 +3783,24 @@ def workspace(page_id):
                         st.video(uploaded_files[0])
                     except Exception:
                         pass
-                px = max(12, int(font_size * 0.85))
-                o = outline_size
-                shadow = ",".join(f"{dx}px {dy}px 0 #000" for dx, dy in
-                                  [(-o, 0), (o, 0), (0, -o), (0, o), (-o, -o), (o, -o), (-o, o), (o, o)])
-                st.markdown(
-                    f'<div class="kac-stage" style="align-items:{valign}">'
-                    f'<div class="cap" style="color:{css_color};font-size:{px}px;text-shadow:{shadow}">'
-                    'សួស្តី! នេះជាអក្សរគំរូ</div></div>',
-                    unsafe_allow_html=True,
-                )
+                if subs_on:
+                    px = max(12, int(font_size * 0.85))
+                    o = outline_size
+                    shadow = ",".join(f"{dx}px {dy}px 0 #000" for dx, dy in
+                                      [(-o, 0), (o, 0), (0, -o), (0, o), (-o, -o), (o, -o), (-o, o), (o, o)])
+                    fam = FONT_CHOICES[font_choice][2]
+                    st.markdown(
+                        f"<style>@import url('https://fonts.googleapis.com/css2?family={fam.replace(' ', '+')}&display=swap');</style>"
+                        f'<div class="kac-stage" style="align-items:{valign}">'
+                        f'<div class="cap" style="color:{css_color};font-size:{px}px;text-shadow:{shadow};'
+                        f"font-family:'{fam}','Kantumruy Pro',sans-serif\">"
+                        'សួស្តី! នេះជាអក្សរគំរូ</div></div>',
+                        unsafe_allow_html=True,
+                    )
+                else:
+                    st.markdown(
+                        '<div class="kac-stage"></div>', unsafe_allow_html=True)
+                    st.caption("មិនដាក់អក្សរលើវីដេអូ")
 
     # ----- ឆ្វេង៖ លទ្ធផល + ប៊ូតុងចាប់ផ្តើម (នៅក្រោមការបញ្ចូលវីដេអូ) -----
     with left:
@@ -3634,13 +3808,7 @@ def workspace(page_id):
             st.markdown('<div class="kac-card-title">⚙ លទ្ធផល · Output</div>', unsafe_allow_html=True)
             quality_label = st.selectbox("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1, key="qual")
             language_label = st.selectbox("ភាសាក្នុងវីដេអូ", list(LANGUAGES.keys()), index=0, key="lang")
-            engine_options = []
-            if GROQ_KEY:
-                engine_options.append(ENGINE_FREE)
-            if GEMINI_KEY:
-                engine_options.append(ENGINE_GEMINI)
-            engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0, key="eng",
-                                        help="បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា កម្មវិធីនឹងប្តូរទៅមួយទៀតដោយស្វ័យប្រវត្តិ។")
+            engine_label = ENGINE_FREE
 
         # ----- ប៊ូតុងចាប់ផ្តើម -----
         run = False
@@ -3652,6 +3820,9 @@ def workspace(page_id):
         elif not items:
             st.button("✨ ចាប់ផ្តើមដំណើរការ", disabled=True, use_container_width=True, key="start_none")
             st.caption("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
+        elif not subs_on and not dub_on:
+            st.button("✨ ចាប់ផ្តើមដំណើរការ", disabled=True, use_container_width=True, key="start_nothing")
+            st.caption("សូមបើកយ៉ាងហោចណាស់មួយ៖ អក្សរខ្មែរ ឬសំឡេងអាន AI។")
         else:
             label = "✨ ចាប់ផ្តើមដំណើរការ"
             if len(items) > 1:
@@ -3662,7 +3833,7 @@ def workspace(page_id):
 
     if run:
         settings = {
-            "engine": "free" if engine_label == ENGINE_FREE else "gemini",
+            "engine": "free",
             "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
             "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
             "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
@@ -3674,6 +3845,7 @@ def workspace(page_id):
             "timbre": timbre,
             "timbre_sample": (timbre_file.getvalue() if (timbre and timbre_file) else None),
             "font_size": font_size, "outline_size": outline_size,
+            "subs_on": subs_on, "font_choice": font_choice,
             "color": COLOR_OPTIONS[color_label][0], "position": align,
         }
         start_job(items, settings)
