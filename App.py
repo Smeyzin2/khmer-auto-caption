@@ -3537,6 +3537,30 @@ def workspace(page_id):
                                     "សំឡេងគំរូ (និយាយច្បាស់ ១–២ នាទី គ្មានភ្លេង)",
                                     type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
 
+        # ----- មើលជាមុន (បំពេញក្នុង container ខាងលើ) -----
+        css_color = COLOR_OPTIONS[color_label][1]
+        align = POSITION_OPTIONS[pos_label]
+        valign = {2: "flex-end", 5: "center", 8: "flex-start"}[align]
+        with preview_ph:
+            with st.container(border=True):
+                st.markdown('<div class="kac-card-title">🎬 មើលជាមុន · Preview</div>', unsafe_allow_html=True)
+                if uploaded_files:
+                    try:
+                        st.video(uploaded_files[0])
+                    except Exception:
+                        pass
+                px = max(12, int(font_size * 0.85))
+                shadow = ",".join(f"{dx}px {dy}px 0 #000" for dx in range(-outline_size, outline_size + 1)
+                                  for dy in range(-outline_size, outline_size + 1) if dx or dy)
+                st.markdown(
+                    f'<div class="kac-stage" style="align-items:{valign}">'
+                    f'<div class="cap" style="color:{css_color};font-size:{px}px;text-shadow:{shadow}">'
+                    'សួស្តី! នេះជាអក្សរគំរូ</div></div>',
+                    unsafe_allow_html=True,
+                )
+
+    # ----- ឆ្វេង៖ លទ្ធផល + ប៊ូតុងចាប់ផ្តើម (នៅក្រោមការបញ្ចូលវីដេអូ) -----
+    with left:
         with st.container(border=True):
             st.markdown('<div class="kac-card-title">⚙ លទ្ធផល · Output</div>', unsafe_allow_html=True)
             quality_label = st.selectbox("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1, key="qual")
@@ -3566,27 +3590,6 @@ def workspace(page_id):
             run = st.button(label, type="primary", use_container_width=True, key="start_go")
         st.markdown('</div>', unsafe_allow_html=True)
 
-        # ----- មើលជាមុន (បំពេញក្នុង container ខាងលើ) -----
-        css_color = COLOR_OPTIONS[color_label][1]
-        align = POSITION_OPTIONS[pos_label]
-        valign = {2: "flex-end", 5: "center", 8: "flex-start"}[align]
-        with preview_ph:
-            with st.container(border=True):
-                st.markdown('<div class="kac-card-title">🎬 មើលជាមុន · Preview</div>', unsafe_allow_html=True)
-                if uploaded_files:
-                    try:
-                        st.video(uploaded_files[0])
-                    except Exception:
-                        pass
-                px = max(12, int(font_size * 0.85))
-                shadow = ",".join(f"{dx}px {dy}px 0 #000" for dx in range(-outline_size, outline_size + 1)
-                                  for dy in range(-outline_size, outline_size + 1) if dx or dy)
-                st.markdown(
-                    f'<div class="kac-stage" style="align-items:{valign}">'
-                    f'<div class="cap" style="color:{css_color};font-size:{px}px;text-shadow:{shadow}">'
-                    'សួស្តី! នេះជាអក្សរគំរូ</div></div>',
-                    unsafe_allow_html=True,
-                )
 
     if run:
         settings = {
