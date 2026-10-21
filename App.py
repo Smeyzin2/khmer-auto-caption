@@ -1602,19 +1602,7 @@ def groq_translate_chunk(api_key, texts):
             "model": model, "temperature": 0.2,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": (
-                    "You are a professional Khmer subtitle translator. Translate every "
-                    "input line into clear, natural, fluent spoken Cambodian Khmer, "
-                    "using Khmer script. Preserve the complete meaning of each line: "
-                    "do not omit words, facts, names, numbers, questions, or emotional "
-                    "tone; do not add information; do not summarize or merge lines. "
-                    "Use everyday Khmer phrasing that sounds natural when read aloud, "
-                    "not awkward word-for-word translation. Keep each translation in "
-                    "the same numbered position. If a name has no Khmer equivalent, "
-                    "write it phonetically in Khmer when practical. Return only JSON "
-                    "with exactly this shape: {\\\"translations\\\": [\\\"...\\\"]} "
-                    "and exactly the same number of translations as input lines."
-                )},
+                {"role": "system", "content": ("You translate subtitles into natural, fluent " "Khmer (Khmer script only). Translate meaning, " "not word for word. Return JSON: " "{\"translations\": [...]} with exactly the " "same number of items, in the same order.")},
                 {"role": "user", "content": numbered},
             ],
         }).encode("utf-8")
@@ -1666,21 +1654,42 @@ def translate_texts(texts, groq_key=None):
             if len(lines) == len(batch):
                 for (i, _), line in zip(batch, lines):
                     outs[i] = clean_translation(line)
+            else:
+                # Joined Google response sometimes loses line boundaries. Retry each
+                # subtitle separately so one malformed batch does not fail every line.
+                for i, source in batch:
+                    try:
+                        single = google_translate_request(source, retries=2)
+                        outs[i] = clean_translation(single)
+                    except Exception as single_error:
+                        errors.append(f"google-single: {single_error}"[:200])
         except Exception as e:
             errors.append(f"google: {e}"[:200])
             google_blocked = True
         time.sleep(0.2)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
-        for k in range(0, len(missing), 20):
-            idxs = missing[k:k + 20]
+        # First retry failed lines in smaller batches, then individually. This
+        # isolates a bad/too-long subtitle from the rest of the video.
+        for k in range(0, len(missing), 5):
+            idxs = missing[k:k + 5]
             try:
                 res = groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs])
                 for i, r in zip(idxs, res):
-                    outs[i] = r
+                    if r:
+                        outs[i] = r
             except Exception as e:
-                errors.append(f"groq-llm: {e}"[:200])
-            time.sleep(1)
+                errors.append(f"groq-retry: {e}"[:200])
+            time.sleep(0.5)
+        missing = [i for i, o in enumerate(outs) if o is None]
+        for i in missing:
+            try:
+                res = groq_translate_chunk(groq_key, [str(texts[i]).strip()])
+                if res and res[0]:
+                    outs[i] = res[0]
+            except Exception as e:
+                errors.append(f"groq-single: {e}"[:200])
+            time.sleep(0.3)
     return outs, errors
 
 
@@ -2723,10 +2732,12 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             d_, _, _ = probe_media(path_)
             if d_ > slot0 * SPEED_MAX:
                 t2 = t_
-                # Do not shorten Khmer dialogue to fit a timing slot: shortening can
-                # remove words and make the dubbed story skip information. Keep the
-                # complete sentence; the final timing pass adjusts playback speed.
-                pass
+                if client is not None:
+                    t2 = shorten_khmer(client, model, t_, slot0)
+                elif groq_key:
+                    t2 = shorten_groq(groq_key, t_, slot0)
+                if t2 != t_ and tts_retry(t2, voices_[i], path_, pros[i]):
+                    d_, _, _ = probe_media(path_)
             if clone_voice:
                 try:
                     eleven_sts(eleven_key, clone_voice, path_)
@@ -2786,14 +2797,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
                      "eq": voice_eq.get(voices_[i], "")})
-    if skipped:
-        if notes is not None:
-            notes.append(
-                f"⚠️ មិនអាចបង្កើតសំឡេងបាន {skipped} ឃ្លា។ "
-                "កម្មវិធីមិនបង្កើតសំឡេងអានដែលខ្វះឃ្លាទេ។"
-            )
-        # Do not render an incomplete dub: missing TTS clips would omit dialogue.
-        return False
+    if notes is not None and skipped:
+        notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
     if not plan:
         return False
     base = {}
