@@ -344,6 +344,39 @@ hr { border-color: var(--line) !important; margin: 1.2rem 0 !important; }
   overflow-y: auto !important;
 }
 html, body { min-height: 100%; background: var(--bg) !important; }
+
+/* ---------- ផ្ទៃខាងក្រោយទឹកសមុទ្រ ---------- */
+html, body, .stApp, [data-testid="stAppViewContainer"] {
+  background: linear-gradient(180deg,#0E6BA0 0%,#0A4F82 30%,#073862 65%,#031D3A 100%) !important;
+}
+[data-testid="stMain"] { background: transparent !important; }
+.block-container { position: relative; z-index: 1; }
+
+.kac-sea { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.kac-sea .light {
+  position: absolute; top: -10%; left: 0; right: 0; height: 60%;
+  background: radial-gradient(ellipse at 30% 0%, rgba(130,225,255,.28), transparent 65%);
+  animation: sway 9s ease-in-out infinite alternate;
+}
+@keyframes sway { from { transform: translateX(-4%); } to { transform: translateX(4%); } }
+
+.kac-sea .swim { position: absolute; left: 105vw; animation: swim linear infinite; }
+.kac-sea .swim span { display: block; animation: bob ease-in-out infinite alternate; opacity: .9; }
+@keyframes swim { to { transform: translateX(-130vw); } }
+@keyframes bob { from { transform: translateY(-10px); } to { transform: translateY(10px); } }
+
+.kac-sea .bub {
+  position: absolute; bottom: -30px; border-radius: 50%;
+  border: 1.5px solid rgba(190,240,255,.55); background: rgba(190,240,255,.12);
+  animation: rise linear infinite;
+}
+@keyframes rise { to { transform: translateY(-110vh) translateX(18px); opacity: 0; } }
+
+/* ប្រអប់ថ្លាបន្តិច ឲ្យឃើញទឹកពីក្រោយ ហើយអានអក្សរបានច្បាស់ */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+  background: rgba(8,28,64,.80) !important; backdrop-filter: blur(6px);
+}
+.kac-hero { background: rgba(10,34,76,.78) !important; backdrop-filter: blur(6px); }
 </style>
 """
 
@@ -537,6 +570,41 @@ def render_hero(max_videos=5):
 
 
 apply_theme()
+
+# ---------------------------------------------------------------------
+#  ផ្ទៃខាងក្រោយទឹកសមុទ្រ + សត្វសមុទ្រហែល
+# ---------------------------------------------------------------------
+import random as _rnd
+
+
+def render_sea():
+    creatures = ["🐟", "🐠", "🐡", "🐙", "🐢", "🐬", "🦑", "🦀", "🐟", "🐠"]
+    parts = ['<div class="kac-sea"><div class="light"></div>']
+    for i, c in enumerate(creatures):
+        top = _rnd.randint(12, 88)
+        size = _rnd.choice([1.6, 2.0, 2.4, 3.0])
+        dur = _rnd.randint(22, 45)
+        delay = -_rnd.randint(0, dur)  # ចាប់ផ្ដើមពាសពេញអេក្រង់តាំងពីដំបូង
+        bob = _rnd.randint(3, 6)
+        parts.append(
+            f'<div class="swim" style="top:{top}%;animation-duration:{dur}s;'
+            f'animation-delay:{delay}s"><span style="font-size:{size}rem;'
+            f'animation-duration:{bob}s">{c}</span></div>'
+        )
+    for i in range(16):
+        left = _rnd.randint(2, 98)
+        size = _rnd.randint(6, 18)
+        dur = _rnd.randint(9, 20)
+        delay = -_rnd.randint(0, dur)
+        parts.append(
+            f'<div class="bub" style="left:{left}%;width:{size}px;height:{size}px;'
+            f'animation-duration:{dur}s;animation-delay:{delay}s"></div>'
+        )
+    parts.append("</div>")
+    st.markdown("".join(parts), unsafe_allow_html=True)
+
+
+render_sea()
 
 DEBUG = bool(st.secrets.get("DEBUG", False))
 
