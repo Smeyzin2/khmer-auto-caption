@@ -669,10 +669,48 @@ def merge_thoughts(keep):
     return out
 
 
+_local_model = {"m": None}
+_local_lock = threading.Lock()
+
+
+def local_transcribe(audio_path, language):
+    """Whisper ដំណើរការក្នុងកម្មវិធីផ្ទាល់ (ឥតគិតថ្លៃ គ្មានកូតា)។"""
+    from faster_whisper import WhisperModel
+
+    with _local_lock:  # ម្តងមួយវីដេអូ កុំឱ្យអស់ RAM
+        if _local_model["m"] is None:
+            _local_model["m"] = WhisperModel(
+                "small", device="cpu", compute_type="int8"
+            )
+        model = _local_model["m"]
+        gen, info = model.transcribe(
+            audio_path, language=language, vad_filter=True, beam_size=1
+        )
+        segments = [
+            {
+                "start": s.start,
+                "end": s.end,
+                "text": s.text,
+                "no_speech_prob": s.no_speech_prob,
+                "avg_logprob": s.avg_logprob,
+            }
+            for s in gen
+        ]
+    return {"language": info.language, "segments": segments}, "local-small"
+
+
 def transcribe(groq_key, gemini_key, audio_path, duration, language, dub, rep):
     """ស្តាប់ដោយ Groq Whisper រួចបកជាខ្មែរ។ ត្រឡប់ (segments, failed)។"""
     code = WHISPER_LANG.get(language) if language else None
-    data, _ = groq_transcribe(groq_key, audio_path, code, rep)
+    data = None
+    if groq_key:
+        try:
+            data, _ = groq_transcribe(groq_key, audio_path, code, rep)
+        except Exception:
+            data = None
+    if data is None:
+        rep.write("៣/៤ កំពុងស្តាប់ (ម៉ាស៊ីនក្នុងកម្មវិធី គ្មានកំណត់)...")
+        data, _ = local_transcribe(audio_path, code)
     detected = str(data.get("language", "") or "").lower()
 
     keep = []
@@ -1246,10 +1284,6 @@ inject_css()
 
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
-
-if not GROQ_KEY:
-    st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
-    st.stop()
 
 st.markdown(
     '<div class="hero"><div class="hero-t">បកប្រែរឿងមកនិយាយភាសាខ្មែរ</div>'
