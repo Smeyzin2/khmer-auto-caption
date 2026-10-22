@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+
 import os
 import io
 import re
@@ -2651,7 +2651,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
-        speed = min(1.4, max(0.85 if tight else 1.0, d / slot))
+        speed = min(1.8, max(0.85 if tight else 1.0, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
