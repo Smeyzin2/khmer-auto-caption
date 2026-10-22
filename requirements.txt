@@ -5,3 +5,4 @@ fonttools
 edge-tts
 deep-translator
 yt-dlp
+faster-whisper
