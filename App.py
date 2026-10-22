@@ -55,7 +55,7 @@ MAX_CHUNK_WORKERS = 4
 TTS_WORKERS = 6  # បង្កើតសំឡេងអានស្មើគ្នា
 LLM_WORKERS = 3  # ហៅ AI បកប្រែ/កែ ស្មើគ្នា
 GS_WORKERS = 4  # Google Speech ស្មើគ្នា
-TRANSLATE_WORKERS = 3  # Google Translate ស្មើគ្នា
+TRANSLATE_WORKERS = 2  # Google Translate ស្មើគ្នា (តិចជាងមុន កុំឱ្យជួប 429)
 
 # ម៉ាស៊ីនឥតគិតថ្លៃ (Groq Whisper)
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -1318,12 +1318,16 @@ def groq_transcribe(api_key, audio_path, language, status):
     raise last or RuntimeError("Groq បរាជ័យ")
 
 
-def _google_once(text):
+# Google Translate មានពីរ host (ប្តូរ host បើមួយត្រូវបានកម្រិតសំណើ)
+GT_HOSTS = ["translate.googleapis.com", "translate.google.com"]
+
+
+def _google_once(text, host):
     """ហៅ Google Translate ផ្ទាល់ម្តង (POST) → អត្ថបទខ្មែរ។"""
     query = urllib.parse.urlencode(
         {"client": "gtx", "sl": "auto", "tl": "km", "dt": "t"}
     )
-    url = "https://translate.googleapis.com/translate_a/single?" + query
+    url = f"https://{host}/translate_a/single?" + query
     body = urllib.parse.urlencode({"q": text}).encode("utf-8")
     request = urllib.request.Request(
         url,
@@ -1345,16 +1349,21 @@ def _google_once(text):
     )
 
 
-def google_translate_request(text, retries=2):
-    """ហៅ Google Translate ហើយរង់ចាំបន្តិចបើជួប 429។"""
+def google_translate_request(text, retries=3):
+    """ហៅ Google Translate ប្តូរ host ហើយរង់ចាំបន្តិចបើជួប 429/503។"""
+    last = None
     for attempt in range(retries):
-        try:
-            return _google_once(text)
-        except urllib.error.HTTPError as e:
-            if e.code == 429 and attempt < retries - 1:
-                time.sleep(2)
-                continue
-            raise
+        for host in GT_HOSTS:
+            try:
+                return _google_once(text, host)
+            except urllib.error.HTTPError as e:
+                last = e
+                if e.code not in (429, 503):
+                    raise
+            except Exception as e:
+                last = e
+        time.sleep(2 * (attempt + 1))
+    raise last
 
 
 def clean_translation(out):
@@ -1379,11 +1388,18 @@ def provider_alive(name):
 
 
 def mark_provider(name, error_text):
-    """បើ provider អស់កូតា → រំលងវាមួយរយៈ កុំសាកម្តងទៀតឥតប្រយោជន៍។"""
+    """
+    បើ provider អស់កូតាប្រចាំថ្ងៃ → រំលងវាមួយម៉ោង។
+    ជួប 429 តាមនាទី → មិនសម្គាល់ថាស្លាប់ (កុំរំលងក្រុមផ្សេងឥតប្រយោជន៍)
+    លើកលែង Gemini → រំលង ១ នាទី។
+    """
     low = str(error_text).lower()
-    if "429" in low or "resource_exhausted" in low or "quota" in low:
-        wait = 3600 if "per day" in low else 300
-        _provider_dead[name] = time.time() + wait
+    if any(k in low for k in ("per day", "perday", "tpd", "daily")):
+        _provider_dead[name] = time.time() + 3600
+    elif name == "gemini" and (
+        "429" in low or "resource_exhausted" in low
+    ):
+        _provider_dead[name] = time.time() + 60
 
 
 def groq_chat_models(api_key):
@@ -1439,7 +1455,7 @@ def groq_json_list(api_key, system, user_text, count, temperature=0.5):
         models = [good] + [m for m in models if m != good]
 
     if not models:
-        raise RuntimeError("Groq: ម៉ូដែលទាំងអស់អស់កូតា")
+        raise RuntimeError("Groq: ម៉ូដែលទាំងអស់អស់កូតា (per day)")
 
     errs = []
     for model in models[:8]:
@@ -1483,8 +1499,9 @@ def groq_json_list(api_key, system, user_text, count, temperature=0.5):
                 break
             except urllib.error.HTTPError as e:
                 detail = http_detail(e)
-                errs.append(f"{model}: {detail[:90]}")
-                if e.code == 429 and "per day" in detail.lower():
+                per_day = " [per day]" if "per day" in detail.lower() else ""
+                errs.append(f"{model}: {detail[:90]}{per_day}")
+                if e.code == 429 and per_day:
                     dead[model] = time.time() + 3600
                     break  # អស់កូតាថ្ងៃ → ម៉ូដែលបន្ទាប់ភ្លាម
                 if e.code == 429 and attempt == 0:
@@ -2958,11 +2975,24 @@ def run_worker(job, item, settings, fonts_data):
                         rep.write("កំពុងប្តូរទៅម៉ាស៊ីនបម្រុង...")
 
             if segments is None:
-                err = UserError(
-                    "ការបង្កើតវីដេអូមិនបានសម្រេច។ "
-                    "សូមរង់ចាំមួយភ្លែត រួចសាកម្តងទៀត។"
-                )
-                err.detail = "\n\n".join(engine_errors)
+                joined = "\n\n".join(engine_errors)
+                low = joined.lower()
+                if any(
+                    k in low
+                    for k in ("429", "quota", "per day", "resource_exhausted")
+                ):
+                    msg = (
+                        "កូតាឥតគិតថ្លៃនៃសេវាបកប្រែអស់ជាបណ្តោះអាសន្ន។ "
+                        "សូមរង់ចាំ ១០-៣០ នាទី រួចសាកម្តងទៀត "
+                        "ឬប្តូរទៅម៉ាស៊ីន Gemini។"
+                    )
+                else:
+                    msg = (
+                        "ការបង្កើតវីដេអូមិនបានសម្រេច។ "
+                        "សូមរង់ចាំមួយភ្លែត រួចសាកម្តងទៀត។"
+                    )
+                err = UserError(msg)
+                err.detail = joined
                 raise err
 
             if failed_chunks:
