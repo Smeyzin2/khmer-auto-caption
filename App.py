@@ -1455,7 +1455,8 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
     errors = []
     outs = [None] * n
     english = [None] * n
-    batches = [list(range(k, min(k + 12, n))) for k in range(0, n, 12)]
+    # បកជាបាច់តូច ដើម្បីកុំឱ្យ AI ខកឃ្លា ឬច្រឡំលំដាប់
+    batches = [list(range(k, min(k + 4, n))) for k in range(0, n, 4)]
     # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (AI ពូកែភាសាអង់គ្លេសជាងខ្មែរ)
     if groq_key:
         for idxs in batches:
@@ -1834,9 +1835,13 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
                 segs.append((s, e, out))
             else:
                 failed += 1
-        if not segs or failed > len(keep) * 0.5:
-            reason = " | ".join(errs[:2]) or "មិនស្គាល់មូលហេតុ"
-            raise RuntimeError("ការបកប្រែបរាជ័យ។ " f"(ស្តាប់បាន {len(keep)} ឃ្លា បកបាន {len(segs)}) " f"មូលហេតុ: {reason}")
+        # កុំបង្កើតវីដេអូដែលមានឃ្លាបាត់សំឡេងបកប្រែស្ងាត់ៗ
+        if failed > 0 or len(segs) != len(keep):
+            reason = " | ".join(errs[:3]) or "AI មិនបានផ្តល់អត្ថបទខ្មែរសម្រាប់ឃ្លាខ្លះ"
+            raise RuntimeError(
+                "ការបកប្រែមិនគ្រប់ឃ្លា ដូច្នេះបានបញ្ឈប់ដើម្បីកុំឱ្យវីដេអូបាត់អត្ថបទ។ "
+                f"(ស្តាប់បាន {len(keep)} ឃ្លា បកបាន {len(segs)} ឃ្លា) មូលហេតុ: {reason}"
+            )
     if not segs:
         raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
     segs.sort(key=lambda x: x[0])
