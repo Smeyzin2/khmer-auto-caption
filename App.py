@@ -1,4 +1,4 @@
-
+# -*- coding: utf-8 -*-
 import os
 import io
 import re
@@ -1486,17 +1486,42 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
         errors += g_errs
         for i, o in zip(missing, g_outs):
             outs[i] = o
-    # បម្រុងចុងក្រោយ: LLM បកផ្ទាល់ទៅខ្មែរ
-    missing = [i for i, o in enumerate(outs) if o is None]
-    if missing and groq_key:
-        for k in range(0, len(missing), 12):
-            idxs = missing[k:k + 12]
+    # ជំហាន ៣: សាកបកប្រែឡើងវិញសម្រាប់ឃ្លាដែលលទ្ធផលទទេ/មិនមានអក្សរខ្មែរ
+    missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
+    if missing and gemini_key:
+        for k in range(0, len(missing), 8):
+            idxs = missing[k:k + 8]
             try:
-                res = groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs], [budgets[i] for i in idxs] if budgets else None)
+                res = gemini_translate_khmer(
+                    gemini_key, [str(texts[i]).strip() for i in idxs],
+                    [english[i] for i in idxs],
+                    [budgets[i] for i in idxs] if budgets else None,
+                )
                 for i, r in zip(idxs, res):
-                    outs[i] = r
+                    if r and has_khmer(str(r)):
+                        outs[i] = r
             except Exception as e:
-                errors.append(f"groq-km: {e}"[:200])
+                errors.append(f"gemini-retry: {e}"[:200])
+    # ជំហាន ៤: បម្រុងចុងក្រោយ បកផ្ទាល់ទៅខ្មែរ ដោយ Groq
+    missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
+    if missing and groq_key:
+        for k in range(0, len(missing), 8):
+            idxs = missing[k:k + 8]
+            try:
+                res = groq_translate_chunk(
+                    groq_key, [str(texts[i]).strip() for i in idxs],
+                    [budgets[i] for i in idxs] if budgets else None,
+                )
+                for i, r in zip(idxs, res):
+                    if r and has_khmer(str(r)):
+                        outs[i] = r
+            except Exception as e:
+                errors.append(f"groq-km-retry: {e}"[:200])
+            time.sleep(0.5)
+    # កុំទុកលទ្ធផលទទេ ឬអង់គ្លេសសុទ្ធឱ្យបន្តជាសំឡេង dubbing
+    for i, o in enumerate(outs):
+        if not o or not has_khmer(str(o)):
+            outs[i] = None
     return outs, errors
 
 
@@ -2858,7 +2883,7 @@ def run_worker(job, item, settings, fonts_data):
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
                     client = (genai.Client(api_key=settings["gemini_key"]) if used_engine == "gemini" else None)
-                    dub_segments = merge_for_dub(segments, *(MERGE_TIGHT if settings.get("tight_sync", True) else ()))
+                    dub_segments = merge_for_dub(segments)
                     seg_voices = None
                     targets = None
                     emotions = None
@@ -2890,7 +2915,7 @@ def run_worker(job, item, settings, fonts_data):
                             if settings["voice_match"]:
                                 targets = compute_targets(dub_segments, seg_voices, pitch_inf, runs_)
                         except Exception:
-                            dub_segments = merge_for_dub(segments, *(MERGE_TIGHT if settings.get("tight_sync", True) else ()))
+                            dub_segments = merge_for_dub(segments)
                             seg_voices = None
                             targets = None
                             voice_notes = []
@@ -2916,7 +2941,7 @@ def run_worker(job, item, settings, fonts_data):
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     try:
-                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=settings.get("dub_offset", 0.0), tight=settings.get("tight_sync", True))
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=0.0, tight=False)
                     finally:
                         if clone_voice:
                             eleven_delete_voice(settings["eleven_key"], clone_voice)
@@ -3096,8 +3121,8 @@ clone_on = False
 clone_file = None
 timbre = False
 timbre_file = None
-dub_offset = 0.2
-tight_sync = True
+dub_offset = 0.0
+tight_sync = False
 
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
@@ -3151,28 +3176,11 @@ with tab_trans:
 # ============================ ផ្ទាំង ៣: សំឡេង ============================
 with tab_voice:
     with st.container(border=True):
-        voice_label = st.radio("សំឡេងអាន", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
+        # Keep only the simple voice choices requested by the user.
+        voice_label = st.radio("ជ្រើសសំឡេងនិយាយ", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
         keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
-        dub_offset = st.slider("⏱ កែម៉ោងសំឡេងអាន (វិនាទី)", -1.0, 1.5, 0.2, 0.1,
-                               help="អានមុនវីដេអូ → ដំឡើងលេខ (+) · អានយឺតជាងវីដេអូ → បន្ថយលេខ (−)")
-        tight_sync = st.toggle("👄 តម្រឹមឱ្យជិតមាត់ (ចាប់ផ្តើម និងបញ្ចប់ត្រូវនឹងការនិយាយ)", value=True,
-                               help="កាត់ឃ្លាខ្លីៗ និងរំកិលល្បឿនអាន ឱ្យចប់ព្រមមាត់។ បិទវិញ បើស្តាប់ទៅកាត់ៗពេក។")
         if not dub_on:
-            st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើជម្រើសទាំងនេះ។")
-    if dub_on:
-        with st.container(border=True):
-            auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី ដោយស្វ័យប្រវត្តិ")
-            voice_match = st.checkbox("🧬 សំឡេងអានស្រដៀងសំឡេងដើម")
-            emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន")
-            if ELEVEN_KEY:
-                clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (សំឡេងគំរូរបស់អ្នក)")
-                if clone_on:
-                    clone_file = st.file_uploader("សំឡេងគំរូ (១–២ នាទី គ្មានភ្លេង)",
-                                                  type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
-            timbre = st.checkbox("🎚 ពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)")
-            if timbre:
-                timbre_file = st.file_uploader("សំឡេងគំរូ (ជម្រើស ១៥ វិនាទីឡើង)",
-                                               type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
+            st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើការនិយាយ។")
 
 # ============================ ផ្ទាំង ៤: អក្សរ ============================
 with tab_text:
@@ -3243,11 +3251,12 @@ if run:
         "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
-        "keep_bg": keep_bg, "dub_offset": dub_offset, "tight_sync": tight_sync, "auto_gender": auto_gender,
-        "voice_match": voice_match, "emotion": emotion,
-        "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
+        # Fixed internal defaults; no extra voice-tuning controls in the UI.
+        "keep_bg": keep_bg, "dub_offset": 0.0, "tight_sync": False, "auto_gender": False,
+        "voice_match": False, "emotion": False,
+        "clone_sample": None,
         "eleven_key": ELEVEN_KEY,
-        "timbre": timbre, "timbre_sample": (timbre_file.getvalue() if (timbre and timbre_file) else None),
+        "timbre": False, "timbre_sample": None,
         "font_size": font_size, "outline_size": outline_size,
         "color": COLOR_OPTIONS[color_pick][0],
         "sub_on": sub_on, "srt_on": srt_on,
