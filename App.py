@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import io
 import re
@@ -48,7 +49,7 @@ for _k, _v in {
 
 THEME_CSS = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700;800&family=Battambang:wght@400;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700;800&family=Battambang:wght@400;700&family=Noto+Sans+Khmer:wght@400;500;600;700;800&display=swap');
 
 :root {
   --ink: #E8ECFF;
@@ -72,7 +73,7 @@ THEME_CSS = """
 html, body, .stApp, [data-testid="stAppViewContainer"] {
   background: radial-gradient(900px 480px at 15% -8%, #2B1B72 0%, rgba(10,15,46,0) 60%), #0A0F2E !important;
   color: var(--ink);
-  font-family: 'Kantumruy Pro', 'Battambang', system-ui, sans-serif !important;
+  font-family: 'Kantumruy Pro', 'Noto Sans Khmer', 'Battambang', system-ui, sans-serif !important;
   color-scheme: dark;
 }
 .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp li, .stApp small,
