@@ -326,9 +326,53 @@ hr { border-color: var(--line) !important; margin: 1.6rem 0 !important; }
 </style>
 """
 
+COMPACT_CSS = """
+<style>
+.block-container { padding: .6rem .8rem 5.5rem !important; }
+[data-testid="stVerticalBlock"] { gap: .55rem; }
+
+/* header តូច */
+.kvai-head { margin: 0 0 8px; gap: 10px; flex-wrap: nowrap; }
+.kvai-logo { width: 42px; height: 42px; font-size: 22px; border-radius: 13px; }
+.kvai-title { min-width: 0; }
+.kvai-title h1 { font-size: 1.35rem !important; }
+.kvai-title p { font-size: .75rem; margin: 0; }
+.kvai-badge { padding: 5px 10px; font-size: .75rem; white-space: nowrap; }
+
+/* tabs */
+[data-baseweb="tab-list"] { overflow-x: auto; }
+button[data-baseweb="tab"] { height: 40px; padding: 0 4px !important; min-width: 0; }
+button[data-baseweb="tab"] p { font-size: .8rem !important; white-space: nowrap; }
+
+/* ជួរឈរមិនបត់ចុះក្រោមលើទូរស័ព្ទ */
+[data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: .6rem !important; }
+[data-testid="stColumn"] { min-width: 0 !important; }
+
+/* សមាសភាគតូចជាង */
+[data-testid="stWidgetLabel"] p { font-size: .85rem; }
+[data-testid="stSelectbox"] [data-baseweb="select"] > div { min-height: 42px; }
+[data-testid="stRadio"] label { padding: 5px 10px !important; font-size: .85rem; }
+[data-testid="stFileUploaderDropzone"] { padding: 10px; }
+[data-testid="stVideo"] video { max-height: 150px; }
+div[data-testid="stVerticalBlockBorderWrapper"] { padding: 4px 2px; }
+.kvai-prev { height: 120px; padding: 8px 12px; margin: 0; }
+.st-key-pos [role="radiogroup"] { max-width: 100%; }
+
+/* ប៊ូតុងចាប់ផ្តើមជាប់ខាងក្រោម */
+.st-key-startbar {
+  position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
+  width: min(100%, 1240px); z-index: 999;
+  padding: 18px 12px calc(10px + env(safe-area-inset-bottom));
+  background: linear-gradient(180deg, rgba(10,15,46,0), #0A0F2E 35%);
+}
+.st-key-startbar .stButton > button { min-height: 52px; }
+</style>
+"""
+
 
 def apply_theme():
     st.markdown(THEME_CSS, unsafe_allow_html=True)
+    st.markdown(COMPACT_CSS, unsafe_allow_html=True)
 
 
 def render_header():
@@ -341,13 +385,6 @@ def render_header():
             <p>បកប្រែវីដេអូ និងបង្កើតអក្សរ/សំឡេងខ្មែរ ដោយ AI</p>
           </div>
           <div class="kvai-badge">👑 Free AI</div>
-        </div>
-        <div class="kvai-nav">
-          <a class="on" href="#sec-video">🏠 វីដេអូ</a>
-          <a href="#sec-trans">🌐 បកប្រែ</a>
-          <a href="#sec-voice">🎙 សំឡេង</a>
-          <a href="#sec-text">🔤 អក្សរ</a>
-          <a href="#download-area">⬇️ ទាញយក</a>
         </div>
         """,
         unsafe_allow_html=True,
@@ -2894,7 +2931,6 @@ ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមាន�
 current_job = st.session_state.get("job")
 busy = bool(current_job and current_job.running())
 
-# ค่าเริ่មត้น (ប្រើពេលជម្រើសសំឡេងមិនបានបើក)
 voice_label = list(TTS_VOICES.keys())[0]
 keep_bg = False
 auto_gender = False
@@ -2905,100 +2941,105 @@ clone_file = None
 timbre = False
 timbre_file = None
 
-col_left, col_right = st.columns([4, 5], gap="large")
+# ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
+start_slot = st.container(key="startbar")
 
-# =============================== ជួរឆ្វេង ===============================
-with col_left:
-    st.markdown('<div id="sec-video"></div>', unsafe_allow_html=True)
-    st.subheader("🎞 ជ្រើសវីដេអូ")
+tab_vid, tab_trans, tab_voice, tab_text, tab_out = st.tabs(
+    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក"]
+)
+
+# ============================ ផ្ទាំង ១: វីដេអូ ============================
+with tab_vid:
     with st.container(border=True):
-        mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True, label_visibility="collapsed", key="mode_pick")
+        mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True,
+                        label_visibility="collapsed", key="mode_pick")
         uploaded_files = []
         link_text = ""
         if mode.startswith("📁"):
-            uploaded_files = st.file_uploader("បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
+            uploaded_files = st.file_uploader(
+                "បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"],
+                accept_multiple_files=True) or []
         else:
-            link_text = st.text_area("តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
-        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា · ខ្លីជាង {MAX_DURATION_MIN} នាទី · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
+            link_text = st.text_area("តំណវីដេអូ (មួយបន្ទាត់ ១ តំណ)", placeholder="https://...", height=90)
+        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · ខ្លីជាង {MAX_DURATION_MIN} នាទី · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
+        if uploaded_files:
+            try:
+                st.video(uploaded_files[0])
+            except Exception:
+                pass
+    with st.container(border=True):
+        quality_label = st.radio("📈 គុណភាពវីដេអូ", list(QUALITY.keys()), index=1,
+                                 horizontal=True, key="quality_pick")
 
-    st.markdown('<div id="sec-trans"></div>', unsafe_allow_html=True)
-    st.subheader("🌐 ភាសា និងបកប្រែ")
+# ============================ ផ្ទាំង ២: បកប្រែ ============================
+with tab_trans:
     with st.container(border=True):
         engine_options = []
         if GROQ_KEY:
             engine_options.append(ENGINE_FREE)
         if GEMINI_KEY:
             engine_options.append(ENGINE_GEMINI)
-        engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0, help="បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា កម្មវិធីនឹងប្តូរទៅម៉ាស៊ីនមួយទៀតដោយស្វ័យប្រវត្តិ។")
-        if engine_label == ENGINE_FREE:
-            st.caption("ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate អាចមិនទន់ភ្លន់ដូច Gemini ទេ។")
-        language_label = st.selectbox("ភាសាដើម (សំឡេងក្នុងវីដេអូ)", list(LANGUAGES.keys()), index=0, help="ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់។")
-        st.selectbox("បកប្រែទៅ", ["🇰🇭 ខ្មែរ (Khmer)"], disabled=True, key="target_lang")
-
-    st.markdown('<div id="sec-voice"></div>', unsafe_allow_html=True)
-    st.subheader("🗣 សំឡេងអានខ្មែរ")
-    with st.container(border=True):
-        voice_label = st.radio("សំឡេងអាន", list(TTS_VOICES.keys()), horizontal=True, label_visibility="collapsed", key="voice_pick")
-        st.caption("ប្រើពេលបើក «បង្កើតសំឡេងអានខ្មែរ (Dubbing)» ខាងក្រោម។")
-
-    st.subheader("📈 គុណភាពវីដេអូ (Output Quality)")
-    with st.container(border=True):
-        quality_label = st.radio("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1, horizontal=True, label_visibility="collapsed", key="quality_pick")
-        keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
-
-    st.subheader("⚙️ ជម្រើសបន្ថែម")
+        engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0)
+        lc1, lc2 = st.columns(2)
+        with lc1:
+            language_label = st.selectbox("ភាសាដើម", list(LANGUAGES.keys()), index=0)
+        with lc2:
+            st.selectbox("បកប្រែទៅ", ["🇰🇭 ខ្មែរ"], disabled=True, key="target_lang")
     with st.container(border=True):
         sub_on = st.toggle("បង្កើតអក្សររត់ខ្មែរ (Subtitle)", value=True)
         dub_on = st.toggle("បង្កើតសំឡេងអានខ្មែរ (Dubbing)")
         srt_on = st.toggle("ទាញយកអក្សរជាឯកសារ (SRT)")
 
+# ============================ ផ្ទាំង ៣: សំឡេង ============================
+with tab_voice:
+    with st.container(border=True):
+        voice_label = st.radio("សំឡេងអាន", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
+        keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
+        if not dub_on:
+            st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើជម្រើសទាំងនេះ។")
     if dub_on:
-        with st.expander("🎙 ជម្រើសសំឡេងកម្រិតខ្ពស់", expanded=False):
-            auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ", help="វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។")
-            voice_match = st.checkbox("🧬 ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (ប្រហាក់ប្រហែល)", help="វាស់កម្រិតសំឡេង (ខ្ពស់/ទាប) របស់អ្នកនិយាយដើម រួចកែសំឡេង AI ឱ្យជិតគ្នា។")
-            emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន", help="AI ចាត់ថ្នាក់អារម្មណ៍នៃឃ្លានីមួយៗតាមអត្ថបទ ហើយវាស់កម្លាំងសំឡេងដើមដើម្បីកំណត់កម្រិតខ្លាំង។")
+        with st.container(border=True):
+            auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី ដោយស្វ័យប្រវត្តិ")
+            voice_match = st.checkbox("🧬 សំឡេងអានស្រដៀងសំឡេងដើម")
+            emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន")
             if ELEVEN_KEY:
-                clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (ប្រើសំឡេងគំរូរបស់អ្នក)", help="សំឡេងអានទាំងអស់នឹងប្តូរទៅជាសំឡេងដូចសំឡេងគំរូ។ ប្រើតែសំឡេងខ្លួនឯង ឬសំឡេងដែលមានការអនុញ្ញាត។")
+                clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (សំឡេងគំរូរបស់អ្នក)")
                 if clone_on:
-                    clone_file = st.file_uploader("សំឡេងគំរូ (និយាយច្បាស់ ១–២ នាទី គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
-            timbre = st.checkbox("🎚 ធ្វើឱ្យពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)", help="មិនមែនក្លូនពិតទេ តែកែ 'ពណ៌' សំឡេង AI ឱ្យជិតសំឡេងគំរូ។ បើមិន upload សំឡេងគំរូ នឹងប្រើសំឡេងក្នុងវីដេអូ។")
+                    clone_file = st.file_uploader("សំឡេងគំរូ (១–២ នាទី គ្មានភ្លេង)",
+                                                  type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
+            timbre = st.checkbox("🎚 ពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)")
             if timbre:
-                timbre_file = st.file_uploader("សំឡេងគំរូ (ជម្រើស — ១៥ វិនាទីឡើង គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
+                timbre_file = st.file_uploader("សំឡេងគំរូ (ជម្រើស ១៥ វិនាទីឡើង)",
+                                               type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
 
-# =============================== ជួរស្តាំ ===============================
-with col_right:
-    st.subheader("👁 មើលជាមុន")
+# ============================ ផ្ទាំង ៤: អក្សរ ============================
+with tab_text:
+    prev_slot = st.container()
     with st.container(border=True):
-        prev_slot = st.container()
-        if uploaded_files:
-            st.caption("វីដេអូដើម (វីដេអូទី ១)")
-            try:
-                st.video(uploaded_files[0])
-            except Exception:
-                pass
-
-    st.markdown('<div id="sec-text"></div>', unsafe_allow_html=True)
-    st.subheader("🔤 ឆ្នៃអក្សរ (Subtitle Style)")
-    with st.container(border=True):
-        font_name = st.selectbox("Font អក្សរ", [f[2] for f in FONT_SOURCES], index=0, key="font_pick")
-        sc1, sc2 = st.columns([3, 2], gap="medium")
-        with sc1:
+        a1, a2 = st.columns(2)
+        with a1:
+            font_name = st.selectbox("Font", [f[2] for f in FONT_SOURCES], index=0, key="font_pick")
+        with a2:
+            color_pick = st.selectbox("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), index=0, key="color_pick")
+        b1, b2 = st.columns(2)
+        with b1:
+            box_pick = st.selectbox("ផ្ទៃក្រោយ", list(BOX_OPTIONS.keys()), index=0, key="box_pick")
+        with b2:
+            style_pick = st.selectbox("បែបអក្សរ", list(STYLE_OPTIONS.keys()), index=0, key="style_pick")
+        c1, c2 = st.columns(2)
+        with c1:
             font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
-            color_pick = st.radio("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), horizontal=True, key="color_pick")
-            outline_size = st.slider("កម្រាស់គែមអក្សរ (Outline)", 1, 5, 2)
-            box_pick = st.radio("ពណ៌ផ្ទៃក្រោយ", list(BOX_OPTIONS.keys()), horizontal=True, key="box_pick")
-        with sc2:
-            pos_pick = st.radio("ទីតាំងអក្សរ", list(POS_MAP.keys()), index=7, horizontal=True, key="pos")
-            style_pick = st.radio("បែបអក្សរ", list(STYLE_OPTIONS.keys()), horizontal=True, key="style_pick")
-
+        with c2:
+            outline_size = st.slider("គែមអក្សរ", 1, 5, 2)
+        pos_pick = st.radio("ទីតាំងអក្សរ", list(POS_MAP.keys()), index=7, horizontal=True, key="pos")
     bold_, italic_ = STYLE_OPTIONS[style_pick]
     with prev_slot:
-        render_preview(font_size, COLOR_OPTIONS[color_pick][1], POS_MAP[pos_pick], bold_, italic_, BOX_OPTIONS[box_pick])
-        st.caption("គំរូប្រហាក់ប្រហែល — ទំហំ និងទីតាំងពិតក្នុងវីដេអូអាចខុសបន្តិច។")
+        render_preview(font_size, COLOR_OPTIONS[color_pick][1], POS_MAP[pos_pick],
+                       bold_, italic_, BOX_OPTIONS[box_pick])
 
+# ============================ បញ្ជីវីដេអូ ============================
 items = []
 too_many = False
-
 if uploaded_files:
     too_many = len(uploaded_files) > MAX_VIDEOS
     for f in uploaded_files[:MAX_VIDEOS]:
@@ -3010,22 +3051,22 @@ else:
         tail = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
         items.append({"name": tail or f"តំណទី {i}", "file": None, "url": url})
 
-if too_many:
-    st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
-
+# ============================ ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) ============================
 run = False
-if busy:
-    st.button("⏳ កំពុងធ្វើការ... សូមរង់ចាំ", disabled=True, use_container_width=True)
-elif not items:
-    if not current_job:
-        st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
-else:
-    label = "✨ ចាប់ផ្តើមបង្កើតវីដេអូ"
-    if len(items) > 1:
-        label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
-    run = st.button(label, type="primary", use_container_width=True, disabled=not (sub_on or dub_on))
-    if not (sub_on or dub_on):
-        st.warning("សូមបើកយ៉ាងហោចណាស់ «អក្សររត់» ឬ «សំឡេងអាន» ម្យ៉ាងនៅផ្ទាំង 🌐 បកប្រែ។")
+with start_slot:
+    if busy:
+        st.button("⏳ កំពុងធ្វើការ... មើលនៅផ្ទាំង ⬇️", disabled=True, use_container_width=True)
+    elif not items:
+        st.button("📁 សូមជ្រើសវីដេអូជាមុនសិន", disabled=True, use_container_width=True)
+    elif not (sub_on or dub_on):
+        st.button("⚠️ សូមបើក «អក្សររត់» ឬ «សំឡេងអាន»", disabled=True, use_container_width=True)
+    else:
+        label = "✨ ចាប់ផ្តើមបង្កើតវីដេអូ"
+        if len(items) > 1:
+            label += f" ({len(items)})"
+        run = st.button(label, type="primary", use_container_width=True)
+    if too_many:
+        st.caption(f"⚠️ ធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូដំបូង។")
 
 if run:
     try:
@@ -3069,27 +3110,22 @@ if run:
         threading.Thread(target=run_worker, args=(job, item, settings, fonts_data), daemon=True).start()
     st.rerun()
 
+# ============================ ផ្ទាំង ៥: ធ្វើការ + ទាញយក ============================
 job = st.session_state.get("job")
-
-if job:
-    running = job.running()
-    if not running and not job.zip_done:
-        job.zip = build_zip(job.items)
-        job.zip_done = True
-    refresh = REFRESH_SECONDS if running else None
-    st.divider()
-    st.subheader("③ ⚙️ កន្លែងធ្វើការ")
-    st.fragment(run_every=refresh)(work_area)(job, running)
-    st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
-    st.divider()
-    st.subheader("④ ⬇️ កន្លែងទាញយក")
-    st.fragment(run_every=refresh)(download_area)(job)
-    if not running:
-        if st.button("🗑 លុបលទ្ធផលទាំងអស់"):
-            shutil.rmtree(job.folder, ignore_errors=True)
-            st.session_state.pop("job", None)
-            st.rerun()
-        if not job.scrolled:
-            job.scrolled = True
-            if any(it["state"] == "done" for it in job.items):
-                scroll_to_downloads()
+with tab_out:
+    if not job:
+        st.info("មិនទាន់មានលទ្ធផលទេ។ ជ្រើសវីដេអូ រួចចុច «ចាប់ផ្តើម» ខាងក្រោម។")
+    else:
+        running = job.running()
+        if not running and not job.zip_done:
+            job.zip = build_zip(job.items)
+            job.zip_done = True
+        refresh = REFRESH_SECONDS if running else None
+        st.fragment(run_every=refresh)(work_area)(job, running)
+        st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
+        st.fragment(run_every=refresh)(download_area)(job)
+        if not running:
+            if st.button("🗑 លុបលទ្ធផលទាំងអស់"):
+                shutil.rmtree(job.folder, ignore_errors=True)
+                st.session_state.pop("job", None)
+                st.rerun()
