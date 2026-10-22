@@ -3,6 +3,7 @@ import os
 import io
 import re
 import json
+import sqlite3
 import time
 import uuid
 import shutil
@@ -471,6 +472,72 @@ MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 3
 MAX_DURATION_MIN = 300
+
+# Shared gallery: all users of the same running app instance can see saved videos.
+# For durable storage across app restarts/redeploys, set KAC_PUBLIC_STORAGE_DIR
+# to a persistent mounted directory (for example a volume).
+PUBLIC_STORAGE_DIR = os.environ.get(
+    "KAC_PUBLIC_STORAGE_DIR",
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "public_video_storage"),
+)
+PUBLIC_VIDEO_DIR = os.path.join(PUBLIC_STORAGE_DIR, "videos")
+PUBLIC_DB_PATH = os.path.join(PUBLIC_STORAGE_DIR, "gallery.sqlite3")
+_gallery_lock = threading.Lock()
+
+
+def init_public_gallery():
+    os.makedirs(PUBLIC_VIDEO_DIR, exist_ok=True)
+    with _gallery_lock:
+        with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as db:
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS public_videos (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    size_bytes INTEGER NOT NULL
+                )
+            """)
+            db.commit()
+
+
+def save_to_public_gallery(name, video_bytes):
+    """Persist a finished video into the app-wide gallery."""
+    if not video_bytes:
+        return False
+    init_public_gallery()
+    video_id = uuid.uuid4().hex
+    filename = f"{video_id}_{safe_filename(name)}.mp4"
+    full_path = os.path.join(PUBLIC_VIDEO_DIR, filename)
+    try:
+        with open(full_path, "wb") as f:
+            f.write(video_bytes)
+        with _gallery_lock:
+            with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as db:
+                db.execute(
+                    "INSERT INTO public_videos (id, name, filename, created_at, size_bytes) VALUES (?, ?, ?, ?, ?)",
+                    (video_id, safe_filename(name), filename, time.time(), len(video_bytes)),
+                )
+                db.commit()
+        return True
+    except Exception:
+        try:
+            if os.path.exists(full_path):
+                os.remove(full_path)
+        except Exception:
+            pass
+        return False
+
+
+def read_public_gallery():
+    init_public_gallery()
+    with _gallery_lock:
+        with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as db:
+            rows = db.execute(
+                "SELECT id, name, filename, created_at, size_bytes FROM public_videos ORDER BY created_at DESC"
+            ).fetchall()
+    return rows
+
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
@@ -2986,6 +3053,8 @@ def run_worker(job, item, settings, fonts_data):
             item["pct"] = 1.0
             item["stage"] = "រួចរាល់"
             item["elapsed"] = time.time() - item["t0"]
+            # Automatically add completed outputs to the shared gallery.
+            item["gallery_saved"] = save_to_public_gallery(item["name"], video)
             item["state"] = "done"
     except Exception as error:
         item["error"] = friendly_message(error)
@@ -3140,8 +3209,8 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
 
-tab_vid, tab_trans, tab_voice, tab_text, tab_out = st.tabs(
-    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក"]
+tab_vid, tab_trans, tab_voice, tab_text, tab_out, tab_gallery = st.tabs(
+    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក", "🎬 វីដេអូរួម"]
 )
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
@@ -3313,3 +3382,32 @@ with tab_out:
                 shutil.rmtree(job.folder, ignore_errors=True)
                 st.session_state.pop("job", None)
                 st.rerun()
+
+
+# ============================ ផ្ទាំង ៦: វីដេអូរួម ============================
+with tab_gallery:
+    st.markdown("### 🎬 វីដេអូរួម")
+    st.caption("វីដេអូដែលបង្កើតរួចនឹងត្រូវរក្សាទុកដោយស្វ័យប្រវត្តិ ហើយអ្នកប្រើអេបនេះអាចមើល/ទាញយកបាន។")
+    try:
+        gallery_rows = read_public_gallery()
+    except Exception as gallery_error:
+        gallery_rows = []
+        st.error("មិនអាចបើកវីដេអូរួមបានទេ។ សូមពិនិត្យ Storage របស់ម៉ាស៊ីនអេប។")
+    if not gallery_rows:
+        st.info("មិនទាន់មានវីដេអូក្នុងវីដេអូរួមទេ។ បង្កើតវីដេអូរួច វានឹងបង្ហាញនៅទីនេះដោយស្វ័យប្រវត្តិ។")
+    else:
+        st.caption(f"មានវីដេអូ {len(gallery_rows)}")
+        for gallery_id, gallery_name, gallery_filename, gallery_created, gallery_size in gallery_rows:
+            gallery_path = os.path.join(PUBLIC_VIDEO_DIR, gallery_filename)
+            if not os.path.isfile(gallery_path):
+                continue
+            with st.container(border=True):
+                st.markdown(f"**{gallery_name}**")
+                st.caption(time.strftime("%Y-%m-%d %H:%M", time.localtime(gallery_created)) + f" · {gallery_size / (1024 * 1024):.1f} MB")
+                try:
+                    st.video(gallery_path)
+                except Exception:
+                    st.caption("មើលវីដេអូនេះក្នុងកម្មវិធីមិនបាន ប៉ុន្តែអាចទាញយកបាន។")
+                with open(gallery_path, "rb") as gallery_file:
+                    gallery_data = gallery_file.read()
+                dl_button("⬇️ ទាញយកវីដេអូ", gallery_data, gallery_filename, "video/mp4", key=f"gallery_dl_{gallery_id}", use_container_width=True)
