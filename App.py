@@ -46,6 +46,16 @@ MAX_DURATION_MIN = 15  # វីដេអូវែងអតិបរមា (ន�
 CHARS_PER_SEC = 11
 MAX_DUB_SPEED = 1.4  # បង្កើនល្បឿនសំឡេងអានអតិបរមា (លើសនេះស្តាប់មិនធម្មជាតិ)
 
+# ---- ថេរសម្រាប់ភាសាខ្មែរស្តាប់ពីរោះ ----
+CAPTION_CPS = 16        # គ្មាន Dubbing → មិនបង្ខំឱ្យខ្លីពេក (រក្សាន័យ)
+MERGE_GAP = 0.7         # វិនាទី: ឃ្លាជិតគ្នាជាងនេះ អាចផ្សំគ្នា
+MERGE_MAX_SEC = 9.0     # ឃ្លាផ្សំវែងបំផុត (វិនាទី)
+MERGE_MAX_CHARS = 140   # ឃ្លាផ្សំវែងបំផុត (តួអក្សរដើម)
+END_PUNCT = tuple("。！？.!?…")
+THAI_LAO_RE = re.compile(r"[\u0E00-\u0EFF]")
+LATIN_RE = re.compile(r"[A-Za-z]")
+KH_DIGITS = str.maketrans("0123456789", "០១២៣៤៥៦៧៨៩")
+
 # ការកាត់សំឡេងជាផ្នែកៗ ដើម្បីឱ្យម៉ោងត្រឹមត្រូវ
 CHUNK_TARGET = 20.0  # វិនាទី
 CHUNK_MAX = 28.0
@@ -65,8 +75,8 @@ GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 GROQ_CHAT_PREFERRED = [
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "openai/gpt-oss-20b",
     "qwen/qwen3-32b",
@@ -981,6 +991,7 @@ def build_prompt(clip_duration, source_language, concise=False):
             "same. Do not use digits, symbols or emojis in the Khmer "
             "text: write numbers as Khmer words."
         )
+        style_rule += " " + KHMER_STYLE
 
     concise_rule = ""
     if concise:
@@ -1371,11 +1382,55 @@ def google_translate_request(text, retries=3):
 
 
 def clean_translation(out):
-    """សម្អាតលទ្ធផលបកប្រែ (លុបអក្សរចិនដែលនៅសល់)។"""
+    """សម្អាតលទ្ធផល៖ លុបអក្សរចិន ថៃ ឡាវ និងសញ្ញាដែលមិនគួរមាន។"""
     out = str(out or "")
     out = CJK_RE.sub("", out)
+    out = THAI_LAO_RE.sub("", out)
+    out = re.sub(r"[\"“”«»()\[\]{}*_#]", "", out)
     out = fix_khmer(out)
     return out or None
+
+
+def bad_khmer(text):
+    """ឃ្លាមិនល្អ៖ គ្មានអក្សរខ្មែរ ឬមានអក្សរឡាតាំងច្រើនពេក។"""
+    if not text or not has_khmer(text):
+        return True
+    k = len(re.findall(r"[\u1780-\u17FF]", text))
+    la = len(LATIN_RE.findall(text))
+    return la > k * 0.3
+
+
+def accept_khmer(text):
+    """ទទួលយកតែឃ្លាខ្មែរល្អ ហើយបំលែងលេខ 0-9 ជាលេខខ្មែរ (សម្រាប់ TTS)។"""
+    t = clean_translation(text)
+    if not t or bad_khmer(t):
+        return None
+    return t.translate(KH_DIGITS)
+
+
+def merge_thoughts(keep):
+    """
+    Whisper ច្រើនកាត់ឃ្លាដាច់កណ្តាលប្រយោគ។ ផ្សំឃ្លាជាប់គ្នាដែលមិនទាន់ចប់
+    ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ → AI យល់ន័យពេញ ហើយនិយាយបានធម្មជាតិ។
+    keep = [(start, end, text)] → [(start, end, text)]
+    """
+    out = []
+    for s, e, t in keep:
+        t = str(t).strip()
+        if out:
+            ps, pe, pt = out[-1]
+            joinable = (
+                s - pe <= MERGE_GAP
+                and not pt.rstrip().endswith(END_PUNCT)
+                and (e - ps) <= MERGE_MAX_SEC
+                and len(pt) + len(t) <= MERGE_MAX_CHARS
+            )
+            if joinable:
+                sep = "" if CJK_RE.search(pt[-1:]) else " "
+                out[-1] = (ps, e, pt + sep + t)
+                continue
+        out.append((s, e, t))
+    return out
 
 
 def http_detail(e):
@@ -1572,38 +1627,73 @@ def translate_texts(texts):
     return outs, errors
 
 
+KHMER_STYLE = (
+    "Write casual spoken Khmer (Khmer script only) that sounds good when "
+    "read aloud by a text-to-speech voice. Start from the meaning, then "
+    "say it the way a native speaker naturally would; reorder, merge, "
+    "split, add or drop words freely. Khmer drops subjects and pronouns "
+    "when obvious, so do not repeat them in every sentence. Prefer short "
+    "sentences joined by natural connectors (ហើយ, ព្រោះ, តែ, ទើប, "
+    "ប៉ុន្តែ). Avoid translationese: do not overuse ត្រូវបាន (passive), "
+    "ធ្វើការ + verb, របស់ after every noun, long ដែល-chains, or តើ at the "
+    "start of every question; avoid stiff bookish or royal words unless "
+    "the speaker is formal. Use sentence-final particles (ណា៎, ហើយ, ទេ, "
+    "ហ្នឹង, អញ្ចឹង) sparingly, and pronouns (ខ្ញុំ, អ្នក, ឯង, គាត់, យើង) "
+    "that match the relationship and tone. Turn idioms, slang, jokes and "
+    "exclamations into the Khmer way of reacting, never copy them "
+    "literally. Keep the same emotion and energy. Stay within max_chars "
+    "by choosing the gist, never by cutting a sentence in the middle. "
+    "Put a space between phrases for natural pauses. No digits, symbols, "
+    "emojis, parentheses or quotes: write numbers as Khmer words. Names "
+    "may be transliterated into Khmer. "
+    "Examples (meaning | stiff literal Khmer | natural spoken Khmer): "
+    "'Have you eaten yet?' | តើអ្នកបានញ៉ាំបាយហើយឬនៅ? | ញ៉ាំបាយនៅ? ; "
+    "'That is way too expensive, I cannot afford it' | "
+    "វាថ្លៃពេកណាស់ ខ្ញុំមិនមានលទ្ធភាពទិញវាបានទេ | ថ្លៃម្លេះ ទិញមិនកើតទេ ; "
+    "'Come on, you can do it!' | មក អ្នកអាចធ្វើវាបាន | "
+    "ខំប្រឹងឡើង ឯងធ្វើបានហើយ ; "
+    "'It is fine, do not worry' | វាមិនមានបញ្ហាទេ សូមកុំបារម្ភ | "
+    "មិនអីទេ កុំបារម្ភ ."
+)
+
+MEANING_SYSTEM = (
+    "You are an expert interpreter. You get numbered subtitle lines from "
+    "a video transcript (speech recognition, may contain mistakes) plus "
+    "whole_script for context. For each line write what the speaker "
+    "REALLY means, in clear natural English: fix obvious recognition "
+    "errors using context, restore dropped subjects and pronouns (Chinese "
+    "and Japanese often omit them), explain idioms, chengyu, slang, "
+    "internet words and jokes by their real meaning, and keep the emotion "
+    "and tone. Do not translate literally. Return JSON {\"lines\": [...]} "
+    "with exactly the same number of items, in the same order."
+)
+
 NATURAL_SYSTEM = (
     "You are a native Khmer dubbing scriptwriter. You do NOT translate; "
-    "you RE-SAY what the speaker means, the way a real Cambodian person "
-    "would say it out loud in that exact moment. "
-    "You receive numbered subtitle lines. For each line you get the "
-    "ORIGINAL text (source language), an optional DRAFT (a literal "
-    "machine translation, often stiff or wrong: use it only as a hint "
-    "for the meaning and NEVER copy its wording or word order), the "
-    "time available in \"seconds\" and a hard limit \"max_chars\" "
-    "(Khmer characters). "
-    "Rules: (1) First understand the meaning, emotion and intention of "
-    "the whole sentence using previous_lines and next_lines, then "
-    "express it freely. Reorder, merge, split, add or drop words as "
-    "needed; the result must not mirror the original sentence "
-    "structure. (2) Sound like a real person talking: casual spoken "
-    "Khmer, natural connecting words and sentence-final particles "
-    "(for example ណា៎, ហើយ, ទៅ, ផង, ហ្នឹង, អញ្ចឹង, នោះ) used "
-    "sparingly where a native speaker would really use them, with "
-    "natural pronouns (ខ្ញុំ, អ្នក, ឯង, គាត់, យើង) chosen by the "
-    "relationship and tone. Avoid stiff bookish or official words "
-    "unless the speaker is formal. (3) Turn idioms, slang, jokes and "
-    "exclamations into the Khmer way of reacting, not a copy. "
-    "(4) Keep the same tone and energy (casual, angry, funny, "
-    "emotional) and make consecutive lines flow like one conversation, "
-    "with consistent names and pronouns. (5) The line will be read by "
-    "a text-to-speech voice and must fit the time: stay within "
-    "max_chars by choosing the gist and shorter natural wording, never "
-    "by cutting a sentence in the middle. (6) Khmer script only. Names "
-    "may be transliterated into Khmer. No digits, symbols, emojis, "
-    "parentheses or quotation marks: write numbers as Khmer words. "
-    "Return JSON {\"lines\": [...]} with exactly the same number of "
+    "you RE-SAY what the speaker means, the way a real Cambodian would "
+    "say it out loud in that exact moment. Each input line has: original "
+    "(source language, may contain recognition errors), meaning_en (the "
+    "true meaning: trust this most), draft (optional literal machine "
+    "translation: ignore its wording and word order), seconds and "
+    "max_chars (Khmer characters). Use whole_script, previous_lines and "
+    "next_lines to understand the situation and who talks to whom, and "
+    "keep names and pronouns consistent across lines. "
+    + KHMER_STYLE
+    + " Return JSON {\"lines\": [...]} with exactly the same number of "
     "items as the input lines, in the same order."
+)
+
+REVIEW_SYSTEM = (
+    "You are a native Khmer editor and proofreader. Read each line as a "
+    "Cambodian listener. Each input line has \"khmer\", \"meaning_en\" "
+    "(may be empty) and \"max_chars\". Fix: (1) wrong or unnatural words, "
+    "(2) spelling and Unicode order, (3) lines that sound like "
+    "translation or do not make sense, (4) meaning that does not match "
+    "meaning_en, (5) inconsistent pronouns or names between neighbouring "
+    "lines. If a line is already natural and correct, return it "
+    "unchanged. Keep each line within max_chars, Khmer script only, no "
+    "digits or symbols. Return JSON {\"lines\": [...]} with exactly the "
+    "same number of items, in the same order."
 )
 
 SHORTEN_SYSTEM = (
@@ -1675,9 +1765,9 @@ def gemini_json_list(api_key, system, user_text, count):
     raise RuntimeError(last[:300])
 
 
-def char_limit(seconds):
+def char_limit(seconds, cps=CHARS_PER_SEC):
     """ចំនួនតួអក្សរខ្មែរអតិបរមា ដែលអានទាន់ក្នុងរយៈពេលដែលមាន។"""
-    return max(8, int(round((max(0.0, float(seconds)) + 0.3) * CHARS_PER_SEC)))
+    return max(8, int(round((max(0.0, float(seconds)) + 0.3) * cps)))
 
 
 def ask_ai_list(system, payload, count, gemini_key, groq_key, errors,
@@ -1701,46 +1791,109 @@ def ask_ai_list(system, payload, count, gemini_key, groq_key, errors,
     return res
 
 
+def review_khmer(khmer, meanings, limits, gemini_key, groq_key, errors):
+    """AI ពិនិត្យឃ្លាខ្មែរម្តងទៀត ជាអ្នកស្តាប់ខ្មែរ (កែពាក្យខុស/ស្តាប់មិនធម្មជាតិ)។"""
+    n = len(khmer)
+    out = list(khmer)
+    todo = [i for i in range(n) if out[i]]
+    if not todo:
+        return out
+    overview = " ".join(out[i] for i in todo)[:3500]
+    batches = [todo[k:k + 20] for k in range(0, len(todo), 20)]
+
+    def run(idx):
+        payload = json.dumps(
+            {
+                "whole_script_khmer": overview,
+                "lines": [
+                    {
+                        "khmer": out[i],
+                        "meaning_en": meanings[i] or "",
+                        "max_chars": limits[i],
+                    }
+                    for i in idx
+                ],
+            },
+            ensure_ascii=False,
+        )
+        res = ask_ai_list(
+            REVIEW_SYSTEM, payload, len(idx),
+            gemini_key, groq_key, errors, "review", 0.3,
+        )
+        return idx, res
+
+    with ThreadPoolExecutor(max_workers=LLM_WORKERS) as ex:
+        for idx, res in ex.map(run, batches):
+            if res:
+                for i, r in zip(idx, res):
+                    r2 = accept_khmer(r) if r else None
+                    if r2 and len(r2) <= limits[i] * 1.3:
+                        out[i] = r2
+    return out
+
+
 def naturalize_lines(originals, drafts, gemini_key, groq_key,
-                     durations=None):
+                     durations=None, dub=False):
     """
-    កែ (ឬបកប្រែ បើគ្មានសេចក្តីព្រាង) ឱ្យទៅជាភាសាខ្មែរនិយាយធម្មជាតិ
-    ដូចមនុស្សនិយាយពិត ហើយឱ្យខ្លីល្មមនិយាយទាន់ក្នុងម៉ោងរបស់ឃ្លានីមួយៗ។
-    ក្រុមទាំងអស់ត្រូវបានហៅស្មើគ្នា (លឿនជាងមុន)។
+    ចិន/អង់គ្លេស/... → ន័យពិត (EN) → ខ្មែរនិយាយធម្មជាតិ → ពិនិត្យ → បង្រួម។
     ត្រឡប់ (លទ្ធផល, បញ្ជីមូលហេតុបរាជ័យ)។
     """
-    n = len(drafts)
+    n = len(originals)
     out = list(drafts)
     errors = []
-
     if not (gemini_key or groq_key):
         return out, errors
 
     if durations is None:
         durations = [4.0] * n
-    limits = [char_limit(d) for d in durations]
+    cps = CHARS_PER_SEC if dub else CAPTION_CPS
+    limits = [char_limit(d, cps) for d in durations]
+    overview = " ".join(str(o).strip() for o in originals)[:3500]
+    batches = [list(range(k, min(n, k + 20))) for k in range(0, n, 20)]
 
-    # ជំហានទី១៖ សរសេរឡើងវិញ ក្នុងដែនកំណត់ម៉ោង (ក្រុមស្មើគ្នា)
-    batches = [list(range(k, min(n, k + 25))) for k in range(0, n, 25)]
+    # ជំហាន ១៖ យល់ន័យពិត (អង់គ្លេស) ដោយមើលបរិបទទាំងមូល
+    meanings = [""] * n
 
+    def run_meaning(idx):
+        payload = json.dumps(
+            {
+                "whole_script": overview,
+                "lines": [str(originals[i]).strip() for i in idx],
+            },
+            ensure_ascii=False,
+        )
+        res = ask_ai_list(
+            MEANING_SYSTEM, payload, len(idx),
+            gemini_key, groq_key, errors, "meaning", 0.2,
+        )
+        return idx, res
+
+    with ThreadPoolExecutor(max_workers=LLM_WORKERS) as ex:
+        for idx, res in ex.map(run_meaning, batches):
+            if res:
+                for i, r in zip(idx, res):
+                    meanings[i] = r or ""
+
+    # ជំហាន ២៖ សរសេរជាខ្មែរនិយាយធម្មជាតិ
     def run_natural(idx):
         k = idx[0]
-        context = []
-        for j in range(max(0, k - 3), k):
-            c = drafts[j] or str(originals[j]).strip()
-            if c:
-                context.append(c)
+        previous = [
+            meanings[j] or str(originals[j]).strip()
+            for j in range(max(0, k - 3), k)
+        ]
         upcoming = [
-            str(originals[j]).strip()
+            meanings[j] or str(originals[j]).strip()
             for j in range(idx[-1] + 1, min(n, idx[-1] + 3))
         ]
         payload = json.dumps(
             {
-                "previous_lines": context,
+                "whole_script": overview,
+                "previous_lines": previous,
                 "next_lines": upcoming,
                 "lines": [
                     {
                         "original": str(originals[i]).strip(),
+                        "meaning_en": meanings[i],
                         "draft": drafts[i] or "",
                         "seconds": round(float(durations[i]), 1),
                         "max_chars": limits[i],
@@ -1752,7 +1905,7 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
         )
         res = ask_ai_list(
             NATURAL_SYSTEM, payload, len(idx),
-            gemini_key, groq_key, errors, "natural", 0.7,
+            gemini_key, groq_key, errors, "natural", 0.5,
         )
         return idx, res
 
@@ -1760,13 +1913,16 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
         for idx, res in ex.map(run_natural, batches):
             if res:
                 for i, r in zip(idx, res):
-                    if r and has_khmer(r):
-                        out[i] = r
+                    r2 = accept_khmer(r) if r else None
+                    if r2:
+                        out[i] = r2
 
-    # ជំហានទី២៖ ឃ្លាណាដែលនៅវែងពេក បង្រួមម្តងទៀត (ក្រុមស្មើគ្នា)
+    # ជំហាន ៣៖ ពិនិត្យជាអ្នកស្តាប់ខ្មែរ
+    out = review_khmer(out, meanings, limits, gemini_key, groq_key, errors)
+
+    # ជំហាន ៤៖ ឃ្លាដែលនៅវែងពេក បង្រួមដោយមិនកាត់ន័យ
     long_idx = [
-        i for i in range(n)
-        if out[i] and len(out[i]) > limits[i] * 1.2
+        i for i in range(n) if out[i] and len(out[i]) > limits[i] * 1.2
     ]
     sbatches = [long_idx[k:k + 25] for k in range(0, len(long_idx), 25)]
 
@@ -1774,8 +1930,7 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
         payload = json.dumps(
             {
                 "lines": [
-                    {"text": out[i], "max_chars": limits[i]}
-                    for i in idx
+                    {"text": out[i], "max_chars": limits[i]} for i in idx
                 ]
             },
             ensure_ascii=False,
@@ -1791,10 +1946,25 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
             for idx, res in ex.map(run_short, sbatches):
                 if res:
                     for i, r in zip(idx, res):
-                        if r and has_khmer(r) and len(r) < len(out[i]):
-                            out[i] = r
+                        r2 = accept_khmer(r) if r else None
+                        if r2 and len(r2) < len(out[i]):
+                            out[i] = r2
 
     return out, errors
+
+
+def polish_segments(segments, gemini_key, groq_key, dub=False):
+    """សម្រាប់ម៉ាស៊ីន Gemini៖ ពិនិត្យអក្សរខ្មែរដែលបានម្តងទៀត ឱ្យស្តាប់ពីរោះ។"""
+    try:
+        cps = CHARS_PER_SEC if dub else CAPTION_CPS
+        texts = [t for _, _, t in segments]
+        limits = [char_limit(e - s, cps) for s, e, _ in segments]
+        new = review_khmer(
+            texts, [""] * len(texts), limits, gemini_key, groq_key, []
+        )
+        return [(s, e, t2) for (s, e, _), t2 in zip(segments, new)]
+    except Exception:
+        return segments
 
 
 def fill_missing_translations(originals, outs, gemini_key, groq_key,
@@ -2080,7 +2250,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
 
 
 def transcribe_free(groq_key, audio_path, duration, source_language,
-                    status, speech=None, gemini_key=None):
+                    status, speech=None, gemini_key=None, dub=False):
     """
     ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Gemini/Groq LLM)។
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
@@ -2159,11 +2329,14 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
             ]
             segs = retime_by_speech(segs, speech, duration)
     else:
+        # ផ្សំឃ្លាដែលដាច់កណ្តាលប្រយោគ ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ
+        keep = merge_thoughts(keep)
+
         originals = [t for _, _, t in keep]
         errs = []
         outs = [None] * len(originals)
 
-        # ១) AI សរសេរឡើងវិញជាភាសាខ្មែរនិយាយធម្មជាតិ ពីអត្ថបទដើមដោយផ្ទាល់
+        # ១) AI យល់ន័យពិត រួចសរសេរជាភាសាខ្មែរនិយាយធម្មជាតិ ពីអត្ថបទដើមដោយផ្ទាល់
         #    (មិនយកការបកត្រង់ៗរបស់ Google ជាមូលដ្ឋាន ដើម្បីកុំឱ្យស្តាប់ដូចម៉ាស៊ីន)
         if gemini_key or groq_key:
             status.write("៣/៤ កំពុងសរសេរជាភាសាខ្មែរនិយាយធម្មជាតិ...")
@@ -2174,6 +2347,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
                     gemini_key,
                     groq_key,
                     durations=[e - s for s, e, _ in keep],
+                    dub=dub,
                 )
                 errs += nat_errs
             except Exception as e:
@@ -2985,6 +3159,7 @@ def run_worker(job, item, settings, fonts_data):
                                 rep,
                                 speech=speech,
                                 gemini_key=settings["gemini_key"],
+                                dub=settings["dub_on"],
                             )
                         )
                     else:
@@ -3033,6 +3208,16 @@ def run_worker(job, item, settings, fonts_data):
                 err = UserError(msg)
                 err.detail = joined
                 raise err
+
+            # ម៉ាស៊ីន Gemini៖ ពិនិត្យអក្សរខ្មែរម្តងទៀត ឱ្យស្តាប់ពីរោះធម្មជាតិ
+            if used_engine == "gemini" and settings["language"] != "Khmer":
+                rep.write("៣/៤ កំពុងពិនិត្យភាសាខ្មែរឱ្យស្តាប់ពីរោះ...")
+                segments = polish_segments(
+                    segments,
+                    settings["gemini_key"],
+                    settings["groq_key"],
+                    settings["dub_on"],
+                )
 
             if failed_chunks:
                 item["warn"].append(
