@@ -44,7 +44,7 @@ MAX_DURATION_MIN = 15  # វីដេអូវែងអតិបរមា (ន�
 
 # ល្បឿននិយាយខ្មែរ (តួអក្សរ ក្នុងមួយវិនាទី) ប្រើកំណត់ប្រវែងឃ្លាឱ្យទាន់ពេល
 CHARS_PER_SEC = 11
-MAX_DUB_SPEED = 1.6  # បង្កើនល្បឿនសំឡេងអានអតិបរមា (កុំឱ្យលឿនហួសហេតុ)
+MAX_DUB_SPEED = 1.4  # បង្កើនល្បឿនសំឡេងអានអតិបរមា (លើសនេះស្តាប់មិនធម្មជាតិ)
 
 # ការកាត់សំឡេងជាផ្នែកៗ ដើម្បីឱ្យម៉ោងត្រឹមត្រូវ
 CHUNK_TARGET = 20.0  # វិនាទី
@@ -975,7 +975,11 @@ def build_prompt(clip_duration, source_language, concise=False):
             "equivalent instead of copying them. Never a stiff, textbook "
             "or literal translation. Keep the original tone and feeling "
             "(casual, serious, funny, emotional) and let the sentences "
-            "flow naturally from one to the next."
+            "flow naturally from one to the next. You may reorder, merge, "
+            "add or drop words freely, and use natural spoken particles "
+            "and pronouns, as long as the meaning and feeling stay the "
+            "same. Do not use digits, symbols or emojis in the Khmer "
+            "text: write numbers as Khmer words."
         )
 
     concise_rule = ""
@@ -1569,27 +1573,35 @@ def translate_texts(texts):
 
 
 NATURAL_SYSTEM = (
-    "You are an expert Khmer subtitle and dubbing writer. "
+    "You are a native Khmer dubbing scriptwriter. You do NOT translate; "
+    "you RE-SAY what the speaker means, the way a real Cambodian person "
+    "would say it out loud in that exact moment. "
     "You receive numbered subtitle lines. For each line you get the "
-    "ORIGINAL text (source language, may be empty), a literal DRAFT "
-    "Khmer translation (may be empty, then translate from the "
-    "original yourself), the time available in "
-    "\"seconds\" and a hard limit \"max_chars\" (Khmer characters). "
-    "Do NOT translate word by word. For every line, first understand "
-    "what the speaker really means and feels in that moment, then say "
-    "it the way a real native Khmer person would say it out loud while "
-    "thinking and talking: smooth, casual, conversational spoken Khmer "
-    "with natural word order, natural connecting words and "
-    "sentence-final particles. Turn idioms, slang and jokes into the "
-    "Khmer way of saying the same thing instead of copying them. Keep "
-    "the same tone (casual, serious, funny, emotional) and do not "
-    "sound like a machine or a textbook. Keep the meaning faithful, "
-    "but every line MUST fit within max_chars so it can be spoken in "
-    "the given seconds: drop filler words, merge ideas, choose "
-    "shorter natural wording, never cut a sentence in the middle. "
-    "Use previous_lines only as context so the story flows and "
-    "names, pronouns and tone stay consistent. "
-    "Khmer script only (names may be transliterated into Khmer). "
+    "ORIGINAL text (source language), an optional DRAFT (a literal "
+    "machine translation, often stiff or wrong: use it only as a hint "
+    "for the meaning and NEVER copy its wording or word order), the "
+    "time available in \"seconds\" and a hard limit \"max_chars\" "
+    "(Khmer characters). "
+    "Rules: (1) First understand the meaning, emotion and intention of "
+    "the whole sentence using previous_lines and next_lines, then "
+    "express it freely. Reorder, merge, split, add or drop words as "
+    "needed; the result must not mirror the original sentence "
+    "structure. (2) Sound like a real person talking: casual spoken "
+    "Khmer, natural connecting words and sentence-final particles "
+    "(for example ណា៎, ហើយ, ទៅ, ផង, ហ្នឹង, អញ្ចឹង, នោះ) used "
+    "sparingly where a native speaker would really use them, with "
+    "natural pronouns (ខ្ញុំ, អ្នក, ឯង, គាត់, យើង) chosen by the "
+    "relationship and tone. Avoid stiff bookish or official words "
+    "unless the speaker is formal. (3) Turn idioms, slang, jokes and "
+    "exclamations into the Khmer way of reacting, not a copy. "
+    "(4) Keep the same tone and energy (casual, angry, funny, "
+    "emotional) and make consecutive lines flow like one conversation, "
+    "with consistent names and pronouns. (5) The line will be read by "
+    "a text-to-speech voice and must fit the time: stay within "
+    "max_chars by choosing the gist and shorter natural wording, never "
+    "by cutting a sentence in the middle. (6) Khmer script only. Names "
+    "may be transliterated into Khmer. No digits, symbols, emojis, "
+    "parentheses or quotation marks: write numbers as Khmer words. "
     "Return JSON {\"lines\": [...]} with exactly the same number of "
     "items as the input lines, in the same order."
 )
@@ -1718,9 +1730,14 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
             c = drafts[j] or str(originals[j]).strip()
             if c:
                 context.append(c)
+        upcoming = [
+            str(originals[j]).strip()
+            for j in range(idx[-1] + 1, min(n, idx[-1] + 3))
+        ]
         payload = json.dumps(
             {
                 "previous_lines": context,
+                "next_lines": upcoming,
                 "lines": [
                     {
                         "original": str(originals[i]).strip(),
@@ -1735,7 +1752,7 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
         )
         res = ask_ai_list(
             NATURAL_SYSTEM, payload, len(idx),
-            gemini_key, groq_key, errors, "natural", 0.5,
+            gemini_key, groq_key, errors, "natural", 0.7,
         )
         return idx, res
 
@@ -2144,31 +2161,38 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
     else:
         originals = [t for _, _, t in keep]
         errs = []
+        outs = [None] * len(originals)
 
-        # ១) Google Translate (លឿន ស្មើគ្នា) ជាសេចក្តីព្រាង
-        status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        outs, g_errs = translate_texts(originals)
-        errs += g_errs
+        # ១) AI សរសេរឡើងវិញជាភាសាខ្មែរនិយាយធម្មជាតិ ពីអត្ថបទដើមដោយផ្ទាល់
+        #    (មិនយកការបកត្រង់ៗរបស់ Google ជាមូលដ្ឋាន ដើម្បីកុំឱ្យស្តាប់ដូចម៉ាស៊ីន)
+        if gemini_key or groq_key:
+            status.write("៣/៤ កំពុងសរសេរជាភាសាខ្មែរនិយាយធម្មជាតិ...")
+            try:
+                outs, nat_errs = naturalize_lines(
+                    originals,
+                    outs,
+                    gemini_key,
+                    groq_key,
+                    durations=[e - s for s, e, _ in keep],
+                )
+                errs += nat_errs
+            except Exception as e:
+                errs.append(f"natural: {e}"[:200])
 
-        # ២) AI កែឱ្យជាភាសានិយាយធម្មជាតិ + ឃ្លាដែលគ្មានសេចក្តីព្រាង
-        #    ត្រូវបានបកពីដើមដោយ AI តែម្តង (ជំនួសការបកពីរដង)
-        status.write("៣/៤ កំពុងកែឱ្យជាភាសានិយាយធម្មជាតិ...")
-        try:
-            outs, nat_errs = naturalize_lines(
-                originals,
-                outs,
-                gemini_key,
-                groq_key,
-                durations=[e - s for s, e, _ in keep],
+            # ឃ្លាដែលនៅទទេ → AI បកប្រែសាមញ្ញម្តងទៀត
+            outs = fill_missing_translations(
+                originals, outs, gemini_key, groq_key, errs
             )
-            errs += nat_errs
-        except Exception as e:
-            errs.append(f"natural: {e}"[:200])
 
-        # ៣) នៅសល់ទទេ → បកប្រែសាមញ្ញ
-        outs = fill_missing_translations(
-            originals, outs, gemini_key, groq_key, errs
-        )
+        # ២) Google Translate ជាម៉ាស៊ីនបម្រុងចុងក្រោយ (សម្រាប់ឃ្លាដែលនៅខ្វះ)
+        missing = [i for i, o in enumerate(outs) if not o]
+        if missing:
+            status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
+            g_outs, g_errs = translate_texts([originals[i] for i in missing])
+            errs += g_errs
+            for i, g in zip(missing, g_outs):
+                if g:
+                    outs[i] = g
 
         segs = []
         for (s, e, _), out in zip(keep, outs):
@@ -2202,13 +2226,13 @@ def tts_segment(text, voice, path):
     asyncio.run(_go())
 
 
-def shorten_batch(gemini_key, groq_key, items):
+def shorten_batch(gemini_key, groq_key, items, rate=CHARS_PER_SEC):
     """
     បង្រួមប្រយោគខ្មែរច្រើនឃ្លាក្នុងការហៅ AI តែម្តងក្នុងមួយក្រុម (ស្មើគ្នា)។
     items = [(អត្ថបទ, វិនាទីដែលមាន)] → បញ្ជីអត្ថបទថ្មី (ឬដដែលបើបរាជ័យ)។
     """
     out = [t for t, _ in items]
-    limits = [max(6, int(sec * CHARS_PER_SEC)) for _, sec in items]
+    limits = [max(6, int(sec * rate)) for _, sec in items]
     idx_all = [i for i in range(len(items)) if len(out[i]) > limits[i]]
     batches = [idx_all[k:k + 25] for k in range(0, len(idx_all), 25)]
     errors = []
@@ -2634,26 +2658,41 @@ def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
     with ThreadPoolExecutor(max_workers=TTS_WORKERS) as ex:
         list(ex.map(synth, range(n_seg)))
 
-    # ជំហានទី២៖ ឃ្លាវែងពេក → បង្រួមជាក្រុម ហើយអានឡើងវិញស្មើគ្នា
+    # ជំហានទី២៖ វាស់ល្បឿនអានពិតរបស់សំឡេង AI រួចបង្រួមឃ្លាដែលវែងជាងពេលដែលមាន
+    # (ធ្វើ ២ ជុំ) ដើម្បីឱ្យចប់ទាន់មាត់អ្នកនិយាយ មិនបាច់បង្កើនល្បឿនខ្លាំង
     if gemini_key or groq_key:
-        long_idx = [
-            i for i in range(n_seg)
-            if durs[i] and durs[i] > nominal[i] * 1.15
-        ]
-        if long_idx:
+        for _round in range(2):
+            rates = [
+                len(texts[i]) / durs[i]
+                for i in range(n_seg)
+                if durs[i] and durs[i] > 0.4 and len(texts[i]) >= 6
+            ]
+            rate = (
+                sorted(rates)[len(rates) // 2] if rates else CHARS_PER_SEC
+            )
+            rate = max(6.0, min(16.0, rate))
+
+            long_idx = [
+                i for i in range(n_seg)
+                if durs[i] and durs[i] > nominal[i] * 1.05
+            ]
+            if not long_idx:
+                break
             new = shorten_batch(
                 gemini_key,
                 groq_key,
                 [(texts[i], nominal[i]) for i in long_idx],
+                rate=rate * 0.95,
             )
             changed = []
             for i, t2 in zip(long_idx, new):
                 if t2 != texts[i]:
                     texts[i] = t2
                     changed.append(i)
-            if changed:
-                with ThreadPoolExecutor(max_workers=TTS_WORKERS) as ex:
-                    list(ex.map(synth, changed))
+            if not changed:
+                break
+            with ThreadPoolExecutor(max_workers=TTS_WORKERS) as ex:
+                list(ex.map(synth, changed))
 
     # ជំហានទី៣៖ រៀបម៉ោង និងលាយសំឡេង
     inputs, filters = [], []
