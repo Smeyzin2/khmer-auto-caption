@@ -16,6 +16,7 @@ import urllib.request
 import unicodedata
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from html import escape as html_escape
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -27,21 +28,7 @@ from google.genai import types
 st.set_page_config(
     page_title="Khmer Auto Caption",
     page_icon="🎬",
-    layout="centered",
-)
-
-# លាក់ម៉ឺនុយ និងរបារបច្ចេកទេសរបស់ Streamlit
-st.markdown(
-    """
-    <style>
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    [data-testid="stToolbar"] {visibility: hidden;}
-    [data-testid="stDecoration"] {display: none;}
-    .stDeployButton {display: none;}
-    </style>
-    """,
-    unsafe_allow_html=True,
+    layout="wide",
 )
 
 DEBUG = bool(st.secrets.get("DEBUG", False))
@@ -110,17 +97,45 @@ PREFERRED_MODELS = [
 
 GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
 
-# (ឈ្មោះឯកសារ, តំណ, ឈ្មោះ Font លំនាំដើម)
-FONT_SOURCES = [
-    (
-        "Battambang.ttf",
-        GF + "battambang/Battambang-Regular.ttf",
-        "Battambang",
-    ),
-    ("Content.ttf", GF + "content/Content-Regular.ttf", "Content"),
-    ("Siemreap.ttf", GF + "siemreap/Siemreap-Regular.ttf", "Siemreap"),
-    ("Bokor.ttf", GF + "bokor/Bokor-Regular.ttf", "Bokor"),
+# បញ្ជី Font ខ្មែរដែលអាចជ្រើសបាន
+# (ឈ្មោះ, ផ្លូវឯកសារ (ឬបញ្ជីផ្លូវសាកម្តងមួយ), ពណ៌នាខ្លី)
+FONT_LIBRARY = [
+    ("Battambang", "battambang/Battambang-Regular.ttf",
+     "ស្តង់ដារ អានងាយ (ណែនាំ)"),
+    ("Noto Sans Khmer",
+     "notosanskhmer/NotoSansKhmer%5Bwdth%2Cwght%5D.ttf",
+     "ទំនើប ស្អាត ច្បាស់"),
+    ("Kantumruy Pro",
+     "kantumruypro/KantumruyPro%5Bwght%5D.ttf",
+     "ទំនើប សាមញ្ញ"),
+    ("Hanuman",
+     ["hanuman/Hanuman-Regular.ttf", "hanuman/Hanuman%5Bwght%5D.ttf"],
+     "បែបសៀវភៅ"),
+    ("Content", "content/Content-Regular.ttf", "សាមញ្ញ ស្អាត"),
+    ("Siemreap", "siemreap/Siemreap-Regular.ttf", "ទន់ភ្លន់"),
+    ("Koulen", "koulen/Koulen-Regular.ttf", "ក្រាស់ ខ្លាំង"),
+    ("Moul", "moul/Moul-Regular.ttf", "បែបចំណងជើង"),
+    ("Bayon", "bayon/Bayon-Regular.ttf", "បែបសិល្បៈ"),
+    ("Bokor", "bokor/Bokor-Regular.ttf", "បែបបុរាណ"),
+    ("Dangrek", "dangrek/Dangrek-Regular.ttf", "បែបសិល្បៈ"),
+    ("Preahvihear", "preahvihear/Preahvihear-Regular.ttf", "សាមញ្ញ"),
+    ("Odor Mean Chey", "odormeanchey/OdorMeanChey-Regular.ttf",
+     "បែបសិល្បៈ"),
+    ("Fasthand", "fasthand/Fasthand-Regular.ttf", "បែបដៃសរសេរ"),
 ]
+
+FONT_MAP = {}
+for _n, _p, _d in FONT_LIBRARY:
+    FONT_MAP[_n] = {
+        "family": _n,
+        "paths": [_p] if isinstance(_p, str) else list(_p),
+        "desc": _d,
+    }
+FONT_NAMES = [n for n, _, _ in FONT_LIBRARY]
+DEFAULT_FONT = "Battambang"
+
+# Font បម្រុង (បើ Font ដែលបានជ្រើសមិនអាចប្រើបាន)
+FALLBACK_FONTS = ["Battambang", "Content", "Siemreap"]
 
 # ឈ្មោះ: (ទំហំអតិបរមា, CRF, preset)
 QUALITY = {
@@ -147,6 +162,32 @@ TTS_VOICES = {
     "ស្រី (Sreymom)": "km-KH-SreymomNeural",
     "ប្រុស (Piseth)": "km-KH-PisethNeural",
 }
+
+# ពណ៌អក្សរ: ឈ្មោះ → (ពណ៌ ASS, ពណ៌ HEX សម្រាប់មើលជាមុន)
+COLOR_OPTIONS = {
+    "⚪ ស": ("&H00FFFFFF", "#FFFFFF"),
+    "🟡 លឿង": ("&H0000FFFF", "#FFE600"),
+    "🟢 បៃតង": ("&H0000FF00", "#22E55A"),
+    "🔵 ខៀវ": ("&H00FF0000", "#3B82F6"),
+    "🔴 ក្រហម": ("&H000000FF", "#FF3B3B"),
+}
+
+# ទីតាំងអក្សរ: ឈ្មោះ → (Alignment ASS, MarginV, ឈ្មោះសម្រាប់មើលជាមុន)
+POSITIONS = {
+    "↓ ក្រោម": (2, 35, "bottom"),
+    "⏺️ កណ្តាល": (5, 0, "middle"),
+    "↑ លើ": (8, 30, "top"),
+}
+
+SAMPLE_TEXT = "សួស្តី! នេះជាអក្សរគំរូ"
+SAMPLE_VOICE_TEXT = "សួស្តី! នេះគឺជាសំឡេងអានជាភាសាខ្មែរ។"
+
+MODE_UP = "📁 Upload · ផ្ទុកវីដេអូ"
+MODE_LINK = "🔗 Link · តំណ"
+MODE_BATCH = "📚 Batch · ច្រើនវីដេអូ"
+
+ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
+ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
 
 
 class UserError(RuntimeError):
@@ -297,37 +338,69 @@ def time_ass(seconds):
 
 # ---------- Font ----------
 
+def font_filename(name):
+    return re.sub(r"\W+", "_", name).strip("_") + ".ttf"
+
+
 @st.cache_resource(show_spinner=False)
-def load_font_bytes():
-    """ទាញយក Font ខ្មែរតែម្តង (cache) ប្រើបានគ្រប់វីដេអូ។"""
-    out = []
-    for i, (filename, url, default_name) in enumerate(FONT_SOURCES):
+def fetch_font(name):
+    """
+    ទាញយក Font ខ្មែរមួយ (cache) ប្រើបានគ្រប់វីដេអូ។
+    ត្រឡប់ (ឈ្មោះឯកសារ, ទិន្នន័យ, ឈ្មោះ Font)។
+    """
+    info = FONT_MAP[name]
+    last = None
+    for path in info["paths"]:
         try:
             request = urllib.request.Request(
-                url,
+                GF + path,
                 headers={"User-Agent": "Mozilla/5.0"},
             )
             with urllib.request.urlopen(request, timeout=25) as response:
                 data = response.read()
             if len(data) < 1000:
-                raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
+                raise RuntimeError("ឯកសារ Font តូចពេក។")
+            return (font_filename(name), data, info["family"])
+        except Exception as e:
+            last = e
+    raise RuntimeError(f"ទាញយក Font {name} មិនបាន: {last}")
+
+
+def load_fonts_for(selected):
+    """
+    ទាញយក Font ដែលបានជ្រើសជាមុន រួចតាមដោយ Font បម្រុង។
+    ត្រឡប់ (បញ្ជី Font, សារព្រមាន)។
+    """
+    if selected not in FONT_MAP:
+        selected = DEFAULT_FONT
+    order = [selected] + [n for n in FALLBACK_FONTS if n != selected]
+
+    out = []
+    warn = ""
+    for i, name in enumerate(order):
+        try:
+            out.append(fetch_font(name))
         except Exception:
             if i == 0:
-                raise
-            continue
-        out.append((filename, data, default_name))
-    return out
+                warn = (
+                    f"ពុម្ពអក្សរ {selected} ទាញយកមិនបាន "
+                    "ប្រើពុម្ពអក្សរផ្សេងជំនួស។"
+                )
+    if not out:
+        raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
+    return out, warn
 
 
 def prepare_home_font(fonts_data):
-    """ដាក់ Font ទីមួយក្នុង ~/.fonts តែម្តង (ធ្វើក្នុង thread មេ)។"""
+    """ដាក់ Font ក្នុង ~/.fonts តែម្តង (ធ្វើក្នុង thread មេ)។"""
     try:
         home_fonts = os.path.expanduser("~/.fonts")
         os.makedirs(home_fonts, exist_ok=True)
-        dst = os.path.join(home_fonts, "Battambang-Regular.ttf")
-        if not os.path.exists(dst):
-            with open(dst, "wb") as f:
-                f.write(fonts_data[0][1])
+        for filename, data, _ in fonts_data:
+            dst = os.path.join(home_fonts, filename)
+            if not os.path.exists(dst):
+                with open(dst, "wb") as f:
+                    f.write(data)
     except Exception:
         pass
 
@@ -745,7 +818,7 @@ def build_captions(segments, duration):
 
 
 def write_ass(path, captions, font_family, font_size, outline_size,
-              primary_color, width, height):
+              primary_color, width, height, alignment=2, margin_v=35):
     play_res_y = 288
     play_res_x = max(100, int(round(play_res_y * width / max(1, height))))
 
@@ -764,7 +837,7 @@ def write_ass(path, captions, font_family, font_size, outline_size,
         "Alignment, MarginL, MarginR, MarginV, Encoding",
         f"Style: Default,{font_family},{font_size},{primary_color},"
         f"&H000000FF,&H00000000,&H64000000,0,0,0,0,100,100,0,0,1,"
-        f"{outline_size},1,2,20,20,35,1",
+        f"{outline_size},1,{alignment},20,20,{margin_v},1",
         "",
         "[Events]",
         "Format: Layer, Start, End, Style, Name, MarginL, MarginR, "
@@ -2272,7 +2345,8 @@ def build_video_filter(max_side):
 
 
 def render_with_fonts(folder, fonts, captions, font_size, outline_size,
-                      color, vid_w, vid_h, quality, status, dub=False):
+                      color, vid_w, vid_h, quality, status, dub=False,
+                      alignment=(2, 35)):
     """
     Render វីដេអូ ហើយពិនិត្យថា Font ខ្មែរត្រូវបានប្រើពិតឬទេ។
     បើមិនបាន សាកវិធី ឬ Font ផ្សេងបន្ត។
@@ -2280,6 +2354,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
     ass_path = os.path.join(folder, "captions.ass")
     output_path = os.path.join(folder, "output.mp4")
     max_side, crf, preset = quality
+    align, margin_v = alignment
 
     conf_env = make_fontconfig_env(folder)
 
@@ -2298,7 +2373,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
 
         write_ass(
             ass_path, captions, family, font_size, outline_size,
-            color, vid_w, vid_h,
+            color, vid_w, vid_h, align, margin_v,
         )
 
         args = ["-i", "input.mp4"]
@@ -2380,7 +2455,7 @@ class Job:
         self.render_slots = threading.Semaphore(MAX_RENDER_AT_ONCE)
         self.zip = None
         self.zip_done = False
-        self.scrolled = False
+        self.notified = False
 
     def running(self):
         return any(it["state"] in ("queued", "running") for it in self.items)
@@ -2580,7 +2655,19 @@ def run_worker(job, item, settings, fonts_data):
                     settings["quality"],
                     rep,
                     dub=dub_ok,
+                    alignment=settings["alignment"],
                 )
+
+            # ព្រមានបើ Font ដែលបានជ្រើសមិនត្រូវបានប្រើ
+            if settings.get("font_warn"):
+                item["warn"].append(settings["font_warn"])
+            else:
+                wanted = get_font_family(*fonts[0])
+                if used_font != wanted:
+                    item["warn"].append(
+                        f"ពុម្ពអក្សរ {settings['font_name']} "
+                        f"មិនអាចប្រើក្នុងវីដេអូបានទេ ប្រើ {used_font} ជំនួស។"
+                    )
 
             item["video"] = video
             item["captions"] = [t for _, _, t in captions]
@@ -2589,6 +2676,7 @@ def run_worker(job, item, settings, fonts_data):
                 "ម៉ូដែល": used_model,
                 "ការតម្រឹម": sync_mode,
                 "ផ្នែកបរាជ័យ": failed_chunks,
+                "Font ដែលជ្រើស": settings.get("font_name", ""),
                 "Font ដែលប្រើ": used_font,
                 "Dubbing": dub_ok,
                 "អ្នកនិយាយ": (
@@ -2646,6 +2734,282 @@ def build_zip(items):
     return buf.getvalue()
 
 
+# ---------- សំឡេងគំរូ (សាកស្តាប់) ----------
+
+@st.cache_data(show_spinner=False, max_entries=20)
+def voice_sample(text, voice):
+    """បង្កើតសំឡេងគំរូខ្លីៗ ដើម្បីសាកស្តាប់ មុនជ្រើសសំឡេង Dubbing។"""
+    path = os.path.join(tempfile.gettempdir(), f"vs_{uuid.uuid4().hex}.mp3")
+    try:
+        tts_segment(text, voice, path)
+        with open(path, "rb") as f:
+            return f.read()
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+# ---------- រចនាប័ទ្ម (CSS) ----------
+
+CSS = """
+html body .stApp,
+html body .stApp button,
+html body .stApp input,
+html body .stApp textarea {
+  font-family: 'Noto Sans Khmer', 'Inter', system-ui, sans-serif;
+}
+:root {
+  --bg: #070b26;
+  --card: #0d1236;
+  --card2: #131a4a;
+  --line: #1e2a66;
+  --blue: #2f6bff;
+  --blue2: #4f8cff;
+  --txt: #e8ecff;
+  --mut: #8f9ac8;
+}
+.stApp {
+  background: radial-gradient(1200px 600px at 20% -10%, #14205f 0%, #070b26 55%) fixed;
+  color: var(--txt);
+}
+header[data-testid="stHeader"] { background: transparent; }
+#MainMenu { visibility: hidden; }
+footer { visibility: hidden; }
+[data-testid="stToolbar"] { visibility: hidden; }
+[data-testid="stDecoration"] { display: none; }
+.stDeployButton { display: none; }
+.block-container {
+  max-width: 1180px;
+  padding-top: 1.2rem;
+  padding-bottom: 4rem;
+}
+.stApp p, .stApp label, .stApp li { color: var(--txt); }
+[data-testid="stCaptionContainer"] { color: var(--mut); }
+
+/* ក្បាលកម្មវិធី */
+.hero {
+  background: linear-gradient(180deg, #131b52 0%, #0d1438 100%);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 14px 20px 12px 20px;
+  margin-bottom: 14px;
+}
+.hero-t {
+  font-size: 1.9rem;
+  font-weight: 800;
+  line-height: 1.5;
+  background: linear-gradient(90deg, #3a74ff, #8fb4ff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.hero-s { color: var(--mut); font-size: 0.9rem; }
+
+/* ផ្ទាំងម៉ឺនុយ (tabs) */
+[data-baseweb="tab-list"] {
+  gap: 10px;
+  flex-wrap: wrap;
+  background: transparent;
+  border: 0;
+  padding-bottom: 6px;
+}
+button[data-baseweb="tab"] {
+  background: #10174a;
+  border: 1px solid #232f78;
+  border-radius: 12px;
+  padding: 10px 16px;
+  height: auto;
+  color: #cfd6ff;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+  background: linear-gradient(180deg, #3b78ff, #2457e6);
+  border-color: #5b92ff;
+  color: #ffffff;
+}
+button[data-baseweb="tab"] p { color: inherit; }
+[data-baseweb="tab-highlight"], [data-baseweb="tab-border"] {
+  display: none;
+}
+
+/* ក្បាលផ្នែក */
+.sec {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 10px 0;
+}
+.sec .bar {
+  width: 5px;
+  height: 26px;
+  border-radius: 4px;
+  background: var(--blue);
+}
+.sec .sec-th { font-size: 1.25rem; font-weight: 800; color: #ffffff; }
+.sec .sec-en { font-size: 1.1rem; font-weight: 600; color: var(--mut); }
+.ct { font-size: 1.05rem; font-weight: 800; color: #ffffff; margin-bottom: 6px; }
+
+/* កាត (cards) */
+div[class*="st-key-card_"] {
+  background: var(--card);
+  border: 1px solid var(--line) !important;
+  border-radius: 16px;
+  padding: 8px 6px;
+}
+
+/* ប៊ូតុងជ្រើស (radio) ជារាងថ្នាំ */
+div[role="radiogroup"] { gap: 10px !important; flex-wrap: wrap; }
+div[role="radiogroup"] > label {
+  background: #121a4d;
+  border: 1px solid #26327f;
+  border-radius: 12px;
+  padding: 8px 16px 8px 12px;
+  margin: 0 !important;
+}
+div[role="radiogroup"] > label:has(input:checked) {
+  background: linear-gradient(180deg, #3b78ff, #2557e8);
+  border-color: #5b92ff;
+}
+
+/* ប្រអប់បញ្ចូល */
+[data-baseweb="select"] > div,
+.stTextArea textarea,
+.stTextInput input {
+  background: #0a1030 !important;
+  border: 1px solid var(--line) !important;
+  border-radius: 10px !important;
+  color: var(--txt) !important;
+}
+[data-baseweb="popover"] ul, [data-baseweb="menu"] { background: #10174a; }
+[data-testid="stFileUploaderDropzone"] {
+  background: #0a1030;
+  border: 1.5px dashed #3a5bff;
+  border-radius: 14px;
+}
+
+/* ប៊ូតុង */
+button[data-testid="stBaseButton-primary"], button[kind="primary"] {
+  background: linear-gradient(180deg, #3b78ff, #2457e6);
+  border: 1px solid #5b92ff;
+  color: #ffffff;
+  border-radius: 12px;
+  font-weight: 700;
+}
+button[data-testid="stBaseButton-secondary"], button[kind="secondary"] {
+  background: #131a4a;
+  border: 1px solid #26327f;
+  color: var(--txt);
+  border-radius: 12px;
+}
+button:disabled { opacity: 0.7; }
+[data-testid="stMetric"] {
+  background: #10174a;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 8px 12px;
+}
+
+/* មើលជាមុន (Preview) */
+.pv {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 12px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #27418f 0%, #1a2a66 60%, #0f1a45 100%);
+  container-type: size;
+}
+.pv-sun {
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  width: 18%;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  transform: translateX(-50%);
+  background: radial-gradient(circle at 35% 30%, #ffd36b, #f59e0b);
+}
+.pv-cap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  text-align: center;
+  line-height: 1.4;
+  padding: 0 6%;
+}
+
+/* ជម្រើស Font */
+.fp {
+  font-size: 1.5rem;
+  line-height: 1.7;
+  padding: 10px 12px;
+  margin: 6px 0 10px 0;
+  border-radius: 10px;
+  background: #0a1030;
+  border: 1px solid var(--line);
+  color: #ffffff;
+  text-align: center;
+}
+.fn { font-weight: 800; color: #ffffff; }
+.fd { color: var(--mut); font-size: 0.85rem; }
+"""
+
+
+def inject_css():
+    imports = "".join(
+        "@import url('https://fonts.googleapis.com/css2?family="
+        + n.replace(" ", "+")
+        + "&display=swap');"
+        for n in FONT_NAMES
+    )
+    base = (
+        "@import url('https://fonts.googleapis.com/css2?"
+        "family=Noto+Sans+Khmer:wght@400;600;800&display=swap');"
+    )
+    st.markdown(
+        "<style>" + base + imports + CSS + "</style>",
+        unsafe_allow_html=True,
+    )
+
+
+def section(th, en):
+    st.markdown(
+        '<div class="sec"><span class="bar"></span>'
+        f'<span class="sec-th">{th}</span>'
+        f'<span class="sec-en">{en}</span></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def card_title(icon, th, en):
+    st.markdown(
+        f'<div class="ct">{icon} {th} · {en}</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def card(name):
+    return st.container(border=True, key="card_" + name)
+
+
+def preview_html(text, family, font_size, outline, color_hex, pos):
+    size = font_size / 288 * 100
+    stroke = outline * 0.7
+    place = {
+        "bottom": "bottom:9%;",
+        "middle": "top:50%;transform:translateY(-50%);",
+        "top": "top:9%;",
+    }.get(pos, "bottom:9%;")
+    return (
+        '<div class="pv"><div class="pv-sun"></div>'
+        f'<div class="pv-cap" style="font-family:\'{family}\',sans-serif;'
+        f"font-size:{size:.2f}cqh;color:{color_hex};"
+        f"-webkit-text-stroke:{stroke:.2f}cqh #000;"
+        f'paint-order:stroke fill;{place}">{html_escape(text)}</div></div>'
+    )
+
+
 # ---------- ចំណុចប្រទាក់៖ ផ្នែកបង្ហាញលទ្ធផល ----------
 
 def dl_button(label, data, file_name, mime, key, **kwargs):
@@ -2671,7 +3035,7 @@ def dl_button(label, data, file_name, mime, key, **kwargs):
 
 
 def work_area(job, was_running):
-    """ផ្នែក ③ កន្លែងធ្វើការ៖ ស្ថានភាពវីដេអូនីមួយៗ។"""
+    """ផ្នែកកន្លែងធ្វើការ៖ ស្ថានភាពវីដេអូនីមួយៗ។"""
     items = job.items
     total = len(items)
     done = sum(1 for it in items if it["state"] == "done")
@@ -2701,7 +3065,9 @@ def work_area(job, was_running):
                 right.caption(f"⏱ {int(secs)} វិនាទី")
 
             if it["state"] == "done":
-                st.success("✅ រួចរាល់ — ទាញយកបាននៅផ្នែកខាងក្រោម ⬇️")
+                st.success(
+                    "✅ រួចរាល់ — ទាញយកបានក្នុងផ្ទាំង «🎞️ វីដេអូខ្ញុំ»"
+                )
             elif it["state"] == "error":
                 st.error(it["error"] or "មិនបានសម្រេច។")
                 if DEBUG and it["raw_error"]:
@@ -2720,8 +3086,22 @@ def work_area(job, was_running):
         st.rerun()
 
 
+def queue_area(job):
+    """ផ្ទាំងច្រើនវីដេអូ៖ ជួររង់ចាំ និងស្ថានភាពវីដេអូនីមួយៗ។"""
+    icons = {"done": "✅", "error": "❌", "running": "⏳", "queued": "🕒"}
+    for i, it in enumerate(job.items, start=1):
+        if it["state"] == "done":
+            pct, text = 1.0, "រួចរាល់"
+        elif it["state"] == "error":
+            pct, text = 1.0, "បរាជ័យ"
+        else:
+            pct, text = it["pct"], it["stage"]
+        st.markdown(f"{icons.get(it['state'], '🕒')} **{i}. {it['name']}**")
+        st.progress(max(0.0, min(1.0, pct)), text=text)
+
+
 def download_area(job):
-    """ផ្នែក ④ កន្លែងទាញយក៖ វីដេអូណារួច ទាញយកបានភ្លាម។"""
+    """ផ្នែកទាញយក៖ វីដេអូណារួច ទាញយកបានភ្លាម។"""
     done = [
         (i, it)
         for i, it in enumerate(job.items, start=1)
@@ -2775,8 +3155,8 @@ def download_area(job):
                     st.text("\n".join(it["log"][-30:]))
 
 
-def scroll_to_downloads():
-    """រមូរទៅកន្លែងទាញយកដោយស្វ័យប្រវត្តិ។"""
+def switch_to_my_videos():
+    """ប្តូរទៅផ្ទាំង «វីដេអូខ្ញុំ» ដោយស្វ័យប្រវត្តិ (បើកំពុងនៅទំព័រដើម)។"""
     components.html(
         f"""
         <script>
@@ -2784,11 +3164,20 @@ def scroll_to_downloads():
         const go = () => {{
           try {{
             const doc = window.parent.document;
-            const el = doc.getElementById("download-area");
-            if (el) {{
-              el.scrollIntoView({{behavior: "smooth", block: "start"}});
-              return true;
+            const tabs = Array.from(
+              doc.querySelectorAll('button[role="tab"]')
+            );
+            const cur = tabs.find(
+              t => t.getAttribute('aria-selected') === 'true'
+            );
+            const target = tabs.find(
+              t => (t.textContent || '').includes('វីដេអូខ្ញុំ')
+            );
+            if (!target) return false;
+            if (cur && (cur.textContent || '').includes('ទំព័រដើម')) {{
+              target.click();
             }}
+            return true;
           }} catch (e) {{}}
           return false;
         }};
@@ -2802,177 +3191,335 @@ def scroll_to_downloads():
     )
 
 
+def fullscreen_button():
+    """ប៊ូតុងពេញអេក្រង់ (អណ្តែតនៅជ្រុងខាងក្រោមស្តាំ)។"""
+    components.html(
+        """
+        <script>
+        (function () {
+          try {
+            const doc = window.parent.document;
+            if (doc.getElementById('kac-fs')) return;
+            const b = doc.createElement('button');
+            b.id = 'kac-fs';
+            b.textContent = '⛶ ពេញអេក្រង់';
+            b.style.cssText =
+              'position:fixed;right:16px;bottom:16px;z-index:99999;' +
+              'padding:10px 16px;border-radius:12px;' +
+              'border:1px solid #2c3a8f;background:#10174a;' +
+              'color:#e8ecff;font-size:14px;cursor:pointer;' +
+              'box-shadow:0 4px 18px rgba(0,0,0,.45);font-family:inherit;';
+            b.setAttribute(
+              'onclick',
+              "var d=document;" +
+              "if(d.fullscreenElement){d.exitFullscreen();}" +
+              "else{d.documentElement.requestFullscreen();}"
+            );
+            doc.body.appendChild(b);
+          } catch (e) {}
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+
+def set_font(name):
+    st.session_state["font"] = name
+
+
 # ---------- ចំណុចប្រទាក់៖ ទំព័រមេ ----------
+
+inject_css()
 
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
-
-st.title("🎬 Khmer Auto Caption")
-st.caption(
-    "ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ "
-    f"(ធ្វើបានរហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា)"
-)
 
 if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
     st.stop()
 
-colors = {
-    "ស": "&H00FFFFFF",
-    "លឿង": "&H0000FFFF",
-    "បៃតង": "&H0000FF00",
-    "ខៀវ": "&H00FF0000",
-}
-
-ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
-ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
-
-current_job = st.session_state.get("job")
-busy = bool(current_job and current_job.running())
-
-# ---------- ផ្នែក ① ជ្រើសវីដេអូ ----------
-
-st.subheader("① 🎞️ ជ្រើសវីដេអូ")
-
-mode = st.radio(
-    "វិធីបញ្ចូលវីដេអូ",
-    ["📁 Upload ឯកសារ", "🔗 បិទភ្ជាប់តំណ (Link)"],
-    horizontal=True,
-    label_visibility="collapsed",
+st.markdown(
+    '<div class="hero">'
+    '<div class="hero-t">បកប្រែរឿងមកនិយាយភាសាខ្មែរ</div>'
+    '<div class="hero-s">បង្កើតវីដេអូមានអក្សរខ្មែរ និងសំឡេងអាន AI · '
+    f"ធ្វើបានរហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា</div>"
+    "</div>",
+    unsafe_allow_html=True,
 )
 
-uploaded_files = []
-link_text = ""
+# បង្កើត ZIP តែម្តង ពេលរួចទាំងអស់
+job = st.session_state.get("job")
+if job and not job.running() and not job.zip_done:
+    job.zip = build_zip(job.items)
+    job.zip_done = True
 
-if mode.startswith("📁"):
-    uploaded_files = st.file_uploader(
-        "ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)",
-        type=["mp4", "mov", "mkv", "avi", "webm"],
-        accept_multiple_files=True,
-        help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link",
-    ) or []
-else:
-    link_text = st.text_area(
-        "តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ",
-        placeholder="https://...\nhttps://...",
-        height=110,
-    )
+busy = bool(job and job.running())
+running = busy
+refresh = REFRESH_SECONDS if running else None
 
-# ---------- ផ្នែក ② ការកំណត់ ----------
-
-st.subheader("② ⚙️ ការកំណត់")
-
-engine_options = []
-if GROQ_KEY:
-    engine_options.append(ENGINE_FREE)
-if GEMINI_KEY:
-    engine_options.append(ENGINE_GEMINI)
-
-engine_label = st.selectbox(
-    "ម៉ាស៊ីនបកប្រែ",
-    engine_options,
-    index=0,
-    help=(
-        "បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា ឬអស់កូតា "
-        "កម្មវិធីនឹងប្តូរទៅម៉ាស៊ីនមួយទៀតដោយស្វ័យប្រវត្តិ។"
-    ),
-)
-if engine_label == ENGINE_FREE:
-    st.caption(
-        "ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate "
-        "អាចមិនទន់ភ្លន់ដូច Gemini ទេ។"
-    )
-
-language_label = st.selectbox(
-    "ភាសាក្នុងវីដេអូ",
-    list(LANGUAGES.keys()),
-    index=0,
-    help=(
-        "ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ "
-        "បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់ "
-        "(ឧ. ចិន បើវីដេអូនិយាយចិន)។"
-    ),
-)
-
-quality_label = st.selectbox(
-    "គុណភាពវីដេអូ",
-    list(QUALITY.keys()),
-    index=1,
-)
-
-dub_on = st.checkbox("🎙 បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)")
-voice_label = list(TTS_VOICES.keys())[0]
-keep_bg = False
-auto_gender = False
-if dub_on:
-    voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()))
-    auto_gender = st.checkbox(
-        "👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ",
-        help=(
-            "វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។ "
-            "ប្រុសនិយាយ → AI ប្រុស, ស្រីនិយាយ → AI ស្រី "
-            "ហើយបំបែកឃ្លាត្រង់កន្លែងដែលអ្នកនិយាយប្តូរ។ "
-            "បើមានអ្នកនិយាយម្នាក់ វាប្រើសំឡេងតែមួយពេញវីដេអូ។"
-        ),
-    )
-    keep_bg = st.checkbox("រក្សាសំឡេងដើមតិចៗ")
-
-with st.expander("🎨 កំណត់អក្សរ"):
-    font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
-    outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2)
-    font_color = st.selectbox("ពណ៌អក្សរ", list(colors.keys()))
-
-# ---------- រៀបចំបញ្ជីវីដេអូ ----------
-
-items = []
-too_many = False
-
-if uploaded_files:
-    too_many = len(uploaded_files) > MAX_VIDEOS
-    for f in uploaded_files[:MAX_VIDEOS]:
-        items.append({"name": f.name, "file": f, "url": None})
-else:
-    lines = [
-        ln.strip()
-        for ln in link_text.splitlines()
-        if ln.strip().lower().startswith(("http://", "https://"))
+(
+    tab_home,
+    tab_font,
+    tab_voice,
+    tab_batch,
+    tab_my,
+    tab_help,
+) = st.tabs(
+    [
+        "🏠 ទំព័រដើម",
+        "💬 អក្សរខ្មែរ",
+        "🎙️ សំឡេង AI",
+        "📚 ច្រើនវីដេអូ",
+        "🎞️ វីដេអូខ្ញុំ",
+        "❓ ជំនួយ",
     ]
-    too_many = len(lines) > MAX_VIDEOS
-    for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
-        tail = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
-        items.append({
-            "name": tail or f"តំណទី {i}",
-            "file": None,
-            "url": url,
-        })
-
-if too_many:
-    st.warning(
-        f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ "
-        f"កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។"
-    )
+)
 
 run = False
-if busy:
-    st.button(
-        "⏳ កំពុងធ្វើការ... សូមរង់ចាំ",
-        disabled=True,
-        use_container_width=True,
-    )
-elif not items:
-    if not current_job:
-        st.info("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
-else:
-    label = "🚀 បង្កើតវីដេអូមានអក្សរខ្មែរ"
-    if len(items) > 1:
-        label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
-    run = st.button(label, type="primary", use_container_width=True)
+items = []
+
+# =====================================================================
+# ទំព័រដើម
+# =====================================================================
+with tab_home:
+    left, right = st.columns([1.55, 1], gap="large")
+
+    # ---------------- ជួរឈរខាងឆ្វេង ----------------
+    with left:
+        section("ផ្ទុកវីដេអូ", "Upload")
+
+        uploaded_files = []
+        link_text = ""
+
+        with card("upload"):
+            mode = st.radio(
+                "វិធីបញ្ចូលវីដេអូ",
+                [MODE_UP, MODE_LINK, MODE_BATCH],
+                horizontal=True,
+                label_visibility="collapsed",
+                key="src_mode",
+            )
+
+            if mode == MODE_UP:
+                one = st.file_uploader(
+                    "ទាញវីដេអូមកទីនេះ ឬចុចជ្រើសរើស",
+                    type=["mp4", "mov", "mkv", "avi", "webm"],
+                    accept_multiple_files=False,
+                    key="up_one",
+                    help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link",
+                )
+                uploaded_files = [one] if one else []
+            elif mode == MODE_LINK:
+                link_text = st.text_input(
+                    "តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ)",
+                    placeholder="https://...",
+                    key="link_one",
+                )
+            else:
+                uploaded_files = st.file_uploader(
+                    "ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)",
+                    type=["mp4", "mov", "mkv", "avi", "webm"],
+                    accept_multiple_files=True,
+                    key="up_many",
+                ) or []
+                link_text = st.text_area(
+                    "ឬតំណវីដេអូ — មួយបន្ទាត់ ១ តំណ",
+                    placeholder="https://...\nhttps://...",
+                    height=100,
+                    key="links_many",
+                )
+
+            st.caption(
+                "MP4, MOV, MKV, AVI, WEBM · "
+                f"វែងបំផុត {MAX_DURATION_MIN} នាទី"
+            )
+
+        with card("output"):
+            card_title("⚙", "លទ្ធផល", "Output")
+
+            engine_options = []
+            if GROQ_KEY:
+                engine_options.append(ENGINE_FREE)
+            if GEMINI_KEY:
+                engine_options.append(ENGINE_GEMINI)
+
+            quality_label = st.selectbox(
+                "គុណភាពវីដេអូ",
+                list(QUALITY.keys()),
+                index=1,
+                key="quality",
+            )
+            language_label = st.selectbox(
+                "ភាសាក្នុងវីដេអូ",
+                list(LANGUAGES.keys()),
+                index=0,
+                key="lang",
+                help=(
+                    "ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ "
+                    "បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់ "
+                    "(ឧ. ចិន បើវីដេអូនិយាយចិន)។"
+                ),
+            )
+            engine_label = st.selectbox(
+                "ម៉ាស៊ីនបកប្រែ",
+                engine_options,
+                index=0,
+                key="engine",
+                help=(
+                    "បើមាន Key ទាំងពីរ ហើយម៉ាស៊ីនមួយមានបញ្ហា ឬអស់កូតា "
+                    "កម្មវិធីនឹងប្តូរទៅម៉ាស៊ីនមួយទៀតដោយស្វ័យប្រវត្តិ។"
+                ),
+            )
+            if engine_label == ENGINE_FREE:
+                st.caption(
+                    "ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate "
+                    "អាចមិនទន់ភ្លន់ដូច Gemini ទេ។"
+                )
+
+        # ---------- រៀបចំបញ្ជីវីដេអូ ----------
+        for f in uploaded_files:
+            items.append({"name": f.name, "file": f, "url": None})
+
+        link_lines = [
+            ln.strip()
+            for ln in (link_text or "").splitlines()
+            if ln.strip().lower().startswith(("http://", "https://"))
+        ]
+        for i, url in enumerate(link_lines, start=1):
+            tail = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
+            items.append({
+                "name": tail or f"តំណទី {i}",
+                "file": None,
+                "url": url,
+            })
+
+        too_many = len(items) > MAX_VIDEOS
+        items = items[:MAX_VIDEOS]
+
+        if too_many:
+            st.warning(
+                f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ "
+                f"កម្មវិធីនឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។"
+            )
+
+        # ---------- ប៊ូតុងចាប់ផ្តើម ----------
+        if busy:
+            st.button(
+                "⏳ កំពុងធ្វើការ... សូមរង់ចាំ",
+                disabled=True,
+                use_container_width=True,
+            )
+        elif not items:
+            st.button(
+                "✨ ចាប់ផ្តើមដំណើរការ",
+                disabled=True,
+                use_container_width=True,
+            )
+            st.caption("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
+        else:
+            label = "✨ ចាប់ផ្តើមដំណើរការ"
+            if len(items) > 1:
+                label += f" ({len(items)} វីដេអូ ស្មើគ្នា)"
+            run = st.button(label, type="primary", use_container_width=True)
+
+        # ---------- កំពុងដំណើរការ ----------
+        section("កំពុងដំណើរការ", "Processing")
+        if job:
+            st.fragment(run_every=refresh)(work_area)(job, running)
+        else:
+            st.caption(
+                "នៅទីនេះ ជ្រើសវីដេអូ រួចចុច «ចាប់ផ្តើមដំណើរការ»។"
+            )
+
+    # ---------------- ជួរឈរខាងស្តាំ ----------------
+    with right:
+        s_fs = st.session_state.get("fs", 22)
+        s_ol = st.session_state.get("ol", 2)
+        s_font = st.session_state.get("font", DEFAULT_FONT)
+        if s_font not in FONT_MAP:
+            s_font = DEFAULT_FONT
+        s_col = st.session_state.get("col", "⚪ ស")
+        if s_col not in COLOR_OPTIONS:
+            s_col = "⚪ ស"
+        s_pos = st.session_state.get("pos", "↓ ក្រោម")
+        if s_pos not in POSITIONS:
+            s_pos = "↓ ក្រោម"
+        s_text = (st.session_state.get("sample_text") or "").strip()
+
+        with card("preview"):
+            card_title("🎬", "មើលជាមុន", "Preview")
+            st.markdown(
+                preview_html(
+                    s_text or SAMPLE_TEXT,
+                    FONT_MAP[s_font]["family"],
+                    s_fs,
+                    s_ol,
+                    COLOR_OPTIONS[s_col][1],
+                    POSITIONS[s_pos][2],
+                ),
+                unsafe_allow_html=True,
+            )
+
+        with card("subtitle"):
+            card_title("🅰", "កំណត់អក្សរ", "Subtitle")
+            font_size = st.slider("ទំហំអក្សរ", 16, 36, 22, key="fs")
+            outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2, key="ol")
+            font_name = st.selectbox(
+                "ពុម្ពអក្សរខ្មែរ (Font)",
+                FONT_NAMES,
+                index=0,
+                key="font",
+                format_func=lambda n: f"{n} — {FONT_MAP[n]['desc']}",
+            )
+            font_color = st.radio(
+                "ពណ៌អក្សរ",
+                list(COLOR_OPTIONS.keys()),
+                horizontal=True,
+                key="col",
+            )
+            position_label = st.radio(
+                "ទីតាំងអក្សរ",
+                list(POSITIONS.keys()),
+                horizontal=True,
+                key="pos",
+            )
+
+        with card("dubbing"):
+            card_title("🎙️", "សំឡេង AI", "Dubbing")
+            dub_on = st.checkbox(
+                "បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)",
+                key="dub_on",
+            )
+            voice_label = list(TTS_VOICES.keys())[0]
+            keep_bg = False
+            auto_gender = False
+            if dub_on:
+                voice_label = st.selectbox(
+                    "សំឡេង",
+                    list(TTS_VOICES.keys()),
+                    key="voice",
+                )
+                auto_gender = st.checkbox(
+                    "👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ",
+                    key="auto_gender",
+                    help=(
+                        "វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។ "
+                        "ប្រុសនិយាយ → AI ប្រុស, ស្រីនិយាយ → AI ស្រី "
+                        "ហើយបំបែកឃ្លាត្រង់កន្លែងដែលអ្នកនិយាយប្តូរ។ "
+                        "បើមានអ្នកនិយាយម្នាក់ វាប្រើសំឡេងតែមួយពេញវីដេអូ។"
+                    ),
+                )
+                keep_bg = st.checkbox(
+                    "រក្សាសំឡេងដើមតិចៗ",
+                    key="keep_bg",
+                )
 
 # ---------- ចាប់ផ្តើមការងារ ----------
 
 if run:
     try:
-        fonts_data = load_font_bytes()
+        fonts_data, font_warn = load_fonts_for(font_name)
     except Exception:
         st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
         st.stop()
@@ -2991,7 +3538,10 @@ if run:
         "auto_gender": auto_gender,
         "font_size": font_size,
         "outline_size": outline_size,
-        "color": colors[font_color],
+        "color": COLOR_OPTIONS[font_color][0],
+        "alignment": POSITIONS[position_label][:2],
+        "font_name": font_name,
+        "font_warn": font_warn,
     }
 
     # លុបការងារចាស់
@@ -3010,49 +3560,170 @@ if run:
             item["path"] = p
         job_items.append(item)
 
-    job = Job(job_items, job_folder)
-    st.session_state["job"] = job
+    new_job = Job(job_items, job_folder)
+    st.session_state["job"] = new_job
 
     # ចាប់ផ្តើមវីដេអូទាំងអស់ស្មើគ្នា
-    for item in job.items:
+    for item in new_job.items:
         threading.Thread(
             target=run_worker,
-            args=(job, item, settings, fonts_data),
+            args=(new_job, item, settings, fonts_data),
             daemon=True,
         ).start()
 
     st.rerun()
 
-# ---------- ផ្នែក ③ ④ ----------
+# =====================================================================
+# ផ្ទាំងអក្សរខ្មែរ (ជម្រើស Font)
+# =====================================================================
+with tab_font:
+    section("ពុម្ពអក្សរខ្មែរ", "Fonts")
+    st.caption(
+        "ជ្រើសពុម្ពអក្សរសម្រាប់អក្សររត់ក្នុងវីដេអូ។ "
+        "ពុម្ពអក្សរបែបសិល្បៈ អាចអានពិបាកក្នុងវីដេអូ "
+        "— ណែនាំ Battambang ឬ Noto Sans Khmer។"
+    )
+    st.text_input(
+        "សាកសរសេរអក្សរមើល",
+        value=SAMPLE_TEXT,
+        key="sample_text",
+    )
 
-job = st.session_state.get("job")
+    sample = html_escape(
+        (st.session_state.get("sample_text") or "").strip() or SAMPLE_TEXT
+    )
+    current_font = st.session_state.get("font", DEFAULT_FONT)
 
-if job:
-    running = job.running()
+    cols = st.columns(2, gap="medium")
+    for i, name in enumerate(FONT_NAMES):
+        with cols[i % 2]:
+            with card(f"font_{i}"):
+                selected = name == current_font
+                st.markdown(
+                    f'<div class="fn">{name}</div>'
+                    f'<div class="fd">{FONT_MAP[name]["desc"]}</div>'
+                    f'<div class="fp" style="font-family:\'{name}\','
+                    f'sans-serif">{sample}</div>',
+                    unsafe_allow_html=True,
+                )
+                st.button(
+                    "✅ កំពុងប្រើ" if selected else "ប្រើពុម្ពអក្សរនេះ",
+                    key=f"usefont_{i}",
+                    on_click=set_font,
+                    args=(name,),
+                    type="primary" if selected else "secondary",
+                    disabled=selected,
+                    use_container_width=True,
+                )
 
-    # បង្កើត ZIP តែម្តង ពេលរួចទាំងអស់
-    if not running and not job.zip_done:
-        job.zip = build_zip(job.items)
-        job.zip_done = True
+# =====================================================================
+# ផ្ទាំងសំឡេង AI (សាកស្តាប់)
+# =====================================================================
+with tab_voice:
+    section("សំឡេង AI", "Voice")
+    st.caption(
+        "សាកស្តាប់សំឡេងអានខ្មែរ មុនបើក Dubbing។ "
+        "ជ្រើសសំឡេងពិតប្រាកដនៅក្នុងផ្នែក «សំឡេង AI · Dubbing» ក្នុងទំព័រដើម។"
+    )
+    voice_text = st.text_input(
+        "អត្ថបទសាកស្តាប់",
+        value=SAMPLE_VOICE_TEXT,
+        key="tts_text",
+    )
 
-    refresh = REFRESH_SECONDS if running else None
+    vcols = st.columns(2, gap="medium")
+    for i, (vname, vid) in enumerate(TTS_VOICES.items()):
+        with vcols[i]:
+            with card(f"voice_{i}"):
+                st.markdown(
+                    f'<div class="fn">{"👩" if "ស្រី" in vname else "👨"} '
+                    f"{vname}</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button(
+                    "▶️ សាកស្តាប់",
+                    key=f"play_{i}",
+                    use_container_width=True,
+                ):
+                    text_to_say = (voice_text or "").strip()
+                    if not text_to_say:
+                        st.warning("សូមសរសេរអត្ថបទជាមុនសិន។")
+                    else:
+                        try:
+                            with st.spinner("កំពុងបង្កើតសំឡេង..."):
+                                audio = voice_sample(text_to_say, vid)
+                            st.audio(audio, format="audio/mp3")
+                        except Exception:
+                            st.error(
+                                "បង្កើតសំឡេងមិនបានទេ។ សូមសាកម្តងទៀត។"
+                            )
 
-    st.divider()
-    st.subheader("③ ⚙️ កន្លែងធ្វើការ")
-    st.fragment(run_every=refresh)(work_area)(job, running)
+# =====================================================================
+# ផ្ទាំងច្រើនវីដេអូ (ជួររង់ចាំ)
+# =====================================================================
+with tab_batch:
+    section("ច្រើនវីដេអូ", "Batch")
+    st.caption(
+        f"ធ្វើបានរហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា។ "
+        "នៅទំព័រដើម ជ្រើស «Batch · ច្រើនវីដេអូ» "
+        "ដើម្បីដាក់ឯកសារច្រើន ឬតំណច្រើន (មួយបន្ទាត់ ១ តំណ)។"
+    )
+    if job:
+        st.fragment(run_every=refresh)(queue_area)(job)
+    else:
+        st.info("មិនទាន់មានវីដេអូក្នុងជួររង់ចាំទេ។")
 
-    st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
-    st.divider()
-    st.subheader("④ ⬇️ កន្លែងទាញយក")
-    st.fragment(run_every=refresh)(download_area)(job)
+# =====================================================================
+# ផ្ទាំងវីដេអូខ្ញុំ (ទាញយក)
+# =====================================================================
+with tab_my:
+    section("វីដេអូខ្ញុំ", "My videos")
+    if job:
+        st.fragment(run_every=refresh)(download_area)(job)
+        if not running:
+            if st.button("🗑 លុបលទ្ធផលទាំងអស់", key="clear_job"):
+                shutil.rmtree(job.folder, ignore_errors=True)
+                st.session_state.pop("job", None)
+                st.rerun()
+    else:
+        st.info("មិនទាន់មានវីដេអូទេ។ សូមបង្កើតវីដេអូនៅទំព័រដើមជាមុនសិន។")
 
-    if not running:
-        if st.button("🗑 លុបលទ្ធផលទាំងអស់"):
-            shutil.rmtree(job.folder, ignore_errors=True)
-            st.session_state.pop("job", None)
-            st.rerun()
+# =====================================================================
+# ផ្ទាំងជំនួយ
+# =====================================================================
+with tab_help:
+    section("ជំនួយ", "Help")
+    st.markdown(
+        f"""
+**របៀបប្រើ**
 
-        if not job.scrolled:
-            job.scrolled = True
-            if any(it["state"] == "done" for it in job.items):
-                scroll_to_downloads()
+1. នៅទំព័រដើម ជ្រើស **Upload** (ឯកសារ) **Link** (តំណ) ឬ **Batch** (ច្រើនវីដេអូ)
+2. ជ្រើសគុណភាព ភាសាក្នុងវីដេអូ និងម៉ាស៊ីនបកប្រែ
+3. កំណត់អក្សរ៖ ទំហំ គែម ពុម្ពអក្សរ ពណ៌ និងទីតាំង (មើលជាមុនបានភ្លាមៗ)
+4. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing**
+5. ចុច **ចាប់ផ្តើមដំណើរការ** ហើយរង់ចាំ
+6. ពេលរួច ទាញយកវីដេអូនៅផ្ទាំង **វីដេអូខ្ញុំ**
+
+**ដែនកំណត់**
+
+- វីដេអូម្តងបានអតិបរមា {MAX_VIDEOS}
+- វីដេអូនីមួយៗវែងបំផុត {MAX_DURATION_MIN} នាទី
+- វីដេអូពីតំណធំបំផុត {MAX_DOWNLOAD_MB}MB
+
+**គន្លឹះ**
+
+- បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link
+- បើលទ្ធផលបកប្រែមិនត្រឹមត្រូវ សូមជ្រើសភាសាក្នុងវីដេអូឱ្យជាក់លាក់
+- ពុម្ពអក្សរបែបសិល្បៈ (Moul, Bayon, Fasthand...) សមសម្រាប់ចំណងជើង
+  តែអាចអានពិបាកជាអក្សររត់
+"""
+    )
+
+# ---------- ចុងបញ្ចប់ ----------
+
+if job and not job.running() and not job.notified:
+    job.notified = True
+    if any(it["state"] == "done" for it in job.items):
+        switch_to_my_videos()
+
+fullscreen_button()
