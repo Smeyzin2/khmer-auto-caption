@@ -28,7 +28,7 @@ from google.genai import types
 st.set_page_config(
     page_title="Khmer Auto Caption",
     page_icon="🎬",
-    layout="centered",
+    layout="wide",
 )
 
 # =====================================================================
@@ -84,7 +84,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
   font-family: 'Material Symbols Rounded', 'Material Icons' !important;
 }
 [data-testid="stHeader"] { background: transparent; }
-.block-container { max-width: 760px; padding: 1rem 1rem 4rem; }
+.block-container { max-width: 1240px; padding: 1rem 1.2rem 4rem; }
 
 .stMarkdown, .stMarkdown p, [data-testid="stText"], h1, h2, h3,
 label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p,
@@ -118,6 +118,18 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p,
   padding: 8px 14px; border-radius: 999px; font-weight: 700; font-size: .9rem;
   background: rgba(60,107,255,.12);
 }
+
+/* ---------- Nav ---------- */
+.kvai-nav {
+  display: flex; gap: 4px; padding: 4px; margin-bottom: 8px; overflow-x: auto;
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+}
+.kvai-nav a {
+  flex: 1; text-align: center; padding: 11px 14px; border-radius: 12px; white-space: nowrap;
+  color: var(--soft) !important; text-decoration: none !important; font-weight: 600;
+}
+.kvai-nav a.on { background: linear-gradient(135deg, var(--p1), var(--p2)); color: #fff !important; }
+.kvai-nav a:hover { color: #fff !important; }
 
 /* ---------- Tabs ---------- */
 [data-baseweb="tab-list"] {
@@ -303,7 +315,7 @@ hr { border-color: var(--line) !important; margin: 1.6rem 0 !important; }
 
 /* ---------- Subtitle preview ---------- */
 .kvai-prev {
-  height: 170px; border-radius: 16px; border: 1px solid var(--line);
+  height: 300px; border-radius: 16px; border: 1px solid var(--line);
   background: linear-gradient(160deg, #3A2C6E 0%, #1B2A5E 60%, #0E1636 100%);
   display: flex; padding: 14px 18px; margin: 6px 0 10px;
 }
@@ -329,6 +341,13 @@ def render_header():
             <p>បកប្រែវីដេអូ និងបង្កើតអក្សរ/សំឡេងខ្មែរ ដោយ AI</p>
           </div>
           <div class="kvai-badge">👑 Free AI</div>
+        </div>
+        <div class="kvai-nav">
+          <a class="on" href="#sec-video">🏠 វីដេអូ</a>
+          <a href="#sec-trans">🌐 បកប្រែ</a>
+          <a href="#sec-voice">🎙 សំឡេង</a>
+          <a href="#sec-text">🔤 អក្សរ</a>
+          <a href="#download-area">⬇️ ទាញយក</a>
         </div>
         """,
         unsafe_allow_html=True,
@@ -372,7 +391,7 @@ def render_preview(font_size, color_hex, align, bold, italic, box):
           6: "flex-end", 7: "flex-start", 8: "center", 9: "flex-end"}[align]
     ai = {1: "flex-end", 2: "flex-end", 3: "flex-end", 4: "center", 5: "center",
           6: "center", 7: "flex-start", 8: "flex-start", 9: "flex-start"}[align]
-    px = max(10, int(font_size * 170 / 288))
+    px = max(10, int(font_size * 300 / 288))
     bg = {"none": "transparent", "soft": "rgba(0,0,0,.6)", "black": "#000", "white": "#fff"}[box]
     shadow = ""
     if box == "none":
@@ -2875,27 +2894,35 @@ ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមាន�
 current_job = st.session_state.get("job")
 busy = bool(current_job and current_job.running())
 
-tab_video, tab_trans, tab_voice, tab_text = st.tabs(["🎞 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ"])
+# ค่าเริ่មត้น (ប្រើពេលជម្រើសសំឡេងមិនបានបើក)
+voice_label = list(TTS_VOICES.keys())[0]
+keep_bg = False
+auto_gender = False
+voice_match = False
+emotion = False
+clone_on = False
+clone_file = None
+timbre = False
+timbre_file = None
 
-# ---------------------------------------------------------------- វីដេអូ
-with tab_video:
-    st.subheader("ជ្រើសវីដេអូ")
+col_left, col_right = st.columns([4, 5], gap="large")
+
+# =============================== ជួរឆ្វេង ===============================
+with col_left:
+    st.markdown('<div id="sec-video"></div>', unsafe_allow_html=True)
+    st.subheader("🎞 ជ្រើសវីដេអូ")
     with st.container(border=True):
         mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True, label_visibility="collapsed", key="mode_pick")
         uploaded_files = []
         link_text = ""
         if mode.startswith("📁"):
-            uploaded_files = st.file_uploader("ជ្រើសរើសវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
+            uploaded_files = st.file_uploader("បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"], accept_multiple_files=True, help="បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link") or []
         else:
             link_text = st.text_area("តំណវីដេអូ (.mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ", placeholder="https://...\nhttps://...", height=110)
-        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា · វីដេអូនីមួយៗខ្លីជាង {MAX_DURATION_MIN} នាទី · តំណទាញយកបានអតិបរមា {MAX_DOWNLOAD_MB}MB")
+        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូស្មើគ្នា · ខ្លីជាង {MAX_DURATION_MIN} នាទី · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
 
-    st.subheader("គុណភាពវីដេអូ (Output Quality)")
-    with st.container(border=True):
-        quality_label = st.radio("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1, horizontal=True, label_visibility="collapsed", key="quality_pick")
-
-# ---------------------------------------------------------------- បកប្រែ
-with tab_trans:
+    st.markdown('<div id="sec-trans"></div>', unsafe_allow_html=True)
+    st.subheader("🌐 ភាសា និងបកប្រែ")
     with st.container(border=True):
         engine_options = []
         if GROQ_KEY:
@@ -2908,33 +2935,25 @@ with tab_trans:
         language_label = st.selectbox("ភាសាដើម (សំឡេងក្នុងវីដេអូ)", list(LANGUAGES.keys()), index=0, help="ស្វ័យប្រវត្តិ៖ AI ស្គាល់ភាសាដោយខ្លួនឯង។ បើលទ្ធផលមិនត្រឹមត្រូវ សូមជ្រើសភាសាជាក់លាក់។")
         st.selectbox("បកប្រែទៅ", ["🇰🇭 ខ្មែរ (Khmer)"], disabled=True, key="target_lang")
 
-    st.subheader("ជម្រើសបន្ថែម")
+    st.markdown('<div id="sec-voice"></div>', unsafe_allow_html=True)
+    st.subheader("🗣 សំឡេងអានខ្មែរ")
+    with st.container(border=True):
+        voice_label = st.radio("សំឡេងអាន", list(TTS_VOICES.keys()), horizontal=True, label_visibility="collapsed", key="voice_pick")
+        st.caption("ប្រើពេលបើក «បង្កើតសំឡេងអានខ្មែរ (Dubbing)» ខាងក្រោម។")
+
+    st.subheader("📈 គុណភាពវីដេអូ (Output Quality)")
+    with st.container(border=True):
+        quality_label = st.radio("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1, horizontal=True, label_visibility="collapsed", key="quality_pick")
+        keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
+
+    st.subheader("⚙️ ជម្រើសបន្ថែម")
     with st.container(border=True):
         sub_on = st.toggle("បង្កើតអក្សររត់ខ្មែរ (Subtitle)", value=True)
         dub_on = st.toggle("បង្កើតសំឡេងអានខ្មែរ (Dubbing)")
         srt_on = st.toggle("ទាញយកអក្សរជាឯកសារ (SRT)")
 
-# ---------------------------------------------------------------- សំឡេង
-voice_label = list(TTS_VOICES.keys())[0]
-keep_bg = False
-auto_gender = False
-voice_match = False
-emotion = False
-clone_on = False
-clone_file = None
-timbre = False
-timbre_file = None
-
-with tab_voice:
-    if not dub_on:
-        st.info("សូមបើក «បង្កើតសំឡេងអានខ្មែរ (Dubbing)» នៅផ្ទាំង 🌐 បកប្រែ ជាមុនសិន។")
-    else:
-        st.subheader("សំឡេងអានខ្មែរ")
-        with st.container(border=True):
-            voice_label = st.radio("សំឡេងអាន", list(TTS_VOICES.keys()), horizontal=True, label_visibility="collapsed", key="voice_pick")
-            keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (តិចៗ)")
-        st.subheader("កែលម្អសំឡេង")
-        with st.container(border=True):
+    if dub_on:
+        with st.expander("🎙 ជម្រើសសំឡេងកម្រិតខ្ពស់", expanded=False):
             auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយដោយស្វ័យប្រវត្តិ", help="វិភាគកម្រិតសំឡេងដើមទាំងមូល ដើម្បីដឹងថាអ្នកណានិយាយពេលណា។")
             voice_match = st.checkbox("🧬 ធ្វើឱ្យសំឡេងអានស្រដៀងសំឡេងដើម (ប្រហាក់ប្រហែល)", help="វាស់កម្រិតសំឡេង (ខ្ពស់/ទាប) របស់អ្នកនិយាយដើម រួចកែសំឡេង AI ឱ្យជិតគ្នា។")
             emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ក្នុងសំឡេងអាន", help="AI ចាត់ថ្នាក់អារម្មណ៍នៃឃ្លានីមួយៗតាមអត្ថបទ ហើយវាស់កម្លាំងសំឡេងដើមដើម្បីកំណត់កម្រិតខ្លាំង។")
@@ -2942,24 +2961,40 @@ with tab_voice:
                 clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (ប្រើសំឡេងគំរូរបស់អ្នក)", help="សំឡេងអានទាំងអស់នឹងប្តូរទៅជាសំឡេងដូចសំឡេងគំរូ។ ប្រើតែសំឡេងខ្លួនឯង ឬសំឡេងដែលមានការអនុញ្ញាត។")
                 if clone_on:
                     clone_file = st.file_uploader("សំឡេងគំរូ (និយាយច្បាស់ ១–២ នាទី គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
-            timbre = st.checkbox("🎚 ធ្វើឱ្យពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)", help="មិនមែនក្លូនពិតទេ តែកែ 'ពណ៌' សំឡេង AI ឱ្យជិតសំឡេងគំរូ (ក្រាស់/ស្តើង/ភ្លឺ)។ បើមិន upload សំឡេងគំរូ នឹងប្រើសំឡេងក្នុងវីដេអូ។")
+            timbre = st.checkbox("🎚 ធ្វើឱ្យពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)", help="មិនមែនក្លូនពិតទេ តែកែ 'ពណ៌' សំឡេង AI ឱ្យជិតសំឡេងគំរូ។ បើមិន upload សំឡេងគំរូ នឹងប្រើសំឡេងក្នុងវីដេអូ។")
             if timbre:
-                timbre_file = st.file_uploader("សំឡេងគំរូ (ជម្រើស — និយាយច្បាស់ ១៥ វិនាទីឡើង គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
+                timbre_file = st.file_uploader("សំឡេងគំរូ (ជម្រើស — ១៥ វិនាទីឡើង គ្មានភ្លេង)", type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
 
-# ---------------------------------------------------------------- អក្សរ
-with tab_text:
-    st.subheader("ឆ្នៃអក្សរ (Subtitle Style)")
+# =============================== ជួរស្តាំ ===============================
+with col_right:
+    st.subheader("👁 មើលជាមុន")
+    with st.container(border=True):
+        prev_slot = st.container()
+        if uploaded_files:
+            st.caption("វីដេអូដើម (វីដេអូទី ១)")
+            try:
+                st.video(uploaded_files[0])
+            except Exception:
+                pass
+
+    st.markdown('<div id="sec-text"></div>', unsafe_allow_html=True)
+    st.subheader("🔤 ឆ្នៃអក្សរ (Subtitle Style)")
     with st.container(border=True):
         font_name = st.selectbox("Font អក្សរ", [f[2] for f in FONT_SOURCES], index=0, key="font_pick")
-        font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
-        outline_size = st.slider("កម្រាស់គែមអក្សរ (Outline)", 1, 5, 2)
-        color_pick = st.radio("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), horizontal=True, key="color_pick")
-        style_pick = st.radio("បែបអក្សរ", list(STYLE_OPTIONS.keys()), horizontal=True, key="style_pick")
-        box_pick = st.radio("ផ្ទៃខាងក្រោយអក្សរ", list(BOX_OPTIONS.keys()), horizontal=True, key="box_pick")
-        pos_pick = st.radio("ទីតាំងអក្សរ", list(POS_MAP.keys()), index=7, horizontal=True, key="pos")
+        sc1, sc2 = st.columns([3, 2], gap="medium")
+        with sc1:
+            font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
+            color_pick = st.radio("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), horizontal=True, key="color_pick")
+            outline_size = st.slider("កម្រាស់គែមអក្សរ (Outline)", 1, 5, 2)
+            box_pick = st.radio("ពណ៌ផ្ទៃក្រោយ", list(BOX_OPTIONS.keys()), horizontal=True, key="box_pick")
+        with sc2:
+            pos_pick = st.radio("ទីតាំងអក្សរ", list(POS_MAP.keys()), index=7, horizontal=True, key="pos")
+            style_pick = st.radio("បែបអក្សរ", list(STYLE_OPTIONS.keys()), horizontal=True, key="style_pick")
+
     bold_, italic_ = STYLE_OPTIONS[style_pick]
-    render_preview(font_size, COLOR_OPTIONS[color_pick][1], POS_MAP[pos_pick], bold_, italic_, BOX_OPTIONS[box_pick])
-    st.caption("នេះគ្រាន់តែជាគំរូប្រហាក់ប្រហែល។ ទំហំ និងទីតាំងពិតក្នុងវីដេអូអាចខុសបន្តិច។")
+    with prev_slot:
+        render_preview(font_size, COLOR_OPTIONS[color_pick][1], POS_MAP[pos_pick], bold_, italic_, BOX_OPTIONS[box_pick])
+        st.caption("គំរូប្រហាក់ប្រហែល — ទំហំ និងទីតាំងពិតក្នុងវីដេអូអាចខុសបន្តិច។")
 
 items = []
 too_many = False
