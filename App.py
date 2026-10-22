@@ -3665,6 +3665,23 @@ if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
     st.stop()
 
+# ---------- របៀបជួសជុល៖ មានតែម្ចាស់ដែលចូលប្រើបាន ----------
+if st.secrets.get("MAINTENANCE", False):
+    owner_pw = str(st.secrets.get("OWNER_PASSWORD", ""))
+    if not st.session_state.get("owner_ok"):
+        st.markdown(
+            '<div class="hero"><div class="hero-t">🛠 កំពុងជួសជុល</div>'
+            '<div class="hero-s">កម្មវិធីបិទជាបណ្តោះអាសន្ន។ '
+            "សូមត្រឡប់មកវិញពេលក្រោយ។</div></div>",
+            unsafe_allow_html=True,
+        )
+        with st.expander("🔑 សម្រាប់ម្ចាស់កម្មវិធី"):
+            pw = st.text_input("ពាក្យសម្ងាត់", type="password", key="owner_pw")
+            if pw and owner_pw and pw == owner_pw:
+                st.session_state["owner_ok"] = True
+                st.rerun()
+        st.stop()
+
 st.markdown(
     '<div class="hero">'
     '<div class="hero-t">បកប្រែរឿងមកនិយាយភាសាខ្មែរ</div>'
