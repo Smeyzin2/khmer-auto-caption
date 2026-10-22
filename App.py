@@ -471,7 +471,7 @@ MAX_VIDEOS = 5
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 3
-MAX_DURATION_MIN = 15
+MAX_DURATION_MIN = 300  # 5 hours
 
 # Shared gallery storage (all app users). Configure KAC_PUBLIC_STORAGE_DIR
 # to a persistent disk/mounted volume on the deployment host.
@@ -2913,7 +2913,7 @@ def run_worker(job, item, settings, fonts_data):
             extract_audio(source, audio_path, master_path)
             duration, vid_w, vid_h = probe_media(source)
             if duration > MAX_DURATION_MIN * 60:
-                raise UserError(f"វីដេអូវែងពេក។ សូមប្រើវីដេអូខ្លីជាង {MAX_DURATION_MIN} នាទី។")
+                raise UserError("វីដេអូវែងពេក។ សូមប្រើវីដេអូដែលមានរយៈពេលមិនលើសពី 5 ម៉ោង។")
             speech = detect_speech(master_path, duration)
             item["pct"] = 0.25
             rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
@@ -3223,7 +3223,7 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             link_text = st.text_area("តំណវីដេអូ (មួយបន្ទាត់ ១ តំណ)", placeholder="https://...", height=90)
-        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · ខ្លីជាង {MAX_DURATION_MIN} នាទី · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
+        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រយៈពេលមិនលើសពី 5 ម៉ោង · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
         if uploaded_files:
             try:
                 st.video(uploaded_files[0])
@@ -3411,4 +3411,3 @@ with tab_gallery:
                     dl_button("⬇️ ទាញយកវីដេអូ", public_data, f"{safe_filename(public_item['name'])}_khmer.mp4", "video/mp4", key=f"public_dl_{public_item['id']}", use_container_width=True)
                 except Exception:
                     st.warning("ឯកសារវីដេអូនេះមិនអាចអានបានទេ។")
- 
