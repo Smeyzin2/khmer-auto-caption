@@ -465,12 +465,12 @@ DEBUG = True
 
 REQUEST_TIMEOUT_MS = 120000
 MAX_CAPTION_CHARS = 26
-MAX_DOWNLOAD_MB = 300
+MAX_DOWNLOAD_MB = 1024
 MAX_VIDEOS = 5
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 3
-MAX_DURATION_MIN = 15
+MAX_DURATION_MIN = 300
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
@@ -2689,7 +2689,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
-        speed = min(1.55, max(0.95 if tight else 1.05, d / slot))
+        speed = min(1.55, max(1.50, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -3157,7 +3157,7 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             link_text = st.text_area("តំណវីដេអូ (មួយបន្ទាត់ ១ តំណ)", placeholder="https://...", height=90)
-        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · ខ្លីជាង {MAX_DURATION_MIN} នាទី · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
+        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
         if uploaded_files:
             try:
                 st.video(uploaded_files[0])
