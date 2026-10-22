@@ -37,12 +37,12 @@ MAX_RENDER_AT_ONCE = 3
 MAX_DURATION_MIN = 15
 CHARS_PER_SEC = 11      # Dubbing
 CAPTION_CPS = 16        # អក្សរធម្មតា
-MAX_DUB_SPEED = 1.4
+MAX_DUB_SPEED = 1.5
 MERGE_GAP = 0.7
 MERGE_MAX_SEC = 9.0
 MERGE_MAX_CHARS = 140
 END_PUNCT = tuple("。！？.!?…")
-TTS_WORKERS = 6
+TTS_WORKERS = 3
 LLM_WORKERS = 3
 TRANSLATE_WORKERS = 2
 REQUEST_TIMEOUT_MS = 120000
@@ -496,6 +496,43 @@ def translate_texts(texts):
     return outs, errors
 
 
+_edge_tok = {"t": None, "ts": 0.0}
+
+
+def edge_translate(texts):
+    """Microsoft Edge Translator (ឥតគិតថ្លៃ មិនត្រូវការ Key) → ខ្មែរ។"""
+    now = time.time()
+    if not _edge_tok["t"] or now - _edge_tok["ts"] > 480:
+        req = urllib.request.Request(
+            "https://edge.microsoft.com/translate/auth",
+            headers={"User-Agent": "Mozilla/5.0"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as r:
+            _edge_tok["t"] = r.read().decode("utf-8").strip()
+            _edge_tok["ts"] = now
+    out = []
+    for k in range(0, len(texts), 50):
+        part = texts[k:k + 50]
+        body = json.dumps(
+            [{"Text": str(t).replace("\n", " ")} for t in part]
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api-edge.cognitive.microsofttranslator.com/translate"
+            "?api-version=3.0&to=km",
+            data=body,
+            method="POST",
+            headers={
+                "Authorization": "Bearer " + _edge_tok["t"],
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = json.loads(r.read().decode("utf-8"))
+        out += [clean_translation(d["translations"][0]["text"]) for d in data]
+    return out
+
+
 KHMER_STYLE = (
     "Write casual spoken Khmer (Khmer script only) that sounds good when "
     "read aloud by a text-to-speech voice. Start from the meaning, then say "
@@ -761,6 +798,23 @@ def transcribe(groq_key, gemini_key, audio_path, duration, language, dub, rep):
             for i, g in zip(missing, g_outs):
                 if g:
                     outs[i] = g
+            left = [i for i, o in enumerate(outs) if not o]
+            if left:
+                try:
+                    for i, g in zip(left, edge_translate([originals[i] for i in left])):
+                        if g:
+                            outs[i] = g
+                except Exception as e:
+                    errs.append(f"edge: {e}"[:200])
+            # ឃ្លាដែលនៅខ្វះ → សាកបកម្តងមួយៗ (កុំឱ្យរំលង)
+            for i in [i for i, o in enumerate(outs) if not o]:
+                try:
+                    outs[i] = clean_translation(
+                        google_translate_request(originals[i])
+                    )
+                except Exception:
+                    pass
+                time.sleep(0.5)
 
         segs = []
         for (s, e, _), out in zip(keep, outs):
@@ -770,7 +824,11 @@ def transcribe(groq_key, gemini_key, audio_path, duration, language, dub, rep):
                 failed += 1
         if not segs or failed > len(keep) * 0.5:
             reason = " | ".join(errs[:3]) or "មិនស្គាល់មូលហេតុ"
-            raise RuntimeError(f"ការបកប្រែបរាជ័យ។ {reason}")
+            raise UserError(
+                "ម៉ាស៊ីនបកប្រែទាំងអស់មិនអាចប្រើបានពេលនេះ។ "
+                "សូមសាកម្តងទៀតបន្តិចក្រោយ។ "
+                f"(មូលហេតុ: {reason[:150]})"
+            )
 
     if not segs:
         raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
@@ -884,24 +942,120 @@ def tts_segment(text, voice, path):
     asyncio.run(_go())
 
 
-def make_dub(folder, segments, voice, duration, keep_bg):
-    """បង្កើត dub.wav ឱ្យត្រូវតាមម៉ោងនីមួយៗនៃវីដេអូដើម។"""
+SHORTEN_SYSTEM = (
+    "You edit Khmer dubbing lines so they can be spoken in time. Each input "
+    'line has a "text" and a "max_chars". Rewrite every line as natural '
+    "spoken Khmer, keeping the core meaning and tone, with at most max_chars "
+    "characters. Drop filler, merge ideas and rephrase; never cut the "
+    "sentence in the middle. Khmer script only. "
+    'Return JSON {"lines": [...]} with exactly the same number of items, '
+    "in the same order."
+)
+
+
+def shorten_batch(items, rate, gemini_key, groq_key):
+    """បង្រួមឃ្លាដែលវែងជាងពេលដែលមាន។ items = [(អត្ថបទ, វិនាទី)]។"""
+    out = [t for t, _ in items]
+    limits = [max(6, int(sec * rate)) for _, sec in items]
+    idx_all = [i for i in range(len(items)) if len(out[i]) > limits[i]]
+    batches = [idx_all[k:k + 25] for k in range(0, len(idx_all), 25)]
+    errors = []
+
+    def run(idx):
+        payload = json.dumps(
+            {"lines": [{"text": out[i], "max_chars": limits[i]} for i in idx]},
+            ensure_ascii=False,
+        )
+        return idx, ask_ai_list(
+            SHORTEN_SYSTEM, payload, len(idx), gemini_key, groq_key, errors
+        )
+
+    if batches:
+        with ThreadPoolExecutor(max_workers=LLM_WORKERS) as ex:
+            for idx, res in ex.map(run, batches):
+                if res:
+                    for i, r in zip(idx, res):
+                        if r and has_khmer(r) and len(r) < len(out[i]):
+                            out[i] = r
+    return out
+
+
+def tts_retry(text, voice, path):
+    for attempt in range(3):
+        try:
+            tts_segment(text, voice, path)
+            return True
+        except Exception:
+            time.sleep(1 + attempt)
+    return False
+
+
+def make_dub(folder, segments, voice, duration, keep_bg, gemini_key, groq_key):
+    """
+    បង្កើត dub.wav ឱ្យត្រូវម៉ោងវីដេអូដើម។
+    ត្រឡប់ (ok, segments ថ្មី) ព្រោះឃ្លាអាចត្រូវបានបង្រួម។
+    """
     n_seg = len(segments)
     if n_seg == 0:
-        return False
+        return False, segments
 
+    texts = [t for _, _, t in segments]
     paths = [os.path.join(folder, f"tts_{i}.mp3") for i in range(n_seg)]
     durs = [None] * n_seg
 
+    # ពេលដែលមានសម្រាប់ឃ្លានីមួយៗ (ដល់ឃ្លាបន្ទាប់ ដើម្បីកុំឱ្យនិយាយលឿនពេក)
+    nominal = []
+    for i, (s, e, _) in enumerate(segments):
+        next_s = segments[i + 1][0] if i + 1 < n_seg else duration
+        nominal.append(max(0.5, min(next_s - 0.05, e + 1.0) - s))
+
     def synth(i):
-        try:
-            tts_segment(segments[i][2], voice, paths[i])
-            durs[i] = probe_video(paths[i])[0]
-        except Exception:
-            durs[i] = None
+        durs[i] = None
+        if tts_retry(texts[i], voice, paths[i]):
+            try:
+                durs[i] = probe_video(paths[i])[0]
+            except Exception:
+                durs[i] = None
 
     with ThreadPoolExecutor(max_workers=TTS_WORKERS) as ex:
         list(ex.map(synth, range(n_seg)))
+
+    # ឃ្លាណាបរាជ័យ សាកម្តងទៀតម្តងមួយ (កុំឱ្យរំលង)
+    for i in range(n_seg):
+        if durs[i] is None:
+            synth(i)
+
+    # បង្រួមឃ្លាដែលអានវែងជាងពេលដែលមាន (២ ជុំ)
+    if gemini_key or groq_key:
+        for _ in range(2):
+            rates = [
+                len(texts[i]) / durs[i]
+                for i in range(n_seg)
+                if durs[i] and durs[i] > 0.4 and len(texts[i]) >= 6
+            ]
+            rate = sorted(rates)[len(rates) // 2] if rates else CHARS_PER_SEC
+            rate = max(6.0, min(16.0, rate))
+            long_idx = [
+                i for i in range(n_seg)
+                if durs[i] and durs[i] > nominal[i] * 1.1
+            ]
+            if not long_idx:
+                break
+            new = shorten_batch(
+                [(texts[i], nominal[i]) for i in long_idx],
+                rate * 0.95, gemini_key, groq_key,
+            )
+            changed = []
+            for i, t2 in zip(long_idx, new):
+                if t2 != texts[i]:
+                    texts[i] = t2
+                    changed.append(i)
+            if not changed:
+                break
+            with ThreadPoolExecutor(max_workers=TTS_WORKERS) as ex:
+                list(ex.map(synth, changed))
+
+    new_segments = [(s, e, texts[i]) for i, (s, e, _) in enumerate(segments)]
 
     inputs, filters = [], []
     n = 0
@@ -913,17 +1067,17 @@ def make_dub(folder, segments, voice, duration, keep_bg):
     first_voice = n
     voices = 0
     cursor = 0.0
-    for i, (s, e, _) in enumerate(segments):
+    for i, (s, e, _) in enumerate(new_segments):
         d = durs[i]
         if not d:
             continue
-        next_s = segments[i + 1][0] if i + 1 < n_seg else duration
+        next_s = new_segments[i + 1][0] if i + 1 < n_seg else duration
         start = max(s, cursor)
         if start >= duration - 0.3:
-            break
-        slot = max(0.5, min(next_s - 0.05, e + 0.4) - start)
+            continue
+        slot = max(0.5, min(next_s - 0.05, e + 1.0) - start)
         speed = min(MAX_DUB_SPEED, max(1.0, d / slot))
-        cursor = start + d / speed + 0.08
+        cursor = start + d / speed + 0.05
         inputs += ["-i", f"tts_{i}.mp3"]
         filters.append(
             f"[{n}:a]atempo={speed:.3f},adelay={int(start * 1000)}:all=1[a{n}]"
@@ -932,7 +1086,7 @@ def make_dub(folder, segments, voice, duration, keep_bg):
         voices += 1
 
     if voices == 0:
-        return False
+        return False, segments
 
     labels = ("[bg]" if keep_bg else "") + "".join(
         f"[a{k}]" for k in range(first_voice, n)
@@ -957,10 +1111,11 @@ def make_dub(folder, segments, voice, duration, keep_bg):
                           "-t", f"{duration:.2f}", "dub.wav"],
                 cwd=folder,
             )
-            return os.path.exists(os.path.join(folder, "dub.wav"))
+            ok = os.path.exists(os.path.join(folder, "dub.wav"))
+            return ok, new_segments
         except RuntimeError:
             continue
-    return False
+    return False, segments
 
 
 # ---------------------------------------------------------------------
@@ -1112,10 +1267,14 @@ def run_worker(job, item, settings, font):
                 item["pct"] = 0.6
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
-                    dub_ok = make_dub(
+                    dub_ok, new_segs = make_dub(
                         folder, segments, settings["voice"], duration,
-                        settings["keep_bg"],
+                        settings["keep_bg"], settings["gemini_key"],
+                        settings["groq_key"],
                     )
+                    if dub_ok:
+                        segments = new_segs
+                        captions = build_captions(segments)
                 except Exception:
                     dub_ok = False
                 if not dub_ok:
