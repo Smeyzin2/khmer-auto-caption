@@ -351,7 +351,8 @@ def render_hero(max_videos=5):
 
 apply_theme()
 
-DEBUG = bool(st.secrets.get("DEBUG", False))
+# បង្ហាញព័ត៌មានលម្អិត (DEBUG) ជានិច្ច ដល់អ្នកប្រើទាំងអស់
+DEBUG = True
 
 REQUEST_TIMEOUT_MS = 120000
 MAX_CAPTION_CHARS = 26
