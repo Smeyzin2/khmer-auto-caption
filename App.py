@@ -68,11 +68,6 @@ GROQ_CHAT_PREFERRED = [
 ]
 _groq_chat_cache = {"models": None, "good": None}
 
-# Lip Sync (Replicate API) ធ្វើឱ្យមាត់ត្រូវនឹងសំឡេងអានខ្មែរ
-REPLICATE_API = "https://api.replicate.com/v1"
-LIPSYNC_MODEL = "sync/lipsync-2"
-MAX_LIPSYNC_SEC = 120  # វីដេអូវែងជាងនេះ រំលង Lip Sync (ចំណាយខ្ពស់)
-LIPSYNC_WAIT_SEC = 900  # រង់ចាំលទ្ធផលអតិបរមា
 
 # លេខកូដភាសាសម្រាប់ Whisper
 WHISPER_LANG = {
@@ -2589,138 +2584,6 @@ def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
     return ok and os.path.exists(os.path.join(folder, "dub.wav"))
 
 
-# ---------- Lip Sync (Replicate) ----------
-
-def replicate_json(key, method, url, body=None, timeout=60):
-    """ហៅ Replicate API ហើយទទួលចម្លើយជា JSON។"""
-    data = json.dumps(body).encode("utf-8") if body is not None else None
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method=method,
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Replicate {http_detail(e)}")
-
-
-def replicate_upload(key, path, mime):
-    """ផ្ទុកឯកសារឡើង Replicate ហើយទទួលតំណសម្រាប់ឱ្យម៉ូដែលអាន។"""
-    boundary = "----kac" + uuid.uuid4().hex
-    with open(path, "rb") as f:
-        content = f.read()
-
-    body = b"".join([
-        (
-            f"--{boundary}\r\n"
-            'Content-Disposition: form-data; name="content"; '
-            f'filename="{os.path.basename(path)}"\r\n'
-            f"Content-Type: {mime}\r\n\r\n"
-        ).encode("utf-8"),
-        content,
-        f"\r\n--{boundary}--\r\n".encode("utf-8"),
-    ])
-    request = urllib.request.Request(
-        REPLICATE_API + "/files",
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "User-Agent": "Mozilla/5.0",
-        },
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=180) as response:
-            obj = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as e:
-        raise RuntimeError(f"Replicate upload {http_detail(e)}")
-
-    url = (obj.get("urls") or {}).get("get")
-    if not url:
-        raise RuntimeError("Replicate មិនបានផ្តល់តំណឯកសារ។")
-    return url
-
-
-def make_lipsync(folder, key, status):
-    """
-    ធ្វើឱ្យមាត់ក្នុងវីដេអូ input.mp4 ត្រូវនឹងសំឡេង dub.wav (Lip Sync)
-    ហើយជំនួស input.mp4 ដោយលទ្ធផល។ បើបរាជ័យ ទុកវីដេអូដើម។
-    មុខងារនេះប្រើម៉ូដែលក្នុង Cloud (ត្រូវការ REPLICATE_API_TOKEN)។
-    """
-    src = os.path.join(folder, "input.mp4")
-    small = os.path.join(folder, "lip_in.mp4")
-    audio = os.path.join(folder, "lip_audio.mp3")
-    result = os.path.join(folder, "lip_out.mp4")
-
-    # បង្រួមវីដេអូ (គ្មានសំឡេង) និងសំឡេង ដើម្បីផ្ទុកឡើងលឿន ហើយចំណាយតិច
-    run_ffmpeg(
-        [
-            "-i", src, "-an",
-            "-vf", build_video_filter(720).replace(
-                ",ass=filename=captions.ass:fontsdir=.", ""
-            ),
-            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
-            "-movflags", "+faststart",
-            "lip_in.mp4",
-            "-i", "dub.wav",
-            "-map", "1:a", "-c:a", "libmp3lame", "-b:a", "128k",
-            "lip_audio.mp3",
-        ],
-        cwd=folder,
-    )
-
-    status.write("👄 កំពុងផ្ទុកវីដេអូទៅ Lip Sync...")
-    video_url = replicate_upload(key, small, "video/mp4")
-    audio_url = replicate_upload(key, audio, "audio/mpeg")
-
-    pred = replicate_json(
-        key,
-        "POST",
-        f"{REPLICATE_API}/models/{LIPSYNC_MODEL}/predictions",
-        {"input": {"video": video_url, "audio": audio_url}},
-    )
-    poll = (pred.get("urls") or {}).get("get")
-    if not poll:
-        raise RuntimeError("Replicate មិនបានចាប់ផ្តើមការងារ។")
-
-    status.write("👄 កំពុងធ្វើ Lip Sync... (អាចយូរបន្តិច)")
-    deadline = time.time() + LIPSYNC_WAIT_SEC
-    while pred.get("status") not in ("succeeded", "failed", "canceled"):
-        if time.time() > deadline:
-            raise RuntimeError("Lip Sync ចំណាយពេលយូរពេក។")
-        time.sleep(4)
-        pred = replicate_json(key, "GET", poll)
-
-    if pred.get("status") != "succeeded":
-        raise RuntimeError(f"Lip Sync បរាជ័យ: {pred.get('error')}")
-
-    output = pred.get("output")
-    if isinstance(output, list):
-        output = output[0] if output else None
-    if not output:
-        raise RuntimeError("Lip Sync មិនមានលទ្ធផល។")
-
-    request = urllib.request.Request(
-        str(output), headers={"User-Agent": "Mozilla/5.0"}
-    )
-    with urllib.request.urlopen(request, timeout=180) as response, open(
-        result, "wb"
-    ) as f:
-        shutil.copyfileobj(response, f)
-
-    if os.path.getsize(result) < 1000:
-        raise RuntimeError("ទាញយកលទ្ធផល Lip Sync មិនបាន។")
-    os.replace(result, src)
-
-
 # ---------- Render វីដេអូ ----------
 
 def build_video_filter(max_side):
@@ -3021,31 +2884,6 @@ def run_worker(job, item, settings, fonts_data):
                         "បង្កើតសំឡេងអានមិនបានទេ។ វីដេអូមានតែអក្សរ។"
                     )
 
-            # Lip Sync៖ ធ្វើមុនដាក់អក្សរ ដើម្បីកុំឱ្យអក្សររំខានការវិភាគមុខ
-            lipsync_ok = False
-            if settings["lipsync_on"] and dub_ok:
-                if duration > MAX_LIPSYNC_SEC:
-                    item["warn"].append(
-                        f"Lip Sync ធ្វើបានតែវីដេអូខ្លីជាង {MAX_LIPSYNC_SEC} "
-                        "វិនាទី។ វីដេអូនេះរំលង Lip Sync។"
-                    )
-                else:
-                    item["pct"] = 0.68
-                    rep.write("👄 កំពុងរៀបចំ Lip Sync...")
-                    try:
-                        make_lipsync(folder, settings["replicate_key"], rep)
-                        lipsync_ok = True
-                    except Exception as e:
-                        item["raw_error"] = str(e)
-                        item["warn"].append(
-                            "Lip Sync មិនបានសម្រេច។ "
-                            "វីដេអូប្រើសំឡេងអានដោយគ្មាន Lip Sync។"
-                        )
-            elif settings["lipsync_on"]:
-                item["warn"].append(
-                    "Lip Sync ត្រូវការសំឡេងអាន (Dubbing) ជោគជ័យជាមុន។"
-                )
-
             item["pct"] = 0.75
             rep.write("៤/៤ កំពុងរង់ចាំដាក់អក្សរចូលវីដេអូ...")
             with job.render_slots:
@@ -3087,7 +2925,6 @@ def run_worker(job, item, settings, fonts_data):
                 "Font ដែលជ្រើស": settings.get("font_name", ""),
                 "Font ដែលប្រើ": used_font,
                 "Dubbing": dub_ok,
-                "Lip Sync": lipsync_ok,
                 "អ្នកនិយាយ": (
                     item["voice_lines"][0] if item["voice_lines"] else ""
                 ),
@@ -3678,7 +3515,6 @@ inject_css()
 
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
-REPLICATE_KEY = st.secrets.get("REPLICATE_API_TOKEN", "")
 
 if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
@@ -3953,7 +3789,6 @@ with tab_home:
             voice_label = list(TTS_VOICES.keys())[0]
             keep_bg = False
             auto_gender = False
-            lipsync_on = False
             if dub_on:
                 voice_label = st.selectbox(
                     "សំឡេង",
@@ -3974,26 +3809,6 @@ with tab_home:
                     "រក្សាសំឡេងដើមតិចៗ",
                     key="keep_bg",
                 )
-                lipsync_on = st.checkbox(
-                    "👄 Lip Sync (ធ្វើឱ្យមាត់ត្រូវនឹងសំឡេងអាន)",
-                    key="lipsync_on",
-                    disabled=not REPLICATE_KEY,
-                    help=(
-                        "ប្រើម៉ូដែល AI ក្នុង Cloud ដើម្បីកែចលនាមាត់ឱ្យត្រូវនឹង "
-                        f"សំឡេងខ្មែរ។ ធ្វើបានតែវីដេអូខ្លីជាង {MAX_LIPSYNC_SEC} "
-                        "វិនាទី ហើយត្រូវមានមុខមនុស្សច្បាស់ក្នុងវីដេអូ។ "
-                        "វាយឺតជាង និងមានតម្លៃ។"
-                    ),
-                )
-                if not REPLICATE_KEY:
-                    st.caption(
-                        "Lip Sync មិនទាន់អាចប្រើបាន (ម្ចាស់កម្មវិធីត្រូវដាក់ "
-                        "REPLICATE_API_TOKEN)។"
-                    )
-                st.caption(
-                    "សំឡេងអាននឹងត្រូវតាមម៉ោងវីដេអូដើម៖ ឃ្លាណាវែងពេក "
-                    "AI នឹងនិយាយឱ្យខ្លីជាភាសាមនុស្សពិត ហើយបង្កើនល្បឿនបន្តិចបើចាំបាច់។"
-                )
 
 # ---------- ចាប់ផ្តើមការងារ ----------
 
@@ -4010,14 +3825,12 @@ if run:
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
         "gemini_key": GEMINI_KEY,
         "groq_key": GROQ_KEY,
-        "replicate_key": REPLICATE_KEY,
         "language": LANGUAGES[language_label],
         "quality": QUALITY[quality_label],
         "dub_on": dub_on,
         "voice": TTS_VOICES[voice_label],
         "keep_bg": keep_bg,
         "auto_gender": auto_gender,
-        "lipsync_on": bool(lipsync_on and REPLICATE_KEY),
         "font_size": font_size,
         "outline_size": outline_size,
         "color": COLOR_OPTIONS[font_color][0],
@@ -4183,7 +3996,7 @@ with tab_help:
 2. នៅទំព័រដើម ជ្រើស **Upload** (ឯកសារ) **Link** (តំណ) ឬ **Batch** (ច្រើនវីដេអូ)
 3. ជ្រើសគុណភាព ភាសាក្នុងវីដេអូ និងម៉ាស៊ីនបកប្រែ
 4. កំណត់អក្សរ៖ ទំហំ គែម ពុម្ពអក្សរ ពណ៌ និងទីតាំង (មើលជាមុនបានភ្លាមៗ)
-5. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing** (បន្ថែម **Lip Sync** បើចង់ឱ្យមាត់ត្រូវនឹងសំឡេង)
+5. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing**
 6. ចុច **ចាប់ផ្តើមដំណើរការ** ហើយរង់ចាំ
 7. ពេលរួច **មើលវីដេអូជាមុន** នៅក្រោម «កំពុងដំណើរការ» ភ្លាម
    រួចចុចប៊ូតុង **ទាញយកវីដេអូ** (ឬនៅផ្ទាំង **វីដេអូខ្ញុំ** ក៏បាន)
@@ -4193,7 +4006,6 @@ with tab_help:
 - វីដេអូម្តងបានអតិបរមា {MAX_VIDEOS}
 - វីដេអូនីមួយៗវែងបំផុត {MAX_DURATION_MIN} នាទី
 - វីដេអូពីតំណធំបំផុត {MAX_DOWNLOAD_MB}MB
-- Lip Sync ធ្វើបានតែវីដេអូខ្លីជាង {MAX_LIPSYNC_SEC} វិនាទី
 
 **គន្លឹះ**
 
