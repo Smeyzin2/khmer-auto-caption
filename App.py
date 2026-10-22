@@ -1,4 +1,4 @@
-
+# -*- coding: utf-8 -*-
 import os
 import io
 import re
@@ -1348,15 +1348,16 @@ def groq_chat_models(api_key):
 
 
 TRANS_SYSTEM = (
-    "You are a native Cambodian Khmer dialogue and dubbing adapter. Produce Khmer that sounds like a real person speaking naturally, "
-    "not written/bookish Khmer and never awkward word-for-word translation. The numbered lines are consecutive lines from ONE video; "
-    "read them together to understand who is speaking, the scene, pronouns, and context. "
-    "Rules: (1) Preserve the exact meaning, facts, names, intent, and emotional tone; do not invent, guess, or omit information. "
-    "(2) Correct obvious speech-recognition errors only when context makes the correction clear; if uncertain, keep the closest meaning. "
-    "(3) Use concise, conversational Khmer phrasing that is easy to say aloud and easy to understand. Avoid unnatural phrases, "
-    "repetition, filler, and English word order. (4) Keep names in Khmer or a familiar transliteration. "
-    "(5) If a line has [max N chars], aim within that length using a shorter natural sentence, without changing the meaning; "
-    "never output the tag. Output Khmer script only. Return JSON {\"translations\": [...]} with exactly the same count and order."
+    "You are a professional Cambodian Khmer dubbing translator. Translate dialogue into everyday spoken Khmer, "
+    "as a native Cambodian would naturally say it aloud. Avoid literal translation, stiff written Khmer, "
+    "foreign word order, confusing pronouns, unnatural phrases, and word salad. The numbered lines are "
+    "consecutive lines from ONE video: read them together and use scene context and speaker relationships. "
+    "Preserve the actual meaning, names, facts, intent, and emotional tone; never add details or omit meaning. "
+    "Use short, clear, idiomatic Khmer sentences that a voice actor can speak smoothly. If the source is an "
+    "idiom or joke, convey its intended meaning naturally in Khmer rather than translating each word. "
+    "If source text appears garbled or uncertain, do not invent a confident meaning; retain the closest clear meaning. "
+    "When a [max N chars] limit is given, make the Khmer concise enough for the timing without changing the core meaning; "
+    "never output the tag. Output Khmer script only. Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
 
 
@@ -1406,8 +1407,9 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
 
 EN_SYSTEM = (
     "You are a careful transcription-correction and meaning bridge for dubbing. The numbered lines are consecutive lines from ONE video; "
-    "use surrounding context to resolve obvious Whisper errors, speaker references, slang, and idioms. Render each line as clear, "
-    "faithful English that preserves every meaningful detail and tone. Do not add explanations, embellish, or guess at unclear words; "
+    "use surrounding context to resolve only obvious Whisper errors, speaker references, slang, and idioms. Render each line as clear, "
+    "faithful English that preserves every meaningful detail and tone. Do not translate beyond what the audio supports, add explanations, "
+    "embellish, or guess at unclear words; mark genuinely unclear audio as [unclear]. "
     "mark genuinely unclear audio as [unclear] rather than making up dialogue. Keep exactly one output for each input line, same order. "
     "Return JSON {\"translations\": [...]} only."
 )
