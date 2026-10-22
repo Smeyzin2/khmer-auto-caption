@@ -68,6 +68,12 @@ GROQ_CHAT_PREFERRED = [
 ]
 _groq_chat_cache = {"models": None, "good": None}
 
+# Lip Sync (Replicate API) ធ្វើឱ្យមាត់ត្រូវនឹងសំឡេងអានខ្មែរ
+REPLICATE_API = "https://api.replicate.com/v1"
+LIPSYNC_MODEL = "sync/lipsync-2"
+MAX_LIPSYNC_SEC = 120  # វីដេអូវែងជាងនេះ រំលង Lip Sync (ចំណាយខ្ពស់)
+LIPSYNC_WAIT_SEC = 900  # រង់ចាំលទ្ធផលអតិបរមា
+
 # លេខកូដភាសាសម្រាប់ Whisper
 WHISPER_LANG = {
     "Khmer": "km",
@@ -196,20 +202,6 @@ ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមាន�
 
 class UserError(RuntimeError):
     """សារកំហុសដែលសមស្របនឹងបង្ហាញដល់អ្នកប្រើផ្ទាល់។"""
-
-
-class KhmerNeedsGemini(RuntimeError):
-    """Whisper ស្តាប់ភាសាខ្មែរមិនច្បាស់ → ប្តូរទៅ Gemini។"""
-
-
-def is_quota_error(error):
-    low = str(error).lower()
-    return (
-        "429" in low
-        or "quota" in low
-        or "exhausted" in low
-        or "rate limit" in low
-    )
 
 
 def friendly_message(error):
@@ -1411,10 +1403,8 @@ def groq_chat_models(api_key):
     return ordered
 
 
-def groq_translate_chunk(api_key, texts):
-    """បកប្រែជាក្រុមដោយ Groq LLM (ម៉ាស៊ីនបម្រុង ពេល Google ត្រូវបានរារាំង)។"""
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-
+def groq_json_list(api_key, system, user_text, count, temperature=0.5):
+    """ឱ្យ Groq LLM ឆ្លើយជាបញ្ជី JSON ដែលមានចំនួនបន្ទាត់ត្រូវគ្នា។"""
     models = groq_chat_models(api_key)
     good = _groq_chat_cache["good"]
     if good in models:
@@ -1424,20 +1414,11 @@ def groq_translate_chunk(api_key, texts):
     for model in models[:6]:
         body = json.dumps({
             "model": model,
-            "temperature": 0.2,
+            "temperature": temperature,
             "response_format": {"type": "json_object"},
             "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "You translate subtitles into natural, fluent "
-                        "Khmer (Khmer script only). Translate meaning, "
-                        "not word for word. Return JSON: "
-                        "{\"translations\": [...]} with exactly the "
-                        "same number of items, in the same order."
-                    ),
-                },
-                {"role": "user", "content": numbered},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_text},
             ],
         }).encode("utf-8")
 
@@ -1459,10 +1440,14 @@ def groq_translate_chunk(api_key, texts):
                 content = re.sub(
                     r"<think>.*?</think>", "", content, flags=re.S
                 )
-                items = json.loads(content).get("translations") or []
-                if len(items) == len(texts):
+                obj = json.loads(content)
+                items = obj.get("lines") or obj.get("translations") or []
+                if len(items) == count:
                     _groq_chat_cache["good"] = model
-                    return [clean_translation(x) for x in items]
+                    return [
+                        clean_translation(x) if isinstance(x, str) else None
+                        for x in items
+                    ]
                 last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
                 break
             except urllib.error.HTTPError as e:
@@ -1476,6 +1461,22 @@ def groq_translate_chunk(api_key, texts):
                 break
 
     raise RuntimeError(last[:300])
+
+
+TRANSLATE_SYSTEM = (
+    "You translate subtitles into natural, fluent Khmer (Khmer script "
+    "only). Translate meaning, not word for word. Return JSON: "
+    "{\"translations\": [...]} with exactly the same number of items, "
+    "in the same order."
+)
+
+
+def groq_translate_chunk(api_key, texts):
+    """បកប្រែជាក្រុមដោយ Groq LLM (ម៉ាស៊ីនបម្រុង ពេល Google ត្រូវបានរារាំង)។"""
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+    return groq_json_list(
+        api_key, TRANSLATE_SYSTEM, numbered, len(texts), 0.2
+    )
 
 
 def translate_texts(texts, groq_key=None):
@@ -1619,66 +1620,6 @@ def gemini_json_list(api_key, system, user_text, count):
                     time.sleep(4)
                     continue
                 break
-    raise RuntimeError(last[:300])
-
-
-def groq_json_list(api_key, system, user_text, count, temperature=0.5):
-    """ឱ្យ Groq LLM ឆ្លើយជាបញ្ជី JSON ដែលមានចំនួនបន្ទាត់ត្រូវគ្នា។"""
-    models = groq_chat_models(api_key)
-    good = _groq_chat_cache["good"]
-    if good in models:
-        models = [good] + [m for m in models if m != good]
-
-    last = "មិនមានម៉ូដែល"
-    for model in models[:6]:
-        body = json.dumps({
-            "model": model,
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user_text},
-            ],
-        }).encode("utf-8")
-
-        for attempt in range(2):
-            request = urllib.request.Request(
-                GROQ_CHAT_URL,
-                data=body,
-                method="POST",
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0",
-                },
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=60) as r:
-                    data = json.loads(r.read().decode("utf-8"))
-                content = data["choices"][0]["message"]["content"]
-                content = re.sub(
-                    r"<think>.*?</think>", "", content, flags=re.S
-                )
-                obj = json.loads(content)
-                items = obj.get("lines") or obj.get("translations") or []
-                if len(items) == count:
-                    _groq_chat_cache["good"] = model
-                    return [
-                        clean_translation(x) if isinstance(x, str) else None
-                        for x in items
-                    ]
-                last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
-                break
-            except urllib.error.HTTPError as e:
-                last = f"{model}: {http_detail(e)}"
-                if e.code == 429 and attempt == 0:
-                    time.sleep(6)
-                    continue
-                break
-            except Exception as e:
-                last = f"{model}: {e}"
-                break
-
     raise RuntimeError(last[:300])
 
 
@@ -2033,7 +1974,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
 
 
 def transcribe_free(groq_key, audio_path, duration, source_language,
-                    status, speech=None, khmer_ok=True, gemini_key=None):
+                    status, speech=None, gemini_key=None):
     """
     ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Groq LLM)។
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
@@ -2551,7 +2492,6 @@ def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
     """
     inputs, filters = [], []
     n = 0
-    max_speed = MAX_DUB_SPEED
 
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
@@ -2587,7 +2527,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
         except Exception:
             continue
 
-        speed = min(max_speed, max(1.0, d / slot))
+        speed = min(MAX_DUB_SPEED, max(1.0, d / slot))
         delay = int(start * 1000)
         cursor = start + d / speed + 0.08
 
@@ -2647,6 +2587,138 @@ def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
         except RuntimeError:
             continue
     return ok and os.path.exists(os.path.join(folder, "dub.wav"))
+
+
+# ---------- Lip Sync (Replicate) ----------
+
+def replicate_json(key, method, url, body=None, timeout=60):
+    """ហៅ Replicate API ហើយទទួលចម្លើយជា JSON។"""
+    data = json.dumps(body).encode("utf-8") if body is not None else None
+    request = urllib.request.Request(
+        url,
+        data=data,
+        method=method,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Replicate {http_detail(e)}")
+
+
+def replicate_upload(key, path, mime):
+    """ផ្ទុកឯកសារឡើង Replicate ហើយទទួលតំណសម្រាប់ឱ្យម៉ូដែលអាន។"""
+    boundary = "----kac" + uuid.uuid4().hex
+    with open(path, "rb") as f:
+        content = f.read()
+
+    body = b"".join([
+        (
+            f"--{boundary}\r\n"
+            'Content-Disposition: form-data; name="content"; '
+            f'filename="{os.path.basename(path)}"\r\n'
+            f"Content-Type: {mime}\r\n\r\n"
+        ).encode("utf-8"),
+        content,
+        f"\r\n--{boundary}--\r\n".encode("utf-8"),
+    ])
+    request = urllib.request.Request(
+        REPLICATE_API + "/files",
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=180) as response:
+            obj = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"Replicate upload {http_detail(e)}")
+
+    url = (obj.get("urls") or {}).get("get")
+    if not url:
+        raise RuntimeError("Replicate មិនបានផ្តល់តំណឯកសារ។")
+    return url
+
+
+def make_lipsync(folder, key, status):
+    """
+    ធ្វើឱ្យមាត់ក្នុងវីដេអូ input.mp4 ត្រូវនឹងសំឡេង dub.wav (Lip Sync)
+    ហើយជំនួស input.mp4 ដោយលទ្ធផល។ បើបរាជ័យ ទុកវីដេអូដើម។
+    មុខងារនេះប្រើម៉ូដែលក្នុង Cloud (ត្រូវការ REPLICATE_API_TOKEN)។
+    """
+    src = os.path.join(folder, "input.mp4")
+    small = os.path.join(folder, "lip_in.mp4")
+    audio = os.path.join(folder, "lip_audio.mp3")
+    result = os.path.join(folder, "lip_out.mp4")
+
+    # បង្រួមវីដេអូ (គ្មានសំឡេង) និងសំឡេង ដើម្បីផ្ទុកឡើងលឿន ហើយចំណាយតិច
+    run_ffmpeg(
+        [
+            "-i", src, "-an",
+            "-vf", build_video_filter(720).replace(
+                ",ass=filename=captions.ass:fontsdir=.", ""
+            ),
+            "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+            "-movflags", "+faststart",
+            "lip_in.mp4",
+            "-i", "dub.wav",
+            "-map", "1:a", "-c:a", "libmp3lame", "-b:a", "128k",
+            "lip_audio.mp3",
+        ],
+        cwd=folder,
+    )
+
+    status.write("👄 កំពុងផ្ទុកវីដេអូទៅ Lip Sync...")
+    video_url = replicate_upload(key, small, "video/mp4")
+    audio_url = replicate_upload(key, audio, "audio/mpeg")
+
+    pred = replicate_json(
+        key,
+        "POST",
+        f"{REPLICATE_API}/models/{LIPSYNC_MODEL}/predictions",
+        {"input": {"video": video_url, "audio": audio_url}},
+    )
+    poll = (pred.get("urls") or {}).get("get")
+    if not poll:
+        raise RuntimeError("Replicate មិនបានចាប់ផ្តើមការងារ។")
+
+    status.write("👄 កំពុងធ្វើ Lip Sync... (អាចយូរបន្តិច)")
+    deadline = time.time() + LIPSYNC_WAIT_SEC
+    while pred.get("status") not in ("succeeded", "failed", "canceled"):
+        if time.time() > deadline:
+            raise RuntimeError("Lip Sync ចំណាយពេលយូរពេក។")
+        time.sleep(4)
+        pred = replicate_json(key, "GET", poll)
+
+    if pred.get("status") != "succeeded":
+        raise RuntimeError(f"Lip Sync បរាជ័យ: {pred.get('error')}")
+
+    output = pred.get("output")
+    if isinstance(output, list):
+        output = output[0] if output else None
+    if not output:
+        raise RuntimeError("Lip Sync មិនមានលទ្ធផល។")
+
+    request = urllib.request.Request(
+        str(output), headers={"User-Agent": "Mozilla/5.0"}
+    )
+    with urllib.request.urlopen(request, timeout=180) as response, open(
+        result, "wb"
+    ) as f:
+        shutil.copyfileobj(response, f)
+
+    if os.path.getsize(result) < 1000:
+        raise RuntimeError("ទាញយកលទ្ធផល Lip Sync មិនបាន។")
+    os.replace(result, src)
 
 
 # ---------- Render វីដេអូ ----------
@@ -2774,7 +2846,6 @@ class Job:
         self.render_slots = threading.Semaphore(MAX_RENDER_AT_ONCE)
         self.zip = None
         self.zip_done = False
-        self.notified = False
 
     def running(self):
         return any(it["state"] in ("queued", "running") for it in self.items)
@@ -2870,8 +2941,6 @@ def run_worker(job, item, settings, fonts_data):
                     break
                 except UserError:
                     raise
-                except KhmerNeedsGemini:
-                    continue
                 except Exception as e:
                     reason = f"{engine_name(engine)}: {str(e)[:400]}"
                     engine_errors.append(reason)
@@ -2952,6 +3021,31 @@ def run_worker(job, item, settings, fonts_data):
                         "បង្កើតសំឡេងអានមិនបានទេ។ វីដេអូមានតែអក្សរ។"
                     )
 
+            # Lip Sync៖ ធ្វើមុនដាក់អក្សរ ដើម្បីកុំឱ្យអក្សររំខានការវិភាគមុខ
+            lipsync_ok = False
+            if settings["lipsync_on"] and dub_ok:
+                if duration > MAX_LIPSYNC_SEC:
+                    item["warn"].append(
+                        f"Lip Sync ធ្វើបានតែវីដេអូខ្លីជាង {MAX_LIPSYNC_SEC} "
+                        "វិនាទី។ វីដេអូនេះរំលង Lip Sync។"
+                    )
+                else:
+                    item["pct"] = 0.68
+                    rep.write("👄 កំពុងរៀបចំ Lip Sync...")
+                    try:
+                        make_lipsync(folder, settings["replicate_key"], rep)
+                        lipsync_ok = True
+                    except Exception as e:
+                        item["raw_error"] = str(e)
+                        item["warn"].append(
+                            "Lip Sync មិនបានសម្រេច។ "
+                            "វីដេអូប្រើសំឡេងអានដោយគ្មាន Lip Sync។"
+                        )
+            elif settings["lipsync_on"]:
+                item["warn"].append(
+                    "Lip Sync ត្រូវការសំឡេងអាន (Dubbing) ជោគជ័យជាមុន។"
+                )
+
             item["pct"] = 0.75
             rep.write("៤/៤ កំពុងរង់ចាំដាក់អក្សរចូលវីដេអូ...")
             with job.render_slots:
@@ -2993,6 +3087,7 @@ def run_worker(job, item, settings, fonts_data):
                 "Font ដែលជ្រើស": settings.get("font_name", ""),
                 "Font ដែលប្រើ": used_font,
                 "Dubbing": dub_ok,
+                "Lip Sync": lipsync_ok,
                 "អ្នកនិយាយ": (
                     item["voice_lines"][0] if item["voice_lines"] else ""
                 ),
@@ -3239,12 +3334,6 @@ button[data-testid="stBaseButton-secondary"], button[kind="secondary"] {
   border-radius: 12px;
 }
 button:disabled { opacity: 0.7; }
-[data-testid="stMetric"] {
-  background: #10174a;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  padding: 8px 12px;
-}
 
 /* ស្ថានភាពបង្រួម */
 .chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 8px 0; }
@@ -3589,6 +3678,7 @@ inject_css()
 
 GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+REPLICATE_KEY = st.secrets.get("REPLICATE_API_TOKEN", "")
 
 if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
@@ -3623,8 +3713,8 @@ if job and not job.running() and not job.zip_done:
     job.zip = build_zip(job.items)
     job.zip_done = True
 
-busy = bool(job and job.running())
-running = busy
+running = bool(job and job.running())
+busy = running
 refresh = REFRESH_SECONDS if running else None
 
 (
@@ -3863,6 +3953,7 @@ with tab_home:
             voice_label = list(TTS_VOICES.keys())[0]
             keep_bg = False
             auto_gender = False
+            lipsync_on = False
             if dub_on:
                 voice_label = st.selectbox(
                     "សំឡេង",
@@ -3883,6 +3974,22 @@ with tab_home:
                     "រក្សាសំឡេងដើមតិចៗ",
                     key="keep_bg",
                 )
+                lipsync_on = st.checkbox(
+                    "👄 Lip Sync (ធ្វើឱ្យមាត់ត្រូវនឹងសំឡេងអាន)",
+                    key="lipsync_on",
+                    disabled=not REPLICATE_KEY,
+                    help=(
+                        "ប្រើម៉ូដែល AI ក្នុង Cloud ដើម្បីកែចលនាមាត់ឱ្យត្រូវនឹង "
+                        f"សំឡេងខ្មែរ។ ធ្វើបានតែវីដេអូខ្លីជាង {MAX_LIPSYNC_SEC} "
+                        "វិនាទី ហើយត្រូវមានមុខមនុស្សច្បាស់ក្នុងវីដេអូ។ "
+                        "វាយឺតជាង និងមានតម្លៃ។"
+                    ),
+                )
+                if not REPLICATE_KEY:
+                    st.caption(
+                        "Lip Sync មិនទាន់អាចប្រើបាន (ម្ចាស់កម្មវិធីត្រូវដាក់ "
+                        "REPLICATE_API_TOKEN)។"
+                    )
                 st.caption(
                     "សំឡេងអាននឹងត្រូវតាមម៉ោងវីដេអូដើម៖ ឃ្លាណាវែងពេក "
                     "AI នឹងនិយាយឱ្យខ្លីជាភាសាមនុស្សពិត ហើយបង្កើនល្បឿនបន្តិចបើចាំបាច់។"
@@ -3903,12 +4010,14 @@ if run:
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
         "gemini_key": GEMINI_KEY,
         "groq_key": GROQ_KEY,
+        "replicate_key": REPLICATE_KEY,
         "language": LANGUAGES[language_label],
         "quality": QUALITY[quality_label],
         "dub_on": dub_on,
         "voice": TTS_VOICES[voice_label],
         "keep_bg": keep_bg,
         "auto_gender": auto_gender,
+        "lipsync_on": bool(lipsync_on and REPLICATE_KEY),
         "font_size": font_size,
         "outline_size": outline_size,
         "color": COLOR_OPTIONS[font_color][0],
@@ -4074,7 +4183,7 @@ with tab_help:
 2. នៅទំព័រដើម ជ្រើស **Upload** (ឯកសារ) **Link** (តំណ) ឬ **Batch** (ច្រើនវីដេអូ)
 3. ជ្រើសគុណភាព ភាសាក្នុងវីដេអូ និងម៉ាស៊ីនបកប្រែ
 4. កំណត់អក្សរ៖ ទំហំ គែម ពុម្ពអក្សរ ពណ៌ និងទីតាំង (មើលជាមុនបានភ្លាមៗ)
-5. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing**
+5. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing** (បន្ថែម **Lip Sync** បើចង់ឱ្យមាត់ត្រូវនឹងសំឡេង)
 6. ចុច **ចាប់ផ្តើមដំណើរការ** ហើយរង់ចាំ
 7. ពេលរួច **មើលវីដេអូជាមុន** នៅក្រោម «កំពុងដំណើរការ» ភ្លាម
    រួចចុចប៊ូតុង **ទាញយកវីដេអូ** (ឬនៅផ្ទាំង **វីដេអូខ្ញុំ** ក៏បាន)
@@ -4084,6 +4193,7 @@ with tab_help:
 - វីដេអូម្តងបានអតិបរមា {MAX_VIDEOS}
 - វីដេអូនីមួយៗវែងបំផុត {MAX_DURATION_MIN} នាទី
 - វីដេអូពីតំណធំបំផុត {MAX_DOWNLOAD_MB}MB
+- Lip Sync ធ្វើបានតែវីដេអូខ្លីជាង {MAX_LIPSYNC_SEC} វិនាទី
 
 **គន្លឹះ**
 
