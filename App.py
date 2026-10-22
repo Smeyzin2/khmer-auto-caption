@@ -2951,6 +2951,189 @@ def run_worker(job, item, settings, fonts_data):
                     item["warn"].append(
                         "បង្កើតសំឡេងអានមិនបានទេ។ វីដេអូមានតែអក្សរ។"
                     )
+self.id = uuid.uuid4().hex[:8]
+        self.items = items
+        self.folder = folder
+        self.render_slots = threading.Semaphore(MAX_RENDER_AT_ONCE)
+        self.zip = None
+        self.zip_done = False
+        self.notified = False
+
+    def running(self):
+        return any(it["state"] in ("queued", "running") for it in self.items)
+
+
+def engine_name(engine):
+    return "ឥតគិតថ្លៃ (Groq)" if engine == "free" else "Gemini"
+
+
+def run_worker(job, item, settings, fonts_data):
+    """ដំណើរការវីដេអូមួយ ក្នុង thread ផ្ទាល់ខ្លួន (គ្មានការហៅ st)។"""
+    rep = Reporter(item)
+    item["t0"] = time.time()
+    item["state"] = "running"
+
+    try:
+        with tempfile.TemporaryDirectory() as folder:
+            source = os.path.join(folder, "input.mp4")
+            audio_path = os.path.join(folder, "audio.mp3")
+            master_path = os.path.join(folder, "master.flac")
+
+            if item.get("path"):
+                shutil.move(item["path"], source)
+                item["path"] = None
+            else:
+                item["pct"] = 0.03
+                rep.write("កំពុងទាញយកវីដេអូ...")
+                download_video(item["url"], source, rep)
+
+            item["pct"] = 0.12
+            rep.write("១/៤ កំពុងរៀបចំ...")
+            fonts = install_fonts(folder, fonts_data)
+
+            item["pct"] = 0.18
+            rep.write("២/៤ កំពុងដកសំឡេង...")
+            extract_audio(source, audio_path, master_path)
+            duration, vid_w, vid_h = probe_video(source)
+
+            if duration > MAX_DURATION_MIN * 60:
+                raise UserError(
+                    f"វីដេអូវែងពេក។ សូមប្រើវីដេអូខ្លីជាង "
+                    f"{MAX_DURATION_MIN} នាទី។"
+                )
+
+            speech = detect_speech(master_path, duration)
+
+            item["pct"] = 0.25
+            rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
+
+            # លំដាប់ម៉ាស៊ីន៖ ម៉ាស៊ីនដែលបានជ្រើសមុន ហើយម៉ាស៊ីនមួយទៀតជាបម្រុង
+            order = (
+                ["free", "gemini"]
+                if settings["engine"] == "free"
+                else ["gemini", "free"]
+            )
+            order = [
+                k for k in order
+                if (k == "free" and settings["groq_key"])
+                or (k == "gemini" and settings["gemini_key"])
+            ]
+
+            segments = None
+            used_engine = ""
+            used_model = ""
+            failed_chunks = 0
+            engine_errors = []
+
+            for idx, engine in enumerate(order):
+                try:
+                    if engine == "free":
+                        segments, used_model, failed_chunks = (
+                            transcribe_free(
+                                settings["groq_key"],
+                                audio_path,
+                                duration,
+                                settings["language"],
+                                rep,
+                                speech=speech,
+                                gemini_key=settings["gemini_key"],
+                            )
+                        )
+                    else:
+                        segments, used_model, failed_chunks = transcribe(
+                            settings["gemini_key"],
+                            master_path,
+                            duration,
+                            settings["language"],
+                            rep,
+                            concise=settings["dub_on"],
+                            speech=speech,
+                        )
+                    used_engine = engine
+                    break
+                except UserError:
+                    raise
+                except KhmerNeedsGemini:
+                    continue
+                except Exception as e:
+                    reason = f"{engine_name(engine)}: {str(e)[:400]}"
+                    engine_errors.append(reason)
+                    if idx + 1 < len(order):
+                        item["warn"].append(
+                            "ម៉ាស៊ីនទីមួយមានបញ្ហា "
+                            "កម្មវិធីបានប្តូរទៅម៉ាស៊ីនបម្រុងដោយស្វ័យប្រវត្តិ។"
+                            f"\n\nមូលហេតុ → {reason}"
+                        )
+                        rep.write("កំពុងប្តូរទៅម៉ាស៊ីនបម្រុង...")
+
+            if segments is None:
+                raise UserError(
+                    "ម៉ាស៊ីនបកប្រែទាំងអស់បរាជ័យ។\n\n"
+                    + "\n\n".join(engine_errors)
+                )
+
+            if failed_chunks:
+                item["warn"].append(
+                    "ផ្នែកខ្លះនៃវីដេអូមិនអាចបកប្រែបាន ដូច្នេះអក្សរអាចខ្វះ។ "
+                    "សូមសាកម្តងទៀតពេលក្រោយ។"
+                )
+
+            item["pct"] = 0.55
+            segments = snap_segments(segments, speech, duration)
+            captions, sync_mode = build_captions(segments, duration)
+            if not captions:
+                raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
+
+            dub_ok = False
+            if settings["dub_on"]:
+                item["pct"] = 0.6
+                rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+                try:
+                    dub_segments = segments
+                    seg_voices = None
+
+                    if settings["auto_gender"]:
+                        try:
+                            rep.write("🔍 កំពុងស្គាល់អ្នកនិយាយប្រុស/ស្រី...")
+                            pcm = load_pcm(master_path)
+                            planned, lines, voice_info = plan_dub_voices(
+                                segments,
+                                pcm,
+                                settings["voice"],
+                                duration,
+                            )
+                            dub_segments = [
+                                (s, e, t) for s, e, t, _ in planned
+                            ]
+                            seg_voices = [v for _, _, _, v in planned]
+                            item["voice_lines"] = (
+                                [voice_info.get("summary", "")] + lines
+                            )
+                        except Exception:
+                            dub_segments = segments
+                            seg_voices = None
+                            item["warn"].append(
+                                "ស្គាល់សំឡេងប្រុស/ស្រីមិនបាន "
+                                "ប្រើសំឡេងតែមួយតាមដែលបានជ្រើស។"
+                            )
+                        rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+
+                    dub_ok = make_dub(
+                        folder,
+                        dub_segments,
+                        settings["voice"],
+                        duration,
+                        settings["keep_bg"],
+                        settings["gemini_key"],
+                        settings["groq_key"],
+                        seg_voices=seg_voices,
+                    )
+                except Exception:
+                    dub_ok = False
+                if not dub_ok:
+                    item["warn"].append(
+                        "បង្កើតសំឡេងអានមិនបានទេ។ វីដេអូមានតែអក្សរ។"
+                    )
 
             item["pct"] = 0.75
             rep.write("៤/៤ កំពុងរង់ចាំដាក់អក្សរចូលវីដេអូ...")
@@ -3022,75 +3205,7 @@ def run_worker(job, item, settings, fonts_data):
         if item["state"] == "running":
             item["error"] = "ការបង្កើតវីដេអូមិនបានសម្រេច។ សូមសាកម្តងទៀត។"
             item["state"] = "error"
-        
-}
-.hero-s { color: var(--mut); font-size: 0.9rem; }
-
-/* ប្រអប់ណែនាំ + ប៊ូតុងពេញអេក្រង់ (ខាងលើ) */
-.tip {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-  background: #0f1744;
-  border: 1px solid #26327f;
-  border-radius: 14px;
-  padding: 10px 16px;
-  margin: 0 0 12px 0;
-}
-.tip-t {
-  color: #cfd6ff;
-  font-size: 0.92rem;
-  line-height: 1.7;
-  flex: 1 1 320px;
-}
-.tip-t b { color: #ffffff; }
-#kac-fs-slot { flex: 0 0 auto; }
-
-/* ផ្ទាំងម៉ឺនុយ (tabs) */
-[data-baseweb="tab-list"] {
-  gap: 10px;
-  flex-wrap: wrap;
-  background: transparent;
-  border: 0;
-  padding-bottom: 6px;
-}
-button[data-baseweb="tab"] {
-  background: #10174a;
-  border: 1px solid #232f78;
-  border-radius: 12px;
-  padding: 10px 16px;
-  height: auto;
-  color: #cfd6ff;
-}
-button[data-baseweb="tab"][aria-selected="true"] {
-  background: linear-gradient(180deg, #3b78ff, #2457e6);
-  border-color: #5b92ff;
-  color: #ffffff;
-}
-button[data-baseweb="tab"] p { color: inherit; }
-[data-baseweb="tab-highlight"], [data-baseweb="tab-border"] {
-  display: none;
-}
-
-/* ក្បាលផ្នែក */
-.sec {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin: 18px 0 10px 0;
-}
-.sec .bar {
-  width: 5px;
-  height: 26px;
-  border-radius: 4px;
-  background: var(--blue);
-}
-.sec .sec-th { font-size: 1.25rem; font-weight: 800; color: #ffffff; }
-.sec .sec-en { font-size: 1.1rem; font-weight: 600; color: var(--mut); }
-.ct { font-size: 1.05rem
-# លុបឯកសារ upload ដែលនៅសល់ (បើមាន)
+        # លុបឯកសារ upload ដែលនៅសល់ (បើមាន)
         try:
             if item.get("path") and os.path.exists(item["path"]):
                 os.remove(item["path"])
