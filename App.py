@@ -3184,6 +3184,13 @@ with tab_voice:
         # Keep only the simple voice choices requested by the user.
         voice_label = st.radio("ជ្រើសសំឡេងនិយាយ", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
         keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
+        auto_gender = st.toggle(
+            "🗣️ បែងចែកសំឡេងប្រុស/ស្រីដោយស្វ័យប្រវត្តិ",
+            value=True,
+            help="AI វិភាគកម្រិតសំឡេងដើម ហើយប្តូររវាងសំឡេងប្រុស និងស្រីតាមពេលនិយាយ។",
+        )
+        if auto_gender:
+            st.caption("💡 មុខងារនេះប្រើការវិភាគ Pitch ដើម្បីប៉ាន់ស្មានអ្នកនិយាយ។ សំឡេងខ្ពស់/ទាប ឬមនុស្សនិយាយជាន់គ្នា អាចធ្វើឱ្យការបែងចែកខុសខ្លះ។")
         if not dub_on:
             st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើការនិយាយ។")
 
@@ -3257,7 +3264,7 @@ if run:
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
-        "keep_bg": keep_bg, "dub_offset": 0.0, "tight_sync": False, "auto_gender": False,
+        "keep_bg": keep_bg, "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
         "voice_match": False, "emotion": False,
         "clone_sample": None,
         "eleven_key": ELEVEN_KEY,
