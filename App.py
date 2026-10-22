@@ -958,6 +958,18 @@ def build_prompt(clip_duration, source_language, concise=False):
             "Khmer script."
         )
 
+    style_rule = ""
+    if source_language != "Khmer":
+        style_rule = (
+            " Write the Khmer exactly the way a real native Khmer speaker "
+            "would naturally say it in conversation: smooth, fluent, "
+            "natural spoken Khmer with natural word order, connecting "
+            "words and sentence-final particles. Never a stiff, textbook "
+            "or word-for-word translation. Keep the original tone and "
+            "feeling (casual, serious, funny, emotional) and let the "
+            "sentences flow naturally from one to the next."
+        )
+
     concise_rule = ""
     if concise:
         concise_rule = (
@@ -969,6 +981,7 @@ def build_prompt(clip_duration, source_language, concise=False):
 
     return (
         task
+        + style_rule
         + " The field \"text\" of every segment MUST be written only in "
         "Khmer script (names of people, places, brands may stay as they "
         "are or be transliterated into Khmer). Never put romanization or "
@@ -1513,6 +1526,190 @@ def translate_texts(texts, groq_key=None):
     return outs, errors
 
 
+NATURAL_SYSTEM = (
+    "You are an expert Khmer subtitle and dubbing writer. "
+    "You receive numbered subtitle lines. For each line you get the "
+    "ORIGINAL text (source language, may be empty) and a literal DRAFT "
+    "Khmer translation (may be empty). Rewrite every line as natural "
+    "SPOKEN Khmer, the way a real native speaker would say it in that "
+    "situation: smooth, fluent and conversational, with natural word "
+    "order, natural connecting words and sentence-final particles, and "
+    "the same feeling and tone as the original (casual, serious, funny, "
+    "emotional). Do not translate word for word and do not sound like a "
+    "machine or a textbook. Keep the meaning faithful, and keep each "
+    "line about the same length as the draft or shorter, because it "
+    "must fit in the same time. Use previous_lines only as context so "
+    "the story flows and names, pronouns and tone stay consistent. "
+    "Khmer script only (names may be transliterated into Khmer). "
+    "Return JSON {\"lines\": [...]} with exactly the same number of "
+    "items as the input lines, in the same order."
+)
+
+_gemini_models_cache = {"key": None, "models": None}
+
+
+def gemini_json_list(api_key, system, user_text, count):
+    """ឱ្យ Gemini ឆ្លើយជាបញ្ជី JSON ដែលមានចំនួនបន្ទាត់ត្រូវគ្នា។"""
+    client = genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS),
+    )
+    if (
+        _gemini_models_cache["key"] != api_key
+        or not _gemini_models_cache["models"]
+    ):
+        _gemini_models_cache["models"] = get_available_models(client)
+        _gemini_models_cache["key"] = api_key
+    models = _gemini_models_cache["models"] or []
+
+    last = "មិនមានម៉ូដែល"
+    for model in models[:4]:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model,
+                    contents=user_text,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system,
+                        temperature=0.6,
+                        response_mime_type="application/json",
+                    ),
+                )
+                raw = (getattr(response, "text", None) or "").strip()
+                raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+                data = json.loads(raw)
+                if isinstance(data, dict):
+                    data = data.get("lines") or data.get("translations") or []
+                if isinstance(data, list) and len(data) == count:
+                    return [
+                        clean_translation(x) if isinstance(x, str) else None
+                        for x in data
+                    ]
+                last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                break
+            except Exception as e:
+                last = f"{model}: {e}"
+                low = str(e).lower()
+                if ("503" in low or "unavailable" in low) and attempt == 0:
+                    time.sleep(4)
+                    continue
+                break
+    raise RuntimeError(last[:300])
+
+
+def groq_json_list(api_key, system, user_text, count, temperature=0.5):
+    """ឱ្យ Groq LLM ឆ្លើយជាបញ្ជី JSON ដែលមានចំនួនបន្ទាត់ត្រូវគ្នា។"""
+    models = groq_chat_models(api_key)
+    good = _groq_chat_cache["good"]
+    if good in models:
+        models = [good] + [m for m in models if m != good]
+
+    last = "មិនមានម៉ូដែល"
+    for model in models[:6]:
+        body = json.dumps({
+            "model": model,
+            "temperature": temperature,
+            "response_format": {"type": "json_object"},
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_text},
+            ],
+        }).encode("utf-8")
+
+        for attempt in range(2):
+            request = urllib.request.Request(
+                GROQ_CHAT_URL,
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {api_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                with urllib.request.urlopen(request, timeout=60) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                content = data["choices"][0]["message"]["content"]
+                content = re.sub(
+                    r"<think>.*?</think>", "", content, flags=re.S
+                )
+                obj = json.loads(content)
+                items = obj.get("lines") or obj.get("translations") or []
+                if len(items) == count:
+                    _groq_chat_cache["good"] = model
+                    return [
+                        clean_translation(x) if isinstance(x, str) else None
+                        for x in items
+                    ]
+                last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                break
+            except urllib.error.HTTPError as e:
+                last = f"{model}: {http_detail(e)}"
+                if e.code == 429 and attempt == 0:
+                    time.sleep(6)
+                    continue
+                break
+            except Exception as e:
+                last = f"{model}: {e}"
+                break
+
+    raise RuntimeError(last[:300])
+
+
+def naturalize_lines(originals, drafts, gemini_key, groq_key):
+    """
+    កែការបកប្រែឱ្យទៅជាភាសាខ្មែរនិយាយធម្មជាតិ ដូចមនុស្សនិយាយពិត
+    (មិនបកត្រង់ពាក្យ) ដោយឱ្យ AI មើលបរិបទជុំវិញ។
+    បើ AI មានបញ្ហា ទុកការបកប្រែដើមនៅដដែល។
+    ត្រឡប់ (លទ្ធផល, បញ្ជីមូលហេតុបរាជ័យ)។
+    """
+    n = len(drafts)
+    out = list(drafts)
+    errors = []
+
+    for k in range(0, n, 25):
+        idx = list(range(k, min(n, k + 25)))
+        context = [out[j] for j in range(max(0, k - 3), k) if out[j]]
+        payload = json.dumps(
+            {
+                "previous_lines": context,
+                "lines": [
+                    {
+                        "original": str(originals[i]).strip(),
+                        "draft": out[i] or "",
+                    }
+                    for i in idx
+                ],
+            },
+            ensure_ascii=False,
+        )
+
+        res = None
+        if gemini_key:
+            try:
+                res = gemini_json_list(
+                    gemini_key, NATURAL_SYSTEM, payload, len(idx)
+                )
+            except Exception as e:
+                errors.append(f"gemini-natural: {e}"[:200])
+        if res is None and groq_key:
+            try:
+                res = groq_json_list(
+                    groq_key, NATURAL_SYSTEM, payload, len(idx), 0.5
+                )
+            except Exception as e:
+                errors.append(f"groq-natural: {e}"[:200])
+
+        if res:
+            for i, r in zip(idx, res):
+                if r and has_khmer(r):
+                    out[i] = r
+        time.sleep(0.5)
+
+    return out, errors
+
+
 def retime_by_speech(segs, speech, duration, pad=0.6):
     """
     ភាសាខ្មែរ៖ Whisper ផ្តល់ម៉ោងមិនសូវត្រូវ (ឃ្លាវែង ម៉ោងរសាត់)។
@@ -1764,7 +1961,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
 
 
 def transcribe_free(groq_key, audio_path, duration, source_language,
-                    status, speech=None, khmer_ok=True):
+                    status, speech=None, khmer_ok=True, gemini_key=None):
     """
     ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Groq LLM)។
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
@@ -1841,7 +2038,19 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
             segs = retime_by_speech(segs, speech, duration)
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        outs, errs = translate_texts([t for _, _, t in keep], groq_key)
+        originals = [t for _, _, t in keep]
+        outs, errs = translate_texts(originals, groq_key)
+
+        # កែឱ្យទៅជាភាសានិយាយធម្មជាតិ ដូចមនុស្សនិយាយពិត
+        status.write("៣/៤ កំពុងកែឱ្យជាភាសានិយាយធម្មជាតិ...")
+        try:
+            outs, nat_errs = naturalize_lines(
+                originals, outs, gemini_key, groq_key
+            )
+            errs = errs + nat_errs
+        except Exception:
+            pass
+
         segs = []
         for (s, e, _), out in zip(keep, outs):
             if out:
@@ -2312,22 +2521,49 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     labels = "[bg]" if keep_bg else ""
     labels += "".join(f"[a{k}]" for k in range(first_voice, n))
 
-    fc = (
-        ";".join(filters)
-        + f";{labels}amix=inputs={n}:dropout_transition=0,"
-        f"volume={n}[out]"
+    # កុំឱ្យកន្ទុយសំឡេងឮខ្លាំង៖ មិនបង្កើនកម្រិតពេលសំឡេងខ្លះអស់ + កម្រិតកំពូល + ស្រាលចុះចុងក្រោយ
+    fade_start = max(0.0, duration - 0.6)
+    tail = (
+        f"alimiter=limit=0.95,afade=t=out:st={fade_start:.2f}:d=0.6[out]"
     )
 
-    run_ffmpeg(
-        inputs + [
-            "-filter_complex", fc,
-            "-map", "[out]",
-            "-t", f"{duration:.2f}",
-            "dub.wav",
-        ],
-        cwd=folder,
+    # វិធីទី១ (ត្រឹមត្រូវបំផុត): amix មិនធ្វើ normalize
+    fc_a = (
+        ";".join(filters)
+        + f";{labels}amix=inputs={n}:dropout_transition=0:normalize=0,{tail}"
     )
-    return os.path.exists(os.path.join(folder, "dub.wav"))
+    # វិធីទី២ (ជំនួយ ffmpeg ចាស់): បន្ថែមស្ងាត់ឱ្យគ្រប់ឆានែលវែងស្មើគ្នា
+    padded = [
+        re.sub(
+            r"\[(\w+)\]$",
+            f",apad=whole_dur={duration:.2f}[\\1]",
+            f_,
+        )
+        for f_ in filters
+    ]
+    fc_b = (
+        ";".join(padded)
+        + f";{labels}amix=inputs={n}:dropout_transition=0,"
+        f"volume={n},{tail}"
+    )
+
+    ok = False
+    for fc in (fc_a, fc_b):
+        try:
+            run_ffmpeg(
+                inputs + [
+                    "-filter_complex", fc,
+                    "-map", "[out]",
+                    "-t", f"{duration:.2f}",
+                    "dub.wav",
+                ],
+                cwd=folder,
+            )
+            ok = True
+            break
+        except RuntimeError:
+            continue
+    return ok and os.path.exists(os.path.join(folder, "dub.wav"))
 
 
 # ---------- Render វីដេអូ ----------
@@ -2534,6 +2770,7 @@ def run_worker(job, item, settings, fonts_data):
                                 settings["language"],
                                 rep,
                                 speech=speech,
+                                gemini_key=settings["gemini_key"],
                             )
                         )
                     else:
@@ -2910,6 +3147,20 @@ button:disabled { opacity: 0.7; }
   padding: 8px 12px;
 }
 
+/* ស្ថានភាពបង្រួម */
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 2px 0 8px 0; }
+.chip {
+  background: #10174a;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 0.95rem;
+  color: #cfd6ff;
+}
+.chip b { color: #ffffff; margin-left: 4px; font-size: 1.05rem; }
+.chip.ok { border-color: #1f6b46; }
+.chip.bad { border-color: #7a2a3a; }
+
 /* មើលជាមុន (Preview) */
 .pv {
   position: relative;
@@ -3034,39 +3285,63 @@ def dl_button(label, data, file_name, mime, key, **kwargs):
     )
 
 
+def short_name(name, limit=34):
+    name = str(name)
+    return name if len(name) <= limit else name[: limit - 1] + "…"
+
+
 def work_area(job, was_running):
-    """ផ្នែកកន្លែងធ្វើការ៖ ស្ថានភាពវីដេអូនីមួយៗ។"""
+    """ផ្នែកកន្លែងធ្វើការ៖ ស្ថានភាព (បង្រួម) និងប៊ូតុងទាញយកភ្លាមៗ។"""
     items = job.items
     total = len(items)
     done = sum(1 for it in items if it["state"] == "done")
     failed = sum(1 for it in items if it["state"] == "error")
     working = total - done - failed
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("⏳ កំពុងធ្វើ", working)
-    c2.metric("✅ រួចរាល់", done)
-    c3.metric("❌ បរាជ័យ", failed)
+    st.markdown(
+        '<div class="chips">'
+        f'<span class="chip">⏳ កំពុងធ្វើ <b>{working}</b></span>'
+        f'<span class="chip ok">✅ រួចរាល់ <b>{done}</b></span>'
+        f'<span class="chip bad">❌ បរាជ័យ <b>{failed}</b></span>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
 
     st.progress(
         (done + failed) / total,
         text=f"សរុប {done + failed} / {total}",
     )
 
+    if job.zip:
+        dl_button(
+            "📦 ទាញយកទាំងអស់ (ZIP)",
+            job.zip,
+            "khmer_videos.zip",
+            "application/zip",
+            key=f"wzip_{job.id}",
+            use_container_width=True,
+        )
+
     for i, it in enumerate(items, start=1):
         with st.container(border=True):
-            left, right = st.columns([4, 1])
-            left.markdown(f"**{i}. {it['name']}**")
-
+            tail = ""
             if it["t0"]:
                 if it["elapsed"] is not None:
                     secs = it["elapsed"]
                 else:
                     secs = time.time() - it["t0"]
-                right.caption(f"⏱ {int(secs)} វិនាទី")
+                tail = f" · ⏱ {int(secs)} វិនាទី"
+            st.markdown(f"**{i}. {short_name(it['name'])}**{tail}")
 
             if it["state"] == "done":
-                st.success(
-                    "✅ រួចរាល់ — ទាញយកបានក្នុងផ្ទាំង «🎞️ វីដេអូខ្ញុំ»"
+                dl_button(
+                    "⬇️ ទាញយកវីដេអូនេះ",
+                    it["video"],
+                    f"{safe_filename(it['name'])}_khmer.mp4",
+                    "video/mp4",
+                    key=f"wdl_{job.id}_{i}",
+                    type="primary",
+                    use_container_width=True,
                 )
             elif it["state"] == "error":
                 st.error(it["error"] or "មិនបានសម្រេច។")
@@ -3155,42 +3430,6 @@ def download_area(job):
                     st.text("\n".join(it["log"][-30:]))
 
 
-def switch_to_my_videos():
-    """ប្តូរទៅផ្ទាំង «វីដេអូខ្ញុំ» ដោយស្វ័យប្រវត្តិ (បើកំពុងនៅទំព័រដើម)។"""
-    components.html(
-        f"""
-        <script>
-        // {time.time()}
-        const go = () => {{
-          try {{
-            const doc = window.parent.document;
-            const tabs = Array.from(
-              doc.querySelectorAll('button[role="tab"]')
-            );
-            const cur = tabs.find(
-              t => t.getAttribute('aria-selected') === 'true'
-            );
-            const target = tabs.find(
-              t => (t.textContent || '').includes('វីដេអូខ្ញុំ')
-            );
-            if (!target) return false;
-            if (cur && (cur.textContent || '').includes('ទំព័រដើម')) {{
-              target.click();
-            }}
-            return true;
-          }} catch (e) {{}}
-          return false;
-        }};
-        let tries = 0;
-        const timer = setInterval(() => {{
-          if (go() || ++tries > 24) clearInterval(timer);
-        }}, 250);
-        </script>
-        """,
-        height=0,
-    )
-
-
 def fullscreen_button():
     """ប៊ូតុងពេញអេក្រង់ (អណ្តែតនៅជ្រុងខាងក្រោមស្តាំ)។"""
     components.html(
@@ -3205,9 +3444,9 @@ def fullscreen_button():
             b.textContent = '⛶ ពេញអេក្រង់';
             b.style.cssText =
               'position:fixed;right:16px;bottom:16px;z-index:99999;' +
-              'padding:10px 16px;border-radius:12px;' +
+              'padding:6px 12px;border-radius:12px;opacity:.85;' +
               'border:1px solid #2c3a8f;background:#10174a;' +
-              'color:#e8ecff;font-size:14px;cursor:pointer;' +
+              'color:#e8ecff;font-size:12px;cursor:pointer;' +
               'box-shadow:0 4px 18px rgba(0,0,0,.45);font-family:inherit;';
             b.setAttribute(
               'onclick',
@@ -3702,7 +3941,7 @@ with tab_help:
 3. កំណត់អក្សរ៖ ទំហំ គែម ពុម្ពអក្សរ ពណ៌ និងទីតាំង (មើលជាមុនបានភ្លាមៗ)
 4. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing**
 5. ចុច **ចាប់ផ្តើមដំណើរការ** ហើយរង់ចាំ
-6. ពេលរួច ទាញយកវីដេអូនៅផ្ទាំង **វីដេអូខ្ញុំ**
+6. ពេលរួច ចុចប៊ូតុង **ទាញយកវីដេអូ** នៅក្រោម «កំពុងដំណើរការ» ភ្លាម (ឬនៅផ្ទាំង **វីដេអូខ្ញុំ** ក៏បាន)
 
 **ដែនកំណត់**
 
@@ -3720,10 +3959,5 @@ with tab_help:
     )
 
 # ---------- ចុងបញ្ចប់ ----------
-
-if job and not job.running() and not job.notified:
-    job.notified = True
-    if any(it["state"] == "done" for it in job.items):
-        switch_to_my_videos()
 
 fullscreen_button()
