@@ -42,6 +42,10 @@ REFRESH_SECONDS = 2  # ល្បឿនធ្វើបច្ចុប្បន្
 MAX_RENDER_AT_ONCE = 3  # ដាក់អក្សរចូលវីដេអូស្មើគ្នាបានអតិបរមា
 MAX_DURATION_MIN = 15  # វីដេអូវែងអតិបរមា (នាទី)
 
+# ល្បឿននិយាយខ្មែរ (តួអក្សរ ក្នុងមួយវិនាទី) ប្រើកំណត់ប្រវែងឃ្លាឱ្យទាន់ពេល
+CHARS_PER_SEC = 11
+MAX_DUB_SPEED = 1.6  # បង្កើនល្បឿនសំឡេងអានអតិបរមា (កុំឱ្យលឿនហួសហេតុ)
+
 # ការកាត់សំឡេងជាផ្នែកៗ ដើម្បីឱ្យម៉ោងត្រឹមត្រូវ
 CHUNK_TARGET = 20.0  # វិនាទី
 CHUNK_MAX = 28.0
@@ -961,22 +965,26 @@ def build_prompt(clip_duration, source_language, concise=False):
     style_rule = ""
     if source_language != "Khmer":
         style_rule = (
-            " Write the Khmer exactly the way a real native Khmer speaker "
-            "would naturally say it in conversation: smooth, fluent, "
-            "natural spoken Khmer with natural word order, connecting "
-            "words and sentence-final particles. Never a stiff, textbook "
-            "or word-for-word translation. Keep the original tone and "
-            "feeling (casual, serious, funny, emotional) and let the "
-            "sentences flow naturally from one to the next."
+            " Do NOT translate word by word. First understand what the "
+            "speaker really means in that moment, then say it the way a "
+            "real native Khmer person would say it out loud while "
+            "thinking and talking: smooth, fluent, casual spoken Khmer "
+            "with natural word order, connecting words and sentence-final "
+            "particles. Rephrase idioms and slang into the Khmer "
+            "equivalent instead of copying them. Never a stiff, textbook "
+            "or literal translation. Keep the original tone and feeling "
+            "(casual, serious, funny, emotional) and let the sentences "
+            "flow naturally from one to the next."
         )
 
     concise_rule = ""
     if concise:
         concise_rule = (
             "Each Khmer line must be short enough to be spoken naturally "
-            "within its own time range: at most about 11 Khmer "
-            "characters per second of that segment. "
-            "Prefer concise wording. "
+            f"within its own time range: at most about {CHARS_PER_SEC} "
+            "Khmer characters per second of that segment. "
+            "Compress by rephrasing and dropping filler, never by "
+            "cutting the sentence in the middle. "
         )
 
     return (
@@ -1529,20 +1537,37 @@ def translate_texts(texts, groq_key=None):
 NATURAL_SYSTEM = (
     "You are an expert Khmer subtitle and dubbing writer. "
     "You receive numbered subtitle lines. For each line you get the "
-    "ORIGINAL text (source language, may be empty) and a literal DRAFT "
-    "Khmer translation (may be empty). Rewrite every line as natural "
-    "SPOKEN Khmer, the way a real native speaker would say it in that "
-    "situation: smooth, fluent and conversational, with natural word "
-    "order, natural connecting words and sentence-final particles, and "
-    "the same feeling and tone as the original (casual, serious, funny, "
-    "emotional). Do not translate word for word and do not sound like a "
-    "machine or a textbook. Keep the meaning faithful, and keep each "
-    "line about the same length as the draft or shorter, because it "
-    "must fit in the same time. Use previous_lines only as context so "
-    "the story flows and names, pronouns and tone stay consistent. "
+    "ORIGINAL text (source language, may be empty), a literal DRAFT "
+    "Khmer translation (may be empty), the time available in "
+    "\"seconds\" and a hard limit \"max_chars\" (Khmer characters). "
+    "Do NOT translate word by word. For every line, first understand "
+    "what the speaker really means and feels in that moment, then say "
+    "it the way a real native Khmer person would say it out loud while "
+    "thinking and talking: smooth, casual, conversational spoken Khmer "
+    "with natural word order, natural connecting words and "
+    "sentence-final particles. Turn idioms, slang and jokes into the "
+    "Khmer way of saying the same thing instead of copying them. Keep "
+    "the same tone (casual, serious, funny, emotional) and do not "
+    "sound like a machine or a textbook. Keep the meaning faithful, "
+    "but every line MUST fit within max_chars so it can be spoken in "
+    "the given seconds: drop filler words, merge ideas, choose "
+    "shorter natural wording, never cut a sentence in the middle. "
+    "Use previous_lines only as context so the story flows and "
+    "names, pronouns and tone stay consistent. "
     "Khmer script only (names may be transliterated into Khmer). "
     "Return JSON {\"lines\": [...]} with exactly the same number of "
     "items as the input lines, in the same order."
+)
+
+SHORTEN_SYSTEM = (
+    "You edit Khmer dubbing lines so they can be spoken in time. "
+    "Each input line has a \"text\" and a \"max_chars\". Rewrite every "
+    "line as natural spoken Khmer, the way a real person would say it, "
+    "keeping the core meaning and tone, but with at most max_chars "
+    "characters. Drop filler, merge ideas and rephrase; never cut the "
+    "sentence in the middle. Khmer script only. "
+    "Return JSON {\"lines\": [...]} with exactly the same number of "
+    "items, in the same order."
 )
 
 _gemini_models_cache = {"key": None, "models": None}
@@ -1657,10 +1682,35 @@ def groq_json_list(api_key, system, user_text, count, temperature=0.5):
     raise RuntimeError(last[:300])
 
 
-def naturalize_lines(originals, drafts, gemini_key, groq_key):
+def char_limit(seconds):
+    """ចំនួនតួអក្សរខ្មែរអតិបរមា ដែលអានទាន់ក្នុងរយៈពេលដែលមាន។"""
+    return max(8, int(round((max(0.0, float(seconds)) + 0.3) * CHARS_PER_SEC)))
+
+
+def ask_ai_list(system, payload, count, gemini_key, groq_key, errors,
+                tag, temperature=0.5):
+    """សួរ Gemini មុន បើមិនបានសួរ Groq។ ត្រឡប់បញ្ជី ឬ None។"""
+    res = None
+    if gemini_key:
+        try:
+            res = gemini_json_list(gemini_key, system, payload, count)
+        except Exception as e:
+            errors.append(f"gemini-{tag}: {e}"[:200])
+    if res is None and groq_key:
+        try:
+            res = groq_json_list(
+                groq_key, system, payload, count, temperature
+            )
+        except Exception as e:
+            errors.append(f"groq-{tag}: {e}"[:200])
+    return res
+
+
+def naturalize_lines(originals, drafts, gemini_key, groq_key,
+                     durations=None):
     """
     កែការបកប្រែឱ្យទៅជាភាសាខ្មែរនិយាយធម្មជាតិ ដូចមនុស្សនិយាយពិត
-    (មិនបកត្រង់ពាក្យ) ដោយឱ្យ AI មើលបរិបទជុំវិញ។
+    (មិនបកត្រង់ពាក្យ) ហើយឱ្យខ្លីល្មមនិយាយទាន់ក្នុងម៉ោងរបស់ឃ្លានីមួយៗ។
     បើ AI មានបញ្ហា ទុកការបកប្រែដើមនៅដដែល។
     ត្រឡប់ (លទ្ធផល, បញ្ជីមូលហេតុបរាជ័យ)។
     """
@@ -1668,6 +1718,11 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key):
     out = list(drafts)
     errors = []
 
+    if durations is None:
+        durations = [4.0] * n
+    limits = [char_limit(d) for d in durations]
+
+    # ជំហានទី១៖ សរសេរឡើងវិញជាភាសានិយាយធម្មជាតិ ក្នុងដែនកំណត់ម៉ោង
     for k in range(0, n, 25):
         idx = list(range(k, min(n, k + 25)))
         context = [out[j] for j in range(max(0, k - 3), k) if out[j]]
@@ -1678,6 +1733,8 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key):
                     {
                         "original": str(originals[i]).strip(),
                         "draft": out[i] or "",
+                        "seconds": round(float(durations[i]), 1),
+                        "max_chars": limits[i],
                     }
                     for i in idx
                 ],
@@ -1685,25 +1742,40 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key):
             ensure_ascii=False,
         )
 
-        res = None
-        if gemini_key:
-            try:
-                res = gemini_json_list(
-                    gemini_key, NATURAL_SYSTEM, payload, len(idx)
-                )
-            except Exception as e:
-                errors.append(f"gemini-natural: {e}"[:200])
-        if res is None and groq_key:
-            try:
-                res = groq_json_list(
-                    groq_key, NATURAL_SYSTEM, payload, len(idx), 0.5
-                )
-            except Exception as e:
-                errors.append(f"groq-natural: {e}"[:200])
+        res = ask_ai_list(
+            NATURAL_SYSTEM, payload, len(idx),
+            gemini_key, groq_key, errors, "natural", 0.5,
+        )
 
         if res:
             for i, r in zip(idx, res):
                 if r and has_khmer(r):
+                    out[i] = r
+        time.sleep(0.5)
+
+    # ជំហានទី២៖ ឃ្លាណាដែលនៅវែងពេក បង្រួមម្តងទៀត
+    long_idx = [
+        i for i in range(n)
+        if out[i] and len(out[i]) > limits[i] * 1.2
+    ]
+    for k in range(0, len(long_idx), 25):
+        idx = long_idx[k:k + 25]
+        payload = json.dumps(
+            {
+                "lines": [
+                    {"text": out[i], "max_chars": limits[i]}
+                    for i in idx
+                ]
+            },
+            ensure_ascii=False,
+        )
+        res = ask_ai_list(
+            SHORTEN_SYSTEM, payload, len(idx),
+            gemini_key, groq_key, errors, "shorten", 0.4,
+        )
+        if res:
+            for i, r in zip(idx, res):
+                if r and has_khmer(r) and len(r) < len(out[i]):
                     out[i] = r
         time.sleep(0.5)
 
@@ -2041,11 +2113,15 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
         originals = [t for _, _, t in keep]
         outs, errs = translate_texts(originals, groq_key)
 
-        # កែឱ្យទៅជាភាសានិយាយធម្មជាតិ ដូចមនុស្សនិយាយពិត
+        # កែឱ្យទៅជាភាសានិយាយធម្មជាតិ ដូចមនុស្សនិយាយពិត ហើយនិយាយទាន់ម៉ោង
         status.write("៣/៤ កំពុងកែឱ្យជាភាសានិយាយធម្មជាតិ...")
         try:
             outs, nat_errs = naturalize_lines(
-                originals, outs, gemini_key, groq_key
+                originals,
+                outs,
+                gemini_key,
+                groq_key,
+                durations=[e - s for s, e, _ in keep],
             )
             errs = errs + nat_errs
         except Exception:
@@ -2083,22 +2159,27 @@ def tts_segment(text, voice, path):
     asyncio.run(_go())
 
 
-def shorten_khmer(client, model, text, max_seconds):
-    """ឱ្យ AI បង្រួមប្រយោគខ្មែរ ឱ្យអានទាន់ក្នុងពេលកំណត់។"""
-    limit = max(6, int(max_seconds * 11))
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=(
-                f"Shorten this Khmer sentence to at most {limit} "
-                "characters. Keep the meaning. Khmer script only. "
-                f"Return only the sentence.\n{text}"
-            ),
-        )
-        out = fix_khmer(getattr(response, "text", "") or "")
-        return out if has_khmer(out) else text
-    except Exception:
+def shorten_text(gemini_key, groq_key, text, max_seconds):
+    """
+    ឱ្យ AI បង្រួមប្រយោគខ្មែរ ឱ្យអានទាន់ក្នុងពេលកំណត់ (ដូចមនុស្សនិយាយពិត)។
+    ប្រើបានទាំង Gemini និង Groq (ម៉ាស៊ីនឥតគិតថ្លៃ)។
+    """
+    limit = max(6, int(max_seconds * CHARS_PER_SEC))
+    if len(text) <= limit:
         return text
+
+    payload = json.dumps(
+        {"lines": [{"text": text, "max_chars": limit}]},
+        ensure_ascii=False,
+    )
+    errors = []
+    res = ask_ai_list(
+        SHORTEN_SYSTEM, payload, 1, gemini_key, groq_key,
+        errors, "dubshort", 0.4,
+    )
+    if res and res[0] and has_khmer(res[0]):
+        return res[0]
+    return text
 
 
 # ---------- ស្គាល់សំឡេងប្រុស/ស្រី តាមអ្នកនិយាយ ----------
@@ -2461,15 +2542,16 @@ def plan_dub_voices(segments, pcm, default_voice, duration):
     return dub, lines, info
 
 
-def make_dub(folder, segments, voice, duration, keep_bg, client, model,
-             seg_voices=None):
+def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
+             groq_key, seg_voices=None):
     """
-    បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗ។
-    បើ client = None (ម៉ាស៊ីនឥតគិតថ្លៃ) មិនបង្រួមប្រយោគទេ តែបង្កើនល្បឿនបន្ថែម។
+    បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗនៃវីដេអូដើម។
+    ឃ្លាណាអានវែងជាងពេលដែលមាន → បង្រួមប្រយោគដោយ AI (Gemini ឬ Groq)
+    ហើយទើបបង្កើនល្បឿនបន្តិច (មិនលើស MAX_DUB_SPEED)។
     """
     inputs, filters = [], []
     n = 0
-    max_speed = 2.0
+    max_speed = MAX_DUB_SPEED
 
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
@@ -2479,6 +2561,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     first_voice = n
     voices = 0
     cursor = 0.0  # ម៉ោងដែលឃ្លាមុនអានចប់ (កុំឱ្យសំឡេងជាន់គ្នា)
+    can_shorten = bool(gemini_key or groq_key)
 
     for i, (s, e, t) in enumerate(segments):
         next_s = segments[i + 1][0] if i + 1 < len(segments) else duration
@@ -2495,9 +2578,9 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             tts_segment(t, v, path)
             d, _, _ = probe_video(path)
 
-            # វែងពេក → បង្រួមប្រយោគ ហើយអានម្តងទៀត
-            if client is not None and d > slot * 1.25:
-                t2 = shorten_khmer(client, model, t, slot)
+            # វែងពេក → បង្រួមប្រយោគឱ្យនិយាយទាន់ ហើយអានម្តងទៀត
+            if can_shorten and d > slot * 1.15:
+                t2 = shorten_text(gemini_key, groq_key, t, slot)
                 if t2 != t:
                     tts_segment(t2, v, path)
                     d, _, _ = probe_video(path)
@@ -2823,12 +2906,6 @@ def run_worker(job, item, settings, fonts_data):
                 item["pct"] = 0.6
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
-                    client = (
-                        genai.Client(api_key=settings["gemini_key"])
-                        if used_engine == "gemini"
-                        else None
-                    )
-
                     dub_segments = segments
                     seg_voices = None
 
@@ -2864,8 +2941,8 @@ def run_worker(job, item, settings, fonts_data):
                         settings["voice"],
                         duration,
                         settings["keep_bg"],
-                        client,
-                        used_model,
+                        settings["gemini_key"],
+                        settings["groq_key"],
                         seg_voices=seg_voices,
                     )
                 except Exception:
@@ -2945,7 +3022,75 @@ def run_worker(job, item, settings, fonts_data):
         if item["state"] == "running":
             item["error"] = "ការបង្កើតវីដេអូមិនបានសម្រេច។ សូមសាកម្តងទៀត។"
             item["state"] = "error"
-        # លុបឯកសារ upload ដែលនៅសល់ (បើមាន)
+        
+}
+.hero-s { color: var(--mut); font-size: 0.9rem; }
+
+/* ប្រអប់ណែនាំ + ប៊ូតុងពេញអេក្រង់ (ខាងលើ) */
+.tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #0f1744;
+  border: 1px solid #26327f;
+  border-radius: 14px;
+  padding: 10px 16px;
+  margin: 0 0 12px 0;
+}
+.tip-t {
+  color: #cfd6ff;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  flex: 1 1 320px;
+}
+.tip-t b { color: #ffffff; }
+#kac-fs-slot { flex: 0 0 auto; }
+
+/* ផ្ទាំងម៉ឺនុយ (tabs) */
+[data-baseweb="tab-list"] {
+  gap: 10px;
+  flex-wrap: wrap;
+  background: transparent;
+  border: 0;
+  padding-bottom: 6px;
+}
+button[data-baseweb="tab"] {
+  background: #10174a;
+  border: 1px solid #232f78;
+  border-radius: 12px;
+  padding: 10px 16px;
+  height: auto;
+  color: #cfd6ff;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+  background: linear-gradient(180deg, #3b78ff, #2457e6);
+  border-color: #5b92ff;
+  color: #ffffff;
+}
+button[data-baseweb="tab"] p { color: inherit; }
+[data-baseweb="tab-highlight"], [data-baseweb="tab-border"] {
+  display: none;
+}
+
+/* ក្បាលផ្នែក */
+.sec {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 18px 0 10px 0;
+}
+.sec .bar {
+  width: 5px;
+  height: 26px;
+  border-radius: 4px;
+  background: var(--blue);
+}
+.sec .sec-th { font-size: 1.25rem; font-weight: 800; color: #ffffff; }
+.sec .sec-en { font-size: 1.1rem; font-weight: 600; color: var(--mut); }
+.ct { font-size: 1.05rem
+# លុបឯកសារ upload ដែលនៅសល់ (បើមាន)
         try:
             if item.get("path") and os.path.exists(item["path"]):
                 os.remove(item["path"])
@@ -3043,6 +3188,28 @@ footer { visibility: hidden; }
   color: transparent;
 }
 .hero-s { color: var(--mut); font-size: 0.9rem; }
+
+/* ប្រអប់ណែនាំ + ប៊ូតុងពេញអេក្រង់ (ខាងលើ) */
+.tip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  background: #0f1744;
+  border: 1px solid #26327f;
+  border-radius: 14px;
+  padding: 10px 16px;
+  margin: 0 0 12px 0;
+}
+.tip-t {
+  color: #cfd6ff;
+  font-size: 0.92rem;
+  line-height: 1.7;
+  flex: 1 1 320px;
+}
+.tip-t b { color: #ffffff; }
+#kac-fs-slot { flex: 0 0 auto; }
 
 /* ផ្ទាំងម៉ឺនុយ (tabs) */
 [data-baseweb="tab-list"] {
@@ -3291,7 +3458,7 @@ def short_name(name, limit=34):
 
 
 def work_area(job, was_running):
-    """ផ្នែកកន្លែងធ្វើការ៖ ស្ថានភាព (បង្រួម) និងប៊ូតុងទាញយកភ្លាមៗ។"""
+    """ផ្នែកកន្លែងធ្វើការ៖ ស្ថានភាព (បង្រួម) មើលវីដេអូ និងប៊ូតុងទាញយកភ្លាមៗ។"""
     items = job.items
     total = len(items)
     done = sum(1 for it in items if it["state"] == "done")
@@ -3334,6 +3501,9 @@ def work_area(job, was_running):
             st.markdown(f"**{i}. {short_name(it['name'])}**{tail}")
 
             if it["state"] == "done":
+                # មើលវីដេអូជាមុន មុនទាញយក
+                st.caption("▶️ មើលវីដេអូជាមុន មុនទាញយក")
+                st.video(it["video"])
                 dl_button(
                     "⬇️ ទាញយកវីដេអូនេះ",
                     it["video"],
@@ -3431,30 +3601,44 @@ def download_area(job):
 
 
 def fullscreen_button():
-    """ប៊ូតុងពេញអេក្រង់ (អណ្តែតនៅជ្រុងខាងក្រោមស្តាំ)។"""
+    """
+    ដាក់ប៊ូតុងពេញអេក្រង់ ក្នុងប្រអប់ណែនាំខាងលើ (#kac-fs-slot)។
+    មាន timer ពិនិត្យរាល់ ០.៨ វិនាទី ដើម្បីដាក់ឡើងវិញ បើអេក្រង់ត្រូវបានគូរឡើងវិញ។
+    """
     components.html(
         """
         <script>
         (function () {
           try {
-            const doc = window.parent.document;
-            if (doc.getElementById('kac-fs')) return;
-            const b = doc.createElement('button');
-            b.id = 'kac-fs';
-            b.textContent = '⛶ ពេញអេក្រង់';
-            b.style.cssText =
-              'position:fixed;right:16px;bottom:16px;z-index:99999;' +
-              'padding:6px 12px;border-radius:12px;opacity:.85;' +
-              'border:1px solid #2c3a8f;background:#10174a;' +
-              'color:#e8ecff;font-size:12px;cursor:pointer;' +
-              'box-shadow:0 4px 18px rgba(0,0,0,.45);font-family:inherit;';
-            b.setAttribute(
-              'onclick',
-              "var d=document;" +
-              "if(d.fullscreenElement){d.exitFullscreen();}" +
-              "else{d.documentElement.requestFullscreen();}"
-            );
-            doc.body.appendChild(b);
+            var win = window.parent;
+            var doc = win.document;
+
+            function make() {
+              try {
+                var slot = doc.getElementById('kac-fs-slot');
+                if (!slot || doc.getElementById('kac-fs')) return;
+                var b = doc.createElement('button');
+                b.id = 'kac-fs';
+                b.textContent = '⛶ ពេញអេក្រង់';
+                b.style.cssText =
+                  'padding:8px 16px;border-radius:12px;' +
+                  'border:1px solid #5b92ff;' +
+                  'background:linear-gradient(180deg,#3b78ff,#2457e6);' +
+                  'color:#ffffff;font-size:14px;font-weight:700;' +
+                  'cursor:pointer;font-family:inherit;';
+                b.setAttribute(
+                  'onclick',
+                  "var d=document;" +
+                  "if(d.fullscreenElement){d.exitFullscreen();}" +
+                  "else{d.documentElement.requestFullscreen();}"
+                );
+                slot.appendChild(b);
+              } catch (e) {}
+            }
+
+            make();
+            if (win.__kacFsTimer) win.clearInterval(win.__kacFsTimer);
+            win.__kacFsTimer = win.setInterval(make, 800);
           } catch (e) {}
         })();
         </script>
@@ -3486,6 +3670,20 @@ st.markdown(
     "</div>",
     unsafe_allow_html=True,
 )
+
+# ប្រអប់ណែនាំ + ប៊ូតុងពេញអេក្រង់ (នៅខាងលើ)
+st.markdown(
+    '<div class="tip">'
+    '<div class="tip-t">💡 <b>ណែនាំ៖</b> ចុចប៊ូតុង <b>«ពេញអេក្រង់»</b> '
+    "ដើម្បីបើកកម្មវិធីឱ្យធំពេញអេក្រង់ ស្រួលមើល និងស្រួលប្រើ។ "
+    "ចុចម្តងទៀត ឬចុច <b>Esc</b> ដើម្បីចេញ។ "
+    "ពេលវីដេអូរួចរាល់ អ្នកអាច <b>មើលវីដេអូជាមុន</b> "
+    "មុនចុចទាញយក។</div>"
+    '<div id="kac-fs-slot"></div>'
+    "</div>",
+    unsafe_allow_html=True,
+)
+fullscreen_button()
 
 # បង្កើត ZIP តែម្តង ពេលរួចទាំងអស់
 job = st.session_state.get("job")
@@ -3613,7 +3811,7 @@ with tab_home:
             if engine_label == ENGINE_FREE:
                 st.caption(
                     "ឥតគិតថ្លៃ និងលឿន។ ការបកប្រែតាម Google Translate "
-                    "អាចមិនទន់ភ្លន់ដូច Gemini ទេ។"
+                    "នឹងត្រូវ AI កែឱ្យជាភាសានិយាយធម្មជាតិ និងខ្លីល្មមនិយាយទាន់ម៉ោង។"
                 )
 
         # ---------- រៀបចំបញ្ជីវីដេអូ ----------
@@ -3752,6 +3950,10 @@ with tab_home:
                 keep_bg = st.checkbox(
                     "រក្សាសំឡេងដើមតិចៗ",
                     key="keep_bg",
+                )
+                st.caption(
+                    "សំឡេងអាននឹងត្រូវតាមម៉ោងវីដេអូដើម៖ ឃ្លាណាវែងពេក "
+                    "AI នឹងនិយាយឱ្យខ្លីជាភាសាមនុស្សពិត ហើយបង្កើនល្បឿនបន្តិចបើចាំបាច់។"
                 )
 
 # ---------- ចាប់ផ្តើមការងារ ----------
@@ -3936,12 +4138,14 @@ with tab_help:
         f"""
 **របៀបប្រើ**
 
-1. នៅទំព័រដើម ជ្រើស **Upload** (ឯកសារ) **Link** (តំណ) ឬ **Batch** (ច្រើនវីដេអូ)
-2. ជ្រើសគុណភាព ភាសាក្នុងវីដេអូ និងម៉ាស៊ីនបកប្រែ
-3. កំណត់អក្សរ៖ ទំហំ គែម ពុម្ពអក្សរ ពណ៌ និងទីតាំង (មើលជាមុនបានភ្លាមៗ)
-4. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing**
-5. ចុច **ចាប់ផ្តើមដំណើរការ** ហើយរង់ចាំ
-6. ពេលរួច ចុចប៊ូតុង **ទាញយកវីដេអូ** នៅក្រោម «កំពុងដំណើរការ» ភ្លាម (ឬនៅផ្ទាំង **វីដេអូខ្ញុំ** ក៏បាន)
+1. ចុចប៊ូតុង **ពេញអេក្រង់** នៅខាងលើ ដើម្បីមើលកម្មវិធីឱ្យធំ (ចុច Esc ដើម្បីចេញ)
+2. នៅទំព័រដើម ជ្រើស **Upload** (ឯកសារ) **Link** (តំណ) ឬ **Batch** (ច្រើនវីដេអូ)
+3. ជ្រើសគុណភាព ភាសាក្នុងវីដេអូ និងម៉ាស៊ីនបកប្រែ
+4. កំណត់អក្សរ៖ ទំហំ គែម ពុម្ពអក្សរ ពណ៌ និងទីតាំង (មើលជាមុនបានភ្លាមៗ)
+5. ចង់បានសំឡេងអានខ្មែរ ដាក់ ✔ ត្រង់ **Dubbing**
+6. ចុច **ចាប់ផ្តើមដំណើរការ** ហើយរង់ចាំ
+7. ពេលរួច **មើលវីដេអូជាមុន** នៅក្រោម «កំពុងដំណើរការ» ភ្លាម
+   រួចចុចប៊ូតុង **ទាញយកវីដេអូ** (ឬនៅផ្ទាំង **វីដេអូខ្ញុំ** ក៏បាន)
 
 **ដែនកំណត់**
 
@@ -3953,11 +4157,9 @@ with tab_help:
 
 - បើអ៊ីនធឺណិតយឺត សូមប្រើវីដេអូតូច ឬជម្រើស Link
 - បើលទ្ធផលបកប្រែមិនត្រឹមត្រូវ សូមជ្រើសភាសាក្នុងវីដេអូឱ្យជាក់លាក់
+- ការបកប្រែត្រូវបានកែឱ្យជាភាសានិយាយធម្មជាតិ ដូចមនុស្សខ្មែរនិយាយពិត
+  ហើយខ្លីល្មមនិយាយទាន់ម៉ោងវីដេអូដើម
 - ពុម្ពអក្សរបែបសិល្បៈ (Moul, Bayon, Fasthand...) សមសម្រាប់ចំណងជើង
   តែអាចអានពិបាកជាអក្សររត់
 """
     )
-
-# ---------- ចុងបញ្ចប់ ----------
-
-fullscreen_button()
