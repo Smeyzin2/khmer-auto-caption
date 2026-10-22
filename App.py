@@ -27,14 +27,14 @@ from google import genai
 from google.genai import types
 
 st.set_page_config(
-    page_title="បកប្រែរឿងមកនិយាយភាសាខ្មែរ",
-    page_icon="🎬",
+    page_title="áž”áž€áž”áŸ’ážšáŸ‚ážšáž¿áž„áž˜áž€áž“áž·áž™áž¶áž™áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš",
+    page_icon="ðŸŽ¬",
     layout="wide",
     initial_sidebar_state="collapsed",
 )
 
 # =====================================================================
-#  THEME (ស្បែកថ្មី v2)
+#  THEME (ážŸáŸ’áž”áŸ‚áž€ážáŸ’áž˜áž¸ v2)
 # =====================================================================
 for _k, _v in {
     "theme.base": "dark",
@@ -327,7 +327,7 @@ hr { border-color: var(--line) !important; margin: 1.2rem 0 !important; }
 }
 .kac-stage .cap { position: relative; z-index: 2; width: 100%; text-align: center; font-weight: 800; line-height: 1.3; }
 
-/* ---------- ទូរសព្ទ៖ រក្សា layout ដូច PC ---------- */
+/* ---------- áž‘áž¼ážšážŸáž–áŸ’áž‘áŸ– ážšáž€áŸ’ážŸáž¶ layout ážŠáž¼áž… PC ---------- */
 @media (max-width: 1100px) {
   [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; }
   [data-testid="stColumn"], [data-testid="column"] { min-width: 0 !important; }
@@ -339,13 +339,13 @@ hr { border-color: var(--line) !important; margin: 1.2rem 0 !important; }
   .kac-rotate { display: none !important; }
 }
 
-/* ---------- កែបញ្ហាមាតិកាមិនពេញអេក្រង់ ---------- */
+/* ---------- áž€áŸ‚áž”áž‰áŸ’áž áž¶áž˜áž¶ážáž·áž€áž¶áž˜áž·áž“áž–áŸáž‰áž¢áŸáž€áŸ’ážšáž„áŸ‹ ---------- */
 [data-testid="stAppViewContainer"], [data-testid="stMain"] {
   overflow-y: auto !important;
 }
 html, body { min-height: 100%; background: var(--bg) !important; }
 
-/* ---------- ផ្ទៃខាងក្រោយទឹកសមុទ្រ ---------- */
+/* ---------- áž•áŸ’áž‘áŸƒážáž¶áž„áž€áŸ’ážšáŸ„áž™áž‘áž¹áž€ážŸáž˜áž»áž‘áŸ’ážš ---------- */
 html, body, .stApp, [data-testid="stAppViewContainer"] {
   background: linear-gradient(180deg,#0E6BA0 0%,#0A4F82 30%,#073862 65%,#031D3A 100%) !important;
 }
@@ -372,7 +372,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"] {
 }
 @keyframes rise { to { transform: translateY(-110vh) translateX(18px); opacity: 0; } }
 
-/* ប្រអប់ថ្លាបន្តិច ឲ្យឃើញទឹកពីក្រោយ ហើយអានអក្សរបានច្បាស់ */
+/* áž”áŸ’ážšáž¢áž”áŸ‹ážáŸ’áž›áž¶áž”áž“áŸ’ážáž·áž… áž²áŸ’áž™ážƒáž¾áž‰áž‘áž¹áž€áž–áž¸áž€áŸ’ážšáŸ„áž™ áž áž¾áž™áž¢áž¶áž“áž¢áž€áŸ’ážŸážšáž”áž¶áž“áž…áŸ’áž”áž¶ážŸáŸ‹ */
 div[data-testid="stVerticalBlockBorderWrapper"] {
   background: rgba(8,28,64,.80) !important; backdrop-filter: blur(6px);
 }
@@ -387,7 +387,7 @@ def apply_theme():
 
 DAILY_TOKENS = 10000
 TOKEN_COST = 10
-TOKEN_TZ = datetime.timezone(datetime.timedelta(hours=7))  # ម៉ោងកម្ពុជា
+TOKEN_TZ = datetime.timezone(datetime.timedelta(hours=7))  # áž˜áŸ‰áŸ„áž„áž€áž˜áŸ’áž–áž»áž‡áž¶
 TOKEN_FILE = os.path.join(tempfile.gettempdir(), "kac_tokens.json")
 _token_lock = threading.Lock()
 
@@ -405,7 +405,7 @@ def get_user_id():
 
 
 def sync_browser_id(uid):
-    """ចងចាំលេខកូដអ្នកប្រើក្នុង browser (localStorage) ដើម្បីកុំឱ្យអូសកម្មវិធីចោលរួច Token ត្រឡប់មកវិញ"""
+    """áž…áž„áž…áž¶áŸ†áž›áŸážáž€áž¼ážŠáž¢áŸ’áž“áž€áž”áŸ’ážšáž¾áž€áŸ’áž“áž»áž„ browser (localStorage) ážŠáž¾áž˜áŸ’áž”áž¸áž€áž»áŸ†áž±áŸ’áž™áž¢áž¼ážŸáž€áž˜áŸ’áž˜ážœáž·áž’áž¸áž…áŸ„áž›ážšáž½áž… Token ážáŸ’ážšáž¡áž”áŸ‹áž˜áž€ážœáž·áž‰"""
     js = """
     <script>
     (function () {
@@ -537,31 +537,31 @@ def render_token_bar(uid):
         f"""
         <div class="kac-token">
           <div class="bal">
-            <span class="coin">🪙</span>
+            <span class="coin">ðŸª™</span>
             <span>{balance:,}</span>
             <span class="lbl">/ {DAILY_TOKENS:,} Token</span>
           </div>
-          <div class="cost">១ វីដេអូ = {TOKEN_COST} Token</div>
+          <div class="cost">áŸ¡ ážœáž¸ážŠáŸáž¢áž¼ = {TOKEN_COST} Token</div>
         </div>
         """,
         unsafe_allow_html=True,
     )
-    st.caption(f"Token ថ្ងៃនេះ។ ស្អែកវានឹងត្រឡប់មក {DAILY_TOKENS:,} វិញដោយស្វ័យប្រវត្តិ។")
+    st.caption(f"Token ážáŸ’áž„áŸƒáž“áŸáŸ‡áŸ” ážŸáŸ’áž¢áŸ‚áž€ážœáž¶áž“áž¹áž„ážáŸ’ážšáž¡áž”áŸ‹áž˜áž€ {DAILY_TOKENS:,} ážœáž·áž‰ážŠáŸ„áž™ážŸáŸ’ážœáŸáž™áž”áŸ’ážšážœážáŸ’ážáž·áŸ”")
     if is_admin():
-        st.caption(f"🔐 (ម្ចាស់ប៉ុណ្ណោះ) 🎬 ថ្ងៃនេះមានគេបង្កើតវីដេអូសរុប {today_stats()['videos']:,}")
+        st.caption(f"ðŸ” (áž˜áŸ’áž…áž¶ážŸáŸ‹áž”áŸ‰áž»ážŽáŸ’ážŽáŸ„áŸ‡) ðŸŽ¬ ážáŸ’áž„áŸƒáž“áŸáŸ‡áž˜áž¶áž“áž‚áŸáž”áž„áŸ’áž€áž¾ážážœáž¸ážŠáŸáž¢áž¼ážŸážšáž»áž” {today_stats()['videos']:,}")
 
 
 def render_hero(max_videos=5):
     st.markdown(
         f"""
         <div class="kac-hero">
-          <h1>បកប្រែរឿងមកនិយាយភាសាខ្មែរ</h1>
-          <p>ដាក់វីដេអូភាសាអ្វីក៏បាន ទទួលបានអក្សររត់ជាភាសាខ្មែរដោយស្វ័យប្រវត្តិ
-             (រហូតដល់ {max_videos} វីដេអូស្មើគ្នា)</p>
+          <h1>áž”áž€áž”áŸ’ážšáŸ‚ážšáž¿áž„áž˜áž€áž“áž·áž™áž¶áž™áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš</h1>
+          <p>ážŠáž¶áž€áŸ‹ážœáž¸ážŠáŸáž¢áž¼áž—áž¶ážŸáž¶áž¢áŸ’ážœáž¸áž€áŸáž”áž¶áž“ áž‘áž‘áž½áž›áž”áž¶áž“áž¢áž€áŸ’ážŸážšážšážáŸ‹áž‡áž¶áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážšážŠáŸ„áž™ážŸáŸ’ážœáŸáž™áž”áŸ’ážšážœážáŸ’ážáž·
+             (ážšáž áž¼ážážŠáž›áŸ‹ {max_videos} ážœáž¸ážŠáŸáž¢áž¼ážŸáŸ’áž˜áž¾áž‚áŸ’áž“áž¶)</p>
           <div class="kac-pills">
-            <span>🎙 ស្តាប់ និងបកប្រែ</span>
-            <span>🗣 សំឡេងអានខ្មែរ</span>
-            <span>🎭 អារម្មណ៍ក្នុងសំឡេង</span>
+            <span>ðŸŽ™ ážŸáŸ’ážáž¶áž”áŸ‹ áž“áž·áž„áž”áž€áž”áŸ’ážšáŸ‚</span>
+            <span>ðŸ—£ ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“ážáŸ’áž˜áŸ‚ážš</span>
+            <span>ðŸŽ­ áž¢áž¶ážšáž˜áŸ’áž˜ážŽáŸáž€áŸ’áž“áž»áž„ážŸáŸ†áž¡áŸáž„</span>
           </div>
         </div>
         """,
@@ -572,19 +572,19 @@ def render_hero(max_videos=5):
 apply_theme()
 
 # ---------------------------------------------------------------------
-#  ផ្ទៃខាងក្រោយទឹកសមុទ្រ + សត្វសមុទ្រហែល
+#  áž•áŸ’áž‘áŸƒážáž¶áž„áž€áŸ’ážšáŸ„áž™áž‘áž¹áž€ážŸáž˜áž»áž‘áŸ’ážš + ážŸážáŸ’ážœážŸáž˜áž»áž‘áŸ’ážšáž áŸ‚áž›
 # ---------------------------------------------------------------------
 import random as _rnd
 
 
 def render_sea():
-    creatures = ["🐟", "🐠", "🐡", "🐙", "🐢", "🐬", "🦑", "🦀", "🐟", "🐠"]
+    creatures = ["ðŸŸ", "ðŸ ", "ðŸ¡", "ðŸ™", "ðŸ¢", "ðŸ¬", "ðŸ¦‘", "ðŸ¦€", "ðŸŸ", "ðŸ "]
     parts = ['<div class="kac-sea"><div class="light"></div>']
     for i, c in enumerate(creatures):
         top = _rnd.randint(12, 88)
         size = _rnd.choice([1.6, 2.0, 2.4, 3.0])
         dur = _rnd.randint(22, 45)
-        delay = -_rnd.randint(0, dur)  # ចាប់ផ្ដើមពាសពេញអេក្រង់តាំងពីដំបូង
+        delay = -_rnd.randint(0, dur)  # áž…áž¶áž”áŸ‹áž•áŸ’ážŠáž¾áž˜áž–áž¶ážŸáž–áŸáž‰áž¢áŸáž€áŸ’ážšáž„áŸ‹ážáž¶áŸ†áž„áž–áž¸ážŠáŸ†áž”áž¼áž„
         bob = _rnd.randint(3, 6)
         parts.append(
             f'<div class="swim" style="top:{top}%;animation-duration:{dur}s;'
@@ -656,16 +656,16 @@ PREFERRED_MODELS = [
 
 GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
 
-# ពុម្ពអក្សរខ្មែរដែលអាចជ្រើសបាន៖ ឈ្មោះបង្ហាញ -> (ឈ្មោះឯកសារ, [ផ្លូវទាញយក...], ឈ្មោះ Font)
+# áž–áž»áž˜áŸ’áž–áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážšážŠáŸ‚áž›áž¢áž¶áž…áž‡áŸ’ážšáž¾ážŸáž”áž¶áž“áŸ– ážˆáŸ’áž˜áŸ„áŸ‡áž”áž„áŸ’áž áž¶áž‰ -> (ážˆáŸ’áž˜áŸ„áŸ‡áž¯áž€ážŸáž¶ážš, [áž•áŸ’áž›áž¼ážœáž‘áž¶áž‰áž™áž€...], ážˆáŸ’áž˜áŸ„áŸ‡ Font)
 FONT_CHOICES = {
-    "Battambang (ស្តង់ដារ)": ("Battambang.ttf", ["battambang/Battambang-Regular.ttf"], "Battambang"),
+    "Battambang (ážŸáŸ’ážáž„áŸ‹ážŠáž¶ážš)": ("Battambang.ttf", ["battambang/Battambang-Regular.ttf"], "Battambang"),
     "Content": ("Content.ttf", ["content/Content-Regular.ttf"], "Content"),
     "Siemreap": ("Siemreap.ttf", ["siemreap/Siemreap-Regular.ttf"], "Siemreap"),
     "Bokor": ("Bokor.ttf", ["bokor/Bokor-Regular.ttf"], "Bokor"),
     "Hanuman": ("Hanuman.ttf", ["hanuman/Hanuman-Regular.ttf", "hanuman/Hanuman%5Bwght%5D.ttf"], "Hanuman"),
     "Nokora": ("Nokora.ttf", ["nokora/Nokora-Regular.ttf"], "Nokora"),
-    "Koulen (ក្រាស់)": ("Koulen.ttf", ["koulen/Koulen-Regular.ttf"], "Koulen"),
-    "Moul (ចម្លាក់)": ("Moul.ttf", ["moul/Moul-Regular.ttf"], "Moul"),
+    "Koulen (áž€áŸ’ážšáž¶ážŸáŸ‹)": ("Koulen.ttf", ["koulen/Koulen-Regular.ttf"], "Koulen"),
+    "Moul (áž…áž˜áŸ’áž›áž¶áž€áŸ‹)": ("Moul.ttf", ["moul/Moul-Regular.ttf"], "Moul"),
     "Moulpali": ("Moulpali.ttf", ["moulpali/Moulpali-Regular.ttf"], "Moulpali"),
     "Dangrek": ("Dangrek.ttf", ["dangrek/Dangrek-Regular.ttf"], "Dangrek"),
     "Suwannaphum": ("Suwannaphum.ttf", ["suwannaphum/Suwannaphum-Regular.ttf"], "Suwannaphum"),
@@ -674,30 +674,30 @@ FONT_CHOICES = {
     "Bayon": ("Bayon.ttf", ["bayon/Bayon-Regular.ttf"], "Bayon"),
     "Angkor": ("Angkor.ttf", ["angkor/Angkor-Regular.ttf"], "Angkor"),
     "Metal": ("Metal.ttf", ["metal/Metal-Regular.ttf"], "Metal"),
-    "Freehand (ដៃសរសេរ)": ("Freehand.ttf", ["freehand/Freehand-Regular.ttf"], "Freehand"),
-    "Fasthand (ដៃសរសេរ)": ("Fasthand.ttf", ["fasthand/Fasthand-Regular.ttf"], "Fasthand"),
+    "Freehand (ážŠáŸƒážŸážšážŸáŸážš)": ("Freehand.ttf", ["freehand/Freehand-Regular.ttf"], "Freehand"),
+    "Fasthand (ážŠáŸƒážŸážšážŸáŸážš)": ("Fasthand.ttf", ["fasthand/Fasthand-Regular.ttf"], "Fasthand"),
     "Odor Mean Chey": ("OdorMeanChey.ttf", ["odormeanchey/OdorMeanChey-Regular.ttf"], "Odor Mean Chey"),
     "Preahvihear": ("Preahvihear.ttf", ["preahvihear/Preahvihear-Regular.ttf"], "Preahvihear"),
 }
-DEFAULT_FONT = "Battambang (ស្តង់ដារ)"
+DEFAULT_FONT = "Battambang (ážŸáŸ’ážáž„áŸ‹ážŠáž¶ážš)"
 FONT_BACKUP = [DEFAULT_FONT, "Content", "Siemreap"]
 
 QUALITY = {
-    "⚡ លឿន": (480, 28, "ultrafast"),
-    "✨ ល្អ (ណែនាំ)": (720, 24, "veryfast"),
-    "💎 គុណភាពខ្ពស់": (0, 20, "veryfast"),
+    "âš¡ áž›áž¿áž“": (480, 28, "ultrafast"),
+    "âœ¨ áž›áŸ’áž¢ (ážŽáŸ‚áž“áž¶áŸ†)": (720, 24, "veryfast"),
+    "ðŸ’Ž áž‚áž»ážŽáž—áž¶áž–ážáŸ’áž–ážŸáŸ‹": (0, 20, "veryfast"),
 }
 
 LANGUAGES = {
-    "🌐 ស្វ័យប្រវត្តិ (ភាសាអ្វីក៏បាន)": None,
-    "ខ្មែរ": "Khmer", "អង់គ្លេស": "English", "ថៃ": "Thai",
-    "វៀតណាម": "Vietnamese", "ចិន": "Chinese", "ជប៉ុន": "Japanese",
-    "កូរ៉េ": "Korean", "បារាំង": "French",
+    "ðŸŒ ážŸáŸ’ážœáŸáž™áž”áŸ’ážšážœážáŸ’ážáž· (áž—áž¶ážŸáž¶áž¢áŸ’ážœáž¸áž€áŸáž”áž¶áž“)": None,
+    "ážáŸ’áž˜áŸ‚ážš": "Khmer", "áž¢áž„áŸ‹áž‚áŸ’áž›áŸážŸ": "English", "ážáŸƒ": "Thai",
+    "ážœáŸ€ážážŽáž¶áž˜": "Vietnamese", "áž…áž·áž“": "Chinese", "áž‡áž”áŸ‰áž»áž“": "Japanese",
+    "áž€áž¼ážšáŸ‰áŸ": "Korean", "áž”áž¶ážšáž¶áŸ†áž„": "French",
 }
 
 TTS_VOICES = {
-    "ស្រី (Sreymom)": "km-KH-SreymomNeural",
-    "ប្រុស (Piseth)": "km-KH-PisethNeural",
+    "ážŸáŸ’ážšáž¸ (Sreymom)": "km-KH-SreymomNeural",
+    "áž”áŸ’ážšáž»ážŸ (Piseth)": "km-KH-PisethNeural",
 }
 
 
@@ -710,12 +710,12 @@ def friendly_message(error):
         return str(error)
     low = str(error).lower()
     if "429" in low or "resource_exhausted" in low or "quota" in low:
-        return "មានអ្នកប្រើច្រើនពេក។ សូមរង់ចាំមួយភ្លែត។"
+        return "áž˜áž¶áž“áž¢áŸ’áž“áž€áž”áŸ’ážšáž¾áž…áŸ’ážšáž¾áž“áž–áŸáž€áŸ” ážŸáž¼áž˜ážšáž„áŸ‹áž…áž¶áŸ†áž˜áž½áž™áž—áŸ’áž›áŸ‚ážáŸ”"
     if any(x in low for x in ("503", "unavailable", "high demand", "overloaded", "timeout", "timed out")):
-        return "ប្រព័ន្ធ AI កំពុងរវល់។ សូមសាកម្តងទៀត។"
+        return "áž”áŸ’ážšáž–áŸáž“áŸ’áž’ AI áž€áŸ†áž–áž»áž„ážšážœáž›áŸ‹áŸ” ážŸáž¼áž˜ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€ážáŸ”"
     if "api key" in low or "api_key" in low or "permission" in low:
-        return "សេវា AI មានបញ្ហា។ សូមទាក់ទងម្ចាស់កម្មវិធី។"
-    return "ការបង្កើតវីដេអូមិនបានសម្រេច។ សូមសាកម្តងទៀត។"
+        return "ážŸáŸážœáž¶ AI áž˜áž¶áž“áž”áž‰áŸ’áž áž¶áŸ” ážŸáž¼áž˜áž‘áž¶áž€áŸ‹áž‘áž„áž˜áŸ’áž…áž¶ážŸáŸ‹áž€áž˜áŸ’áž˜ážœáž·áž’áž¸áŸ”"
+    return "áž€áž¶ážšáž”áž„áŸ’áž€áž¾ážážœáž¸ážŠáŸáž¢áž¼áž˜áž·áž“áž”áž¶áž“ážŸáž˜áŸ’ážšáŸáž…áŸ” ážŸáž¼áž˜ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€ážáŸ”"
 
 
 def fix_khmer(text):
@@ -778,7 +778,7 @@ def run_ffmpeg(args, cwd=None, verbose=False, env=None):
         )
     except subprocess.CalledProcessError as e:
         err = (e.stderr or b"").decode("utf-8", "ignore")[-1500:]
-        raise RuntimeError("FFmpeg បរាជ័យ:\n" + err)
+        raise RuntimeError("FFmpeg áž”ážšáž¶áž‡áŸáž™:\n" + err)
     return (result.stderr or b"").decode("utf-8", "ignore")
 
 
@@ -791,7 +791,7 @@ def probe_media(path):
     err = result.stderr
     match = re.search(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)", err)
     if not match:
-        raise UserError("មិនអាចអានឯកសារនេះបានទេ។")
+        raise UserError("áž˜áž·áž“áž¢áž¶áž…áž¢áž¶áž“áž¯áž€ážŸáž¶ážšáž“áŸáŸ‡áž”áž¶áž“áž‘áŸáŸ”")
     h, m, s = match.groups()
     duration = int(h) * 3600 + int(m) * 60 + float(s)
     width, height = 16, 9
@@ -818,7 +818,7 @@ def time_ass(seconds):
 
 @st.cache_resource(show_spinner=False)
 def load_font_bytes(choice=DEFAULT_FONT):
-    """ទាញ Font ដែលបានជ្រើសមកមុន រួចទាញ Font បម្រុង (ប្រើពេល Font ដែលជ្រើសមិនដំណើរការ)"""
+    """áž‘áž¶áž‰ Font ážŠáŸ‚áž›áž”áž¶áž“áž‡áŸ’ážšáž¾ážŸáž˜áž€áž˜áž»áž“ ážšáž½áž…áž‘áž¶áž‰ Font áž”áž˜áŸ’ážšáž»áž„ (áž”áŸ’ážšáž¾áž–áŸáž› Font ážŠáŸ‚áž›áž‡áŸ’ážšáž¾ážŸáž˜áž·áž“ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš)"""
     if choice not in FONT_CHOICES:
         choice = DEFAULT_FONT
     order = [choice] + [k for k in FONT_BACKUP if k != choice]
@@ -841,7 +841,7 @@ def load_font_bytes(choice=DEFAULT_FONT):
         if len(out) >= 3:
             break
     if not out:
-        raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
+        raise RuntimeError("áž‘áž¶áž‰áž™áž€ Font ážáŸ’áž˜áŸ‚ážšáž˜áž·áž“áž”áž¶áž“áŸ”")
     return out
 
 
@@ -939,7 +939,7 @@ def download_tiktok(url, path, progress):
     try:
         import yt_dlp
     except Exception:
-        raise UserError("មិនទាន់បានដំឡើង yt-dlp ទេ។ សូមបន្ថែម yt-dlp ក្នុង requirements.txt។")
+        raise UserError("áž˜áž·áž“áž‘áž¶áž“áŸ‹áž”áž¶áž“ážŠáŸ†áž¡áž¾áž„ yt-dlp áž‘áŸáŸ” ážŸáž¼áž˜áž”áž“áŸ’ážáŸ‚áž˜ yt-dlp áž€áŸ’áž“áž»áž„ requirements.txtáŸ”")
     limit = MAX_DOWNLOAD_MB * 1024 * 1024
     folder = os.path.dirname(path)
     out_tpl = os.path.join(folder, "tt_download.%(ext)s")
@@ -969,13 +969,13 @@ def download_tiktok(url, path, progress):
             info = ydl.extract_info(url, download=True)
             got = ydl.prepare_filename(info)
     except Exception:
-        raise UserError("ទាញយកវីដេអូ TikTok មិនបានទេ។ សូមពិនិត្យតំណ ឬសាកម្តងទៀត។")
+        raise UserError("áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼ TikTok áž˜áž·áž“áž”áž¶áž“áž‘áŸáŸ” ážŸáž¼áž˜áž–áž·áž“áž·ážáŸ’áž™ážáŸ†ážŽ áž¬ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€ážáŸ”")
     if not got or not os.path.exists(got):
         import glob
         found = glob.glob(os.path.join(folder, "tt_download.*"))
         got = found[0] if found else None
     if not got or os.path.getsize(got) < 1000:
-        raise UserError("ទាញយកវីដេអូ TikTok មិនបានទេ។")
+        raise UserError("áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼ TikTok áž˜áž·áž“áž”áž¶áž“áž‘áŸáŸ”")
     shutil.move(got, path)
     progress.progress(1.0)
 
@@ -990,7 +990,7 @@ def download_video(url, path, progress):
         with urllib.request.urlopen(request, timeout=30) as response:
             ctype = (response.headers.get("Content-Type") or "").lower()
             if "text/html" in ctype:
-                raise UserError("តំណនេះមិនមែនជាវីដេអូផ្ទាល់ទេ។")
+                raise UserError("ážáŸ†ážŽáž“áŸáŸ‡áž˜áž·áž“áž˜áŸ‚áž“áž‡áž¶ážœáž¸ážŠáŸáž¢áž¼áž•áŸ’áž‘áž¶áž›áŸ‹áž‘áŸáŸ”")
             total = int(response.headers.get("Content-Length") or 0)
             done = 0
             with open(path, "wb") as f:
@@ -1001,15 +1001,15 @@ def download_video(url, path, progress):
                     f.write(chunk)
                     done += len(chunk)
                     if done > limit:
-                        raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
+                        raise UserError(f"ážœáž¸ážŠáŸáž¢áž¼áž’áŸ†áž‡áž¶áž„ {MAX_DOWNLOAD_MB}MBáŸ”")
                     if total:
                         progress.progress(min(1.0, done / total))
     except UserError:
         raise
     except Exception:
-        raise UserError("ទាញយកវីដេអូពីតំណមិនបានទេ។")
+        raise UserError("áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼áž–áž¸ážáŸ†ážŽáž˜áž·áž“áž”áž¶áž“áž‘áŸáŸ”")
     if os.path.getsize(path) < 1000:
-        raise UserError("ទាញយកវីដេអូមិនបាន។")
+        raise UserError("áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼áž˜áž·áž“áž”áž¶áž“áŸ”")
     progress.progress(1.0)
 
 
@@ -1021,7 +1021,7 @@ def extract_audio(video_path, audio_path, master_path):
             "-vn", "-ac", "1", "-ar", "16000", "-c:a", "flac", master_path,
         ])
     except RuntimeError:
-        raise UserError("មិនអាចដកសំឡេងពីវីដេអូនេះបានទេ។")
+        raise UserError("áž˜áž·áž“áž¢áž¶áž…ážŠáž€ážŸáŸ†áž¡áŸáž„áž–áž¸ážœáž¸ážŠáŸáž¢áž¼áž“áŸáŸ‡áž”áž¶áž“áž‘áŸáŸ”")
 
 
 def get_available_models(client):
@@ -1092,7 +1092,7 @@ def plain_to_segments(text, duration):
     text = fix_khmer(text)
     if not text:
         return []
-    sentences = [fix_khmer(p) for p in re.split(r"(?<=[។.!?])\s+|\n+", text) if fix_khmer(p)]
+    sentences = [fix_khmer(p) for p in re.split(r"(?<=[áŸ”.!?])\s+|\n+", text) if fix_khmer(p)]
     if not sentences:
         return [(0.0, max(duration, 0.4), text)]
     total = sum(max(1, len(p)) for p in sentences)
@@ -1212,7 +1212,7 @@ def build_captions(segments, duration):
             cur += d
     if not items:
         return [], ""
-    return items, "តាមម៉ោងពី AI (កែតម្រឹមតាមសំឡេង)"
+    return items, "ážáž¶áž˜áž˜áŸ‰áŸ„áž„áž–áž¸ AI (áž€áŸ‚ážáž˜áŸ’ážšáž¹áž˜ážáž¶áž˜ážŸáŸ†áž¡áŸáž„)"
 
 
 def write_ass(path, captions, font_family, font_size, outline_size, primary_color, width, height, alignment=2):
@@ -1256,7 +1256,7 @@ class Reporter:
         self.item = item
     def _check(self):
         if self.item.get("cancel"):
-            raise UserError("បានបោះបង់ដោយអ្នកប្រើ។")
+            raise UserError("áž”áž¶áž“áž”áŸ„áŸ‡áž”áž„áŸ‹ážŠáŸ„áž™áž¢áŸ’áž“áž€áž”áŸ’ážšáž¾áŸ”")
     def write(self, message):
         self._check()
         self.item["stage"] = message
@@ -1287,12 +1287,12 @@ def call_with_retry(client, model, prompt, audio_bytes, mime, config, status):
             quota = "429" in low or "resource_exhausted" in low
             if busy and attempt < 2:
                 wait = 4 * (attempt + 1)
-                status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
+                status.write("áž”áŸ’ážšáž–áŸáž“áŸ’áž’ážšážœáž›áŸ‹áž”áž“áŸ’ážáž·áž… áž€áŸ†áž–áž»áž„ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€áž...")
                 dbg(status, f"[{model}] busy, wait {wait}s")
                 time.sleep(wait)
                 continue
             if quota and attempt < 1:
-                status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
+                status.write("áž”áŸ’ážšáž–áŸáž“áŸ’áž’ážšážœáž›áŸ‹áž”áž“áŸ’ážáž·áž… áž€áŸ†áž–áž»áž„ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€áž...")
                 dbg(status, f"[{model}] quota, wait 20s")
                 time.sleep(20)
                 continue
@@ -1394,7 +1394,7 @@ def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_lan
     weak = None
     for model in models:
         for config in configs:
-            dbg(status, f"កំពុងសាកម៉ូដែល {model}...")
+            dbg(status, f"áž€áŸ†áž–áž»áž„ážŸáž¶áž€áž˜áŸ‰áž¼ážŠáŸ‚áž› {model}...")
             try:
                 response = call_with_retry(client, model, prompt, audio_bytes, mime, config, status)
             except Exception as e:
@@ -1414,14 +1414,14 @@ def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_lan
                 kept = [s for s in segments if has_khmer(s[2])]
                 if kept and (weak is None or len(kept) > len(weak[0])):
                     weak = (kept, model)
-                errors.append(f"{model}: មិនមែនអក្សរខ្មែរ")
+                errors.append(f"{model}: áž˜áž·áž“áž˜áŸ‚áž“áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážš")
                 break
             if is_empty_json(raw):
                 return [], model, []
             plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
             if plain and has_khmer(plain):
                 return plain_to_segments(plain, clip_duration), model, errors
-            errors.append(f"{model}: មិនមានអត្ថបទ")
+            errors.append(f"{model}: áž˜áž·áž“áž˜áž¶áž“áž¢ážáŸ’ážáž”áž‘")
             break
     if weak:
         return weak[0], weak[1], errors
@@ -1432,21 +1432,21 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
     client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
     models = get_available_models(client)
     if not models:
-        raise RuntimeError("API Key មើលមិនឃើញម៉ូដែលណាមួយទេ។ api key")
-    dbg(status, "ម៉ូដែលដែលរកឃើញ: " + ", ".join(models))
+        raise RuntimeError("API Key áž˜áž¾áž›áž˜áž·áž“ážƒáž¾áž‰áž˜áŸ‰áž¼ážŠáŸ‚áž›ážŽáž¶áž˜áž½áž™áž‘áŸáŸ” api key")
+    dbg(status, "áž˜áŸ‰áž¼ážŠáŸ‚áž›ážŠáŸ‚áž›ážšáž€ážƒáž¾áž‰: " + ", ".join(models))
     chunks = plan_chunks(duration, speech or [])
     total = len(chunks)
     folder = os.path.dirname(audio_path)
     base = os.path.basename(audio_path)
     done_counter = {"n": 0}
-    dbg(status, f"បែងចែកជា {total} ផ្នែក")
+    dbg(status, f"áž”áŸ‚áž„áž…áŸ‚áž€áž‡áž¶ {total} áž•áŸ’áž“áŸ‚áž€")
     def work(i, start, end):
         out_name = f"chunk_{i}.flac"
         run_ffmpeg(["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", base, "-c:a", "flac", out_name], cwd=folder)
         with open(os.path.join(folder, out_name), "rb") as f:
             data = f.read()
         if len(data) > 15 * 1024 * 1024:
-            raise UserError("សំឡេងធំពេក។")
+            raise UserError("ážŸáŸ†áž¡áŸáž„áž’áŸ†áž–áŸáž€áŸ”")
 
         # Retry a failed/empty chunk before declaring part of the video lost.
         segs, model, errors = [], None, []
@@ -1468,13 +1468,13 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
                 last_error = str(e)
             if attempt < 2:
                 wait = 2 * (attempt + 1)
-                status.write(f"ផ្នែក {i + 1} បកមិនបាន កំពុងសាកម្ដងទៀត ({attempt + 2}/3)...")
+                status.write(f"áž•áŸ’áž“áŸ‚áž€ {i + 1} áž”áž€áž˜áž·áž“áž”áž¶áž“ áž€áŸ†áž–áž»áž„ážŸáž¶áž€áž˜áŸ’ážŠáž„áž‘áŸ€áž ({attempt + 2}/3)...")
                 time.sleep(wait)
         if not segs and last_error:
             errors = list(errors or []) + [f"chunk {i + 1}: {last_error}"]
         done_counter["n"] += 1
         if total > 1:
-            status.write(f"៣/៤ កំពុងស្តាប់ និងបកប្រែ... ({done_counter['n']}/{total})")
+            status.write(f"áŸ£/áŸ¤ áž€áŸ†áž–áž»áž„ážŸáŸ’ážáž¶áž”áŸ‹ áž“áž·áž„áž”áž€áž”áŸ’ážšáŸ‚... ({done_counter['n']}/{total})")
         return start, segs, model, errors
     all_segments = []
     used_models = []
@@ -1507,8 +1507,8 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
                 fatal_errors.extend(errors)
     if not all_segments:
         if fatal_errors:
-            raise RuntimeError("ម៉ូដែលទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(fatal_errors))
-        raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
+            raise RuntimeError("áž˜áŸ‰áž¼ážŠáŸ‚áž›áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹áž”ážšáž¶áž‡áŸáž™áŸ”\n\n" + "\n\n".join(fatal_errors))
+        raise UserError("ážšáž€áž˜áž·áž“ážƒáž¾áž‰ážŸáŸ†áž¡áŸáž„áž“áž·áž™áž¶áž™áž€áŸ’áž“áž»áž„ážœáž¸ážŠáŸáž¢áž¼áž“áŸáŸ‡áž‘áŸáŸ”")
     all_segments.sort(key=lambda x: x[0])
     main_model = Counter(used_models).most_common(1)[0][0]
     return all_segments, main_model, failed
@@ -1565,14 +1565,14 @@ def groq_transcribe(api_key, audio_path, language, status):
                 last = e
                 text = str(e)
                 if ("429" in text or "503" in text) and attempt == 0:
-                    status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
+                    status.write("áž”áŸ’ážšáž–áŸáž“áŸ’áž’ážšážœáž›áŸ‹áž”áž“áŸ’ážáž·áž… áž€áŸ†áž–áž»áž„ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€áž...")
                     time.sleep(12)
                     continue
                 break
             except Exception as e:
                 last = e
                 break
-    raise last or RuntimeError("Groq បរាជ័យ: មិនដឹងមូលហេតុ")
+    raise last or RuntimeError("Groq áž”ážšáž¶áž‡áŸáž™: áž˜áž·áž“ážŠáž¹áž„áž˜áž¼áž›áž áŸážáž»")
 
 
 def _google_once(text):
@@ -1600,14 +1600,17 @@ def google_translate_request(text, retries=3):
 
 
 def clean_translation(out):
+    """Normalize Khmer translation; do not erase foreign words to fake a Khmer result."""
     out = str(out or "")
-    # Remove accidental source-language fragments so subtitle output stays Khmer-only.
     out = CJK_RE.sub("", out)
-    out = re.sub(r"[A-Za-z]+(?:[’'-][A-Za-z]+)*", "", out)
     out = fix_khmer(out)
-    out = re.sub(r"\\s+([។.!?,៖])", r"\\1", out)
-    out = re.sub(r"\\s{2,}", " ", out).strip()
-    return out or None
+    out = re.sub(r"\s+([áŸ”.!?,áŸ–])", r"\1", out)
+    out = re.sub(r"\s{2,}", " ", out).strip()
+    # Reject English/source-language output so it can be retried instead of
+    # silently deleting words and leaving an incomplete subtitle.
+    if not out or not has_khmer(out) or re.search(r"[A-Za-z]", out):
+        return None
+    return out
 
 
 def http_detail(e):
@@ -1651,7 +1654,7 @@ def groq_translate_chunk(api_key, texts):
     good = _groq_chat_cache["good"]
     if good in models:
         models = [good] + [m for m in models if m != good]
-    last = "មិនមានម៉ូដែល"
+    last = "áž˜áž·áž“áž˜áž¶áž“áž˜áŸ‰áž¼ážŠáŸ‚áž›"
     for model in models[:6]:
         body = json.dumps({
             "model": model, "temperature": 0.2,
@@ -1664,8 +1667,8 @@ def groq_translate_chunk(api_key, texts):
                     "sense. Translate the intended meaning and emotional tone, NOT the source-language grammar "
                     "or word order. Avoid stiff calques and textbook Khmer. Convert idioms and figurative threats "
                     "into expressions a Cambodian viewer immediately understands. Example: 'Today I will grind "
-                    "your bones to dust' should sound like a natural Khmer threat, e.g. 'ថ្ងៃនេះ ខ្ញុំនឹងកម្ទេច "
-                    "ឆ្អឹងអ្នកឲ្យម៉ដ្ឋ'—not a word-by-word rendering. Keep lines brief and speakable for dubbing, "
+                    "your bones to dust' should sound like a natural Khmer threat, e.g. 'ážáŸ’áž„áŸƒáž“áŸáŸ‡ ážáŸ’áž‰áž»áŸ†áž“áž¹áž„áž€áž˜áŸ’áž‘áŸáž… "
+                    "áž†áŸ’áž¢áž¹áž„áž¢áŸ’áž“áž€áž²áŸ’áž™áž˜áŸ‰ážŠáŸ’áž‹'â€”not a word-by-word rendering. Keep lines brief and speakable for dubbing, "
                     "but do not remove plot information, negation, names, relationships, or key details. "
                     "Write the ENTIRE output in Khmer script only: never leave English, Chinese, or other "
                     "source-language words in the translation. Transliterate character names and places into "
@@ -1689,7 +1692,7 @@ def groq_translate_chunk(api_key, texts):
                 if len(items) == len(texts):
                     _groq_chat_cache["good"] = model
                     return [clean_translation(x) for x in items]
-                last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                last = f"{model}: áž…áŸ†áž“áž½áž“áž”áž“áŸ’áž‘áž¶ážáŸ‹áž˜áž·áž“ážáŸ’ážšáž¼ážœáž‚áŸ’áž“áž¶"
                 break
             except urllib.error.HTTPError as e:
                 last = f"{model}: {http_detail(e)}"
@@ -1722,8 +1725,9 @@ def translate_texts(texts, groq_key=None):
                 )
                 if len(res) == len(idxs):
                     for i, translated in zip(idxs, res):
-                        if translated and str(translated).strip():
-                            outs[i] = clean_translation(str(translated))
+                        cleaned = clean_translation(translated)
+                        if cleaned:
+                            outs[i] = cleaned
             except Exception as e:
                 errors.append(f"groq-batch: {e}"[:200])
             time.sleep(0.4)
@@ -1733,8 +1737,10 @@ def translate_texts(texts, groq_key=None):
         for i in missing:
             try:
                 res = groq_translate_chunk(groq_key, [str(texts[i]).strip()])
-                if res and res[0] and str(res[0]).strip():
-                    outs[i] = clean_translation(str(res[0]))
+                if res and res[0]:
+                    cleaned = clean_translation(res[0])
+                    if cleaned:
+                        outs[i] = cleaned
             except Exception as e:
                 errors.append(f"groq-single: {e}"[:200])
             time.sleep(0.3)
@@ -1744,11 +1750,26 @@ def translate_texts(texts, groq_key=None):
     for i in missing:
         try:
             translated = google_translate_request(str(texts[i]).replace("\\n", " ").strip(), retries=3)
-            if translated and str(translated).strip():
-                outs[i] = clean_translation(translated)
+            cleaned = clean_translation(translated)
+            if cleaned:
+                outs[i] = cleaned
         except Exception as e:
             errors.append(f"google-single: {e}"[:200])
         time.sleep(0.2)
+
+    # Final AI retry for lines Google returned in the wrong language or failed.
+    missing = [i for i, value in enumerate(outs) if not value]
+    for i in missing:
+        if not groq_key:
+            break
+        try:
+            res = groq_translate_chunk(groq_key, [str(texts[i]).strip()])
+            cleaned = clean_translation(res[0]) if res else None
+            if cleaned:
+                outs[i] = cleaned
+        except Exception as e:
+            errors.append(f"groq-final-retry: {e}"[:200])
+        time.sleep(0.25)
 
     return outs, errors
 
@@ -1838,7 +1859,7 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech, status):
                 out.extend(retime_by_speech([(a, b, text)], speech, duration, pad=0.0))
         except Exception:
             pass
-        status.write(f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({i + 1}/{len(chunks)})")
+        status.write(f"áŸ£/áŸ¤ áž€áŸ†áž–áž»áž„ážŸáŸ’ážáž¶áž”áŸ‹áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš... ({i + 1}/{len(chunks)})")
         wait = 3.2 - (time.time() - t0)
         if wait > 0:
             time.sleep(wait)
@@ -1904,7 +1925,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
             return [], ex_
         finally:
             counter["n"] += 1
-            status.write(f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({counter['n']}/{len(todo)})")
+            status.write(f"áŸ£/áŸ¤ áž€áŸ†áž–áž»áž„ážŸáŸ’ážáž¶áž”áŸ‹áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš... ({counter['n']}/{len(todo)})")
 
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(one, todo))
@@ -1919,7 +1940,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
             out.extend(res)
     if got == 0:
         if errs >= 3:
-            raise RuntimeError("Google Speech បរាជ័យ")
+            raise RuntimeError("Google Speech áž”ážšáž¶áž‡áŸáž™")
         return []
     out.sort(key=lambda x: x[0])
     return out
@@ -1966,7 +1987,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         e = min(max(e, s + 0.4), duration + 0.5)
         keep.append((s, e, text))
     if not keep:
-        raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
+        raise UserError("ážšáž€áž˜áž·áž“ážƒáž¾áž‰ážŸáŸ†áž¡áŸáž„áž“áž·áž™áž¶áž™áž€áŸ’áž“áž»áž„ážœáž¸ážŠáŸáž¢áž¼áž“áŸáŸ‡áž‘áŸáŸ”")
     failed = 0
     is_khmer = detected in ("khmer", "km") or source_language == "Khmer"
     if is_khmer:
@@ -1987,7 +2008,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             segs = [(s, e, fix_khmer(t)) for s, e, t in keep if has_khmer(t)]
             segs = retime_by_speech(segs, speech, duration)
     else:
-        status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
+        status.write("áŸ£/áŸ¤ áž€áŸ†áž–áž»áž„áž”áž€áž”áŸ’ážšáŸ‚áž‡áž¶áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš...")
         outs, errs = translate_texts([t for _, _, t in keep], groq_key)
         segs = []
         for (s, e, _), out in zip(keep, outs):
@@ -1996,10 +2017,10 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             else:
                 failed += 1
         if not segs or failed > len(keep) * 0.5:
-            reason = " | ".join(errs[:2]) or "មិនស្គាល់មូលហេតុ"
-            raise RuntimeError("ការបកប្រែបរាជ័យ។ " f"(ស្តាប់បាន {len(keep)} ឃ្លា បកបាន {len(segs)}) " f"មូលហេតុ: {reason}")
+            reason = " | ".join(errs[:2]) or "áž˜áž·áž“ážŸáŸ’áž‚áž¶áž›áŸ‹áž˜áž¼áž›áž áŸážáž»"
+            raise RuntimeError("áž€áž¶ážšáž”áž€áž”áŸ’ážšáŸ‚áž”ážšáž¶áž‡áŸáž™áŸ” " f"(ážŸáŸ’ážáž¶áž”áŸ‹áž”áž¶áž“ {len(keep)} ážƒáŸ’áž›áž¶ áž”áž€áž”áž¶áž“ {len(segs)}) " f"áž˜áž¼áž›áž áŸážáž»: {reason}")
     if not segs:
-        raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
+        raise UserError("ážšáž€áž˜áž·áž“ážƒáž¾áž‰áž¢ážáŸ’ážáž”áž‘ážáŸ’áž˜áŸ‚ážšáž€áŸ’áž“áž»áž„ážŸáŸ†áž¡áŸáž„áž“áŸáŸ‡áž‘áŸáŸ”")
     segs.sort(key=lambda x: x[0])
     return segs, f"Groq {model} + Translate", failed
 
@@ -2146,7 +2167,7 @@ def gender_timeline(pcm, duration, default_voice, sr=16000, tracks=None):
     info = {"times": times, "f0": f0, "rms": rms, "summary": ""}
     mask = f0 > 0
     if int(mask.sum()) < 25:
-        info["summary"] = "វាស់កម្រិតសំឡេងមិនបាន ប្រើសំឡេងដែលបានជ្រើស"
+        info["summary"] = "ážœáž¶ážŸáŸ‹áž€áž˜áŸ’ážšáž·ážážŸáŸ†áž¡áŸáž„áž˜áž·áž“áž”áž¶áž“ áž”áŸ’ážšáž¾ážŸáŸ†áž¡áŸáž„ážŠáŸ‚áž›áž”áž¶áž“áž‡áŸ’ážšáž¾ážŸ"
         return None, info
     tv = times[mask]
     hz = f0[mask]
@@ -2189,12 +2210,12 @@ def gender_timeline(pcm, duration, default_voice, sr=16000, tracks=None):
             single = "F"
         else:
             single = "M" if default_voice == VOICE_MALE else "F"
-            info["summary"] = f"កម្រិតសំឡេង ~{int(med)}Hz មិនច្បាស់ ប្រើសំឡេងដែលបានជ្រើស"
-    names = {"M": "ប្រុស", "F": "ស្រី"}
+            info["summary"] = f"áž€áž˜áŸ’ážšáž·ážážŸáŸ†áž¡áŸáž„ ~{int(med)}Hz áž˜áž·áž“áž…áŸ’áž”áž¶ážŸáŸ‹ áž”áŸ’ážšáž¾ážŸáŸ†áž¡áŸáž„ážŠáŸ‚áž›áž”áž¶áž“áž‡áŸ’ážšáž¾ážŸ"
+    names = {"M": "áž”áŸ’ážšáž»ážŸ", "F": "ážŸáŸ’ážšáž¸"}
     if not two:
         med = float(np.median(hz))
         if not info["summary"]:
-            info["summary"] = f"ស្គាល់ឃើញអ្នកនិយាយ ១ នាក់៖ {names[single]} (~{int(med)}Hz)"
+            info["summary"] = f"ážŸáŸ’áž‚áž¶áž›áŸ‹ážƒáž¾áž‰áž¢áŸ’áž“áž€áž“áž·áž™áž¶áž™ áŸ¡ áž“áž¶áž€áŸ‹áŸ– {names[single]} (~{int(med)}Hz)"
         return [(0.0, duration + 1.0, single)], info
     nb = int(duration / BIN) + 2
     isf = np.where(hi, 1 if g1 == "F" else 0, 1 if g0 == "F" else 0)
@@ -2231,9 +2252,9 @@ def gender_timeline(pcm, duration, default_voice, sr=16000, tracks=None):
     hz_m = hz0 if g0 == "M" else hz1
     hz_f = hz0 if g0 == "F" else hz1
     info["summary"] = (
-        "ស្គាល់ឃើញអ្នកនិយាយ ២ នាក់៖ "
-        f"ប្រុស (~{int(hz_m)}Hz) និងស្រី (~{int(hz_f)}Hz) "
-        f"ប្តូរអ្នកនិយាយ {len(runs) - 1} ដង"
+        "ážŸáŸ’áž‚áž¶áž›áŸ‹ážƒáž¾áž‰áž¢áŸ’áž“áž€áž“áž·áž™áž¶áž™ áŸ¢ áž“áž¶áž€áŸ‹áŸ– "
+        f"áž”áŸ’ážšáž»ážŸ (~{int(hz_m)}Hz) áž“áž·áž„ážŸáŸ’ážšáž¸ (~{int(hz_f)}Hz) "
+        f"áž”áŸ’ážáž¼ážšáž¢áŸ’áž“áž€áž“áž·áž™áž¶áž™ {len(runs) - 1} ážŠáž„"
     )
     return [(a, b, g) for a, b, g in runs], info
 
@@ -2301,12 +2322,12 @@ def plan_dub_voices(segments, pcm, default_voice, duration, tracks=None):
     lines = []
     for a, b, t, v in dub:
         hz = median_pitch(info, a, b)
-        mark = "♂" if v == VOICE_MALE else "♀"
+        mark = "â™‚" if v == VOICE_MALE else "â™€"
         lines.append(f"{mark} {int(hz) if hz else '?'}Hz  {t}")
     return dub, lines, info, runs
 
 
-# ---- កែតម្រឹមសំឡេងឱ្យជិតសំឡេងដើម តែតិចតួចប៉ុណ្ណោះ ដើម្បីកុំឱ្យស្តាប់មិនធម្មតា ----
+# ---- áž€áŸ‚ážáž˜áŸ’ážšáž¹áž˜ážŸáŸ†áž¡áŸáž„áž±áŸ’áž™áž‡áž·ážážŸáŸ†áž¡áŸáž„ážŠáž¾áž˜ ážáŸ‚ážáž·áž…ážáž½áž…áž”áŸ‰áž»ážŽáŸ’ážŽáŸ„áŸ‡ ážŠáž¾áž˜áŸ’áž”áž¸áž€áž»áŸ†áž±áŸ’áž™ážŸáŸ’ážáž¶áž”áŸ‹áž˜áž·áž“áž’áž˜áŸ’áž˜ážáž¶ ----
 MATCH_MIN = 0.92
 MATCH_MAX = 1.10
 
@@ -2384,7 +2405,7 @@ EMO_LABELS = ["neutral", "happy", "excited", "angry", "sad", "fear", "whisper"]
 EMO_HIGH = ("happy", "excited", "angry", "fear")
 EMO_LOW = ("sad", "whisper")
 
-# អារម្មណ៍ស្រាលៗ ដើម្បីឱ្យសំឡេង AI នៅតែស្តាប់ទៅធម្មតា (rate %, pitch Hz, volume %)
+# áž¢áž¶ážšáž˜áŸ’áž˜ážŽáŸážŸáŸ’ážšáž¶áž›áŸ— ážŠáž¾áž˜áŸ’áž”áž¸áž±áŸ’áž™ážŸáŸ†áž¡áŸáž„ AI áž“áŸ…ážáŸ‚ážŸáŸ’ážáž¶áž”áŸ‹áž‘áŸ…áž’áž˜áŸ’áž˜ážáž¶ (rate %, pitch Hz, volume %)
 EMO_PRESETS = {
     "neutral": (0, 0, 0), "happy": (3, 4, 2), "excited": (6, 6, 5),
     "angry": (4, 2, 8), "sad": (-5, -4, -6), "fear": (4, 6, -2),
@@ -2392,9 +2413,9 @@ EMO_PRESETS = {
 }
 
 EMO_NAMES = {
-    "neutral": "😐 ធម្មតា", "happy": "😊 សប្បាយ", "excited": "🤩 រំភើប",
-    "angry": "😠 ខឹង", "sad": "😢 ក្រៀមក្រំ", "fear": "😨 ភ័យ",
-    "whisper": "🤫 ខ្សឹប",
+    "neutral": "ðŸ˜ áž’áž˜áŸ’áž˜ážáž¶", "happy": "ðŸ˜Š ážŸáž”áŸ’áž”áž¶áž™", "excited": "ðŸ¤© ážšáŸ†áž—áž¾áž”",
+    "angry": "ðŸ˜  ážáž¹áž„", "sad": "ðŸ˜¢ áž€áŸ’ážšáŸ€áž˜áž€áŸ’ážšáŸ†", "fear": "ðŸ˜¨ áž—áŸáž™",
+    "whisper": "ðŸ¤« ážáŸ’ážŸáž¹áž”",
 }
 
 EMO_SYSTEM = (
@@ -2417,7 +2438,7 @@ def groq_emotion_chunk(api_key, texts):
     good = _groq_chat_cache["good"]
     if good in models:
         models = [good] + [m for m in models if m != good]
-    last = "មិនមានម៉ូដែល"
+    last = "áž˜áž·áž“áž˜áž¶áž“áž˜áŸ‰áž¼ážŠáŸ‚áž›"
     for model in models[:6]:
         body = json.dumps({
             "model": model, "temperature": 0,
@@ -2441,7 +2462,7 @@ def groq_emotion_chunk(api_key, texts):
                 if len(items) == len(texts):
                     _groq_chat_cache["good"] = model
                     return [norm_emotion(x) for x in items]
-                last = f"{model}: ចំនួនមិនត្រូវគ្នា"
+                last = f"{model}: áž…áŸ†áž“áž½áž“áž˜áž·áž“ážáŸ’ážšáž¼ážœáž‚áŸ’áž“áž¶"
                 break
             except urllib.error.HTTPError as e:
                 last = f"{model}: {http_detail(e)}"
@@ -2551,14 +2572,14 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
         text_label = labels[i] if labels else None
         result.append(combine_emotion(text_label, arousal))
     counts = Counter(lab for lab, _ in result)
-    source = ("តាមអត្ថបទ + សំឡេងដើម" if labels and have_audio else "តាមអត្ថបទតែប៉ុណ្ណោះ" if labels else "តាមសំឡេងដើមតែប៉ុណ្ណោះ" if have_audio else "មិនមានទិន្នន័យ")
-    summary = (f"🎭 អារម្មណ៍ ({source})៖ " + " · ".join(f"{EMO_NAMES[k]} {counts[k]}" for k in EMO_LABELS if counts.get(k)))
+    source = ("ážáž¶áž˜áž¢ážáŸ’ážáž”áž‘ + ážŸáŸ†áž¡áŸáž„ážŠáž¾áž˜" if labels and have_audio else "ážáž¶áž˜áž¢ážáŸ’ážáž”áž‘ážáŸ‚áž”áŸ‰áž»ážŽáŸ’ážŽáŸ„áŸ‡" if labels else "ážáž¶áž˜ážŸáŸ†áž¡áŸáž„ážŠáž¾áž˜ážáŸ‚áž”áŸ‰áž»ážŽáŸ’ážŽáŸ„áŸ‡" if have_audio else "áž˜áž·áž“áž˜áž¶áž“áž‘áž·áž“áŸ’áž“áž“áŸáž™")
+    summary = (f"ðŸŽ­ áž¢áž¶ážšáž˜áŸ’áž˜ážŽáŸ ({source})áŸ– " + " Â· ".join(f"{EMO_NAMES[k]} {counts[k]}" for k in EMO_LABELS if counts.get(k)))
     lines = [summary]
     shown = 0
     for (lab, inten), text in zip(result, texts):
         if lab == "neutral":
             continue
-        lines.append(f"{EMO_NAMES[lab]} ×{inten:.1f}  {text}")
+        lines.append(f"{EMO_NAMES[lab]} Ã—{inten:.1f}  {text}")
         shown += 1
         if shown >= 40:
             break
@@ -2630,7 +2651,7 @@ def eleven_sts(key, voice_id, path):
             with _eleven_sem:
                 out = _eleven_call(key, url, body, ctype, timeout=120)
             if len(out) < 500:
-                raise RuntimeError("ElevenLabs ឆ្លើយតបទទេ")
+                raise RuntimeError("ElevenLabs áž†áŸ’áž›áž¾áž™ážáž”áž‘áž‘áŸ")
             with open(path, "wb") as f:
                 f.write(out)
             return
@@ -2654,7 +2675,7 @@ EQ_CENTERS = [150, 250, 400, 630, 1000, 1600, 2500, 4000, 6300]
 
 
 def band_levels(pcm, sr=16000):
-    """វាស់ 'ពណ៌សំឡេង' ជាកម្រិត dB ក្នុងចន្លោះប្រេកង់ ៩ (ឥតគិតថ្លៃ គ្មាន API)"""
+    """ážœáž¶ážŸáŸ‹ 'áž–ážŽáŸŒážŸáŸ†áž¡áŸáž„' áž‡áž¶áž€áž˜áŸ’ážšáž·áž dB áž€áŸ’áž“áž»áž„áž…áž“áŸ’áž›áŸ„áŸ‡áž”áŸ’ážšáŸáž€áž„áŸ‹ áŸ© (áž¥ážáž‚áž·ážážáŸ’áž›áŸƒ áž‚áŸ’áž˜áž¶áž“ API)"""
     import numpy as np
     n = 1024
     if pcm is None or len(pcm) < n * 8:
@@ -2689,7 +2710,7 @@ def eq_filters(ref, tts, limit=4.0):
 
 
 def merge_for_dub(segments, max_chars=80, max_gap=0.6, max_len=8.0):
-    """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូនដូចមនុស្សនិយាយ មិនកាត់ៗ"""
+    """áž”áž‰áŸ’áž…áž¼áž›ážƒáŸ’áž›áž¶ážáŸ’áž›áž¸áŸ—áž‡áž¶áž”áŸ‹áž‚áŸ’áž“áž¶áž‡áž¶áž”áŸ’ážšáž™áŸ„áž‚ážœáŸ‚áž„ ážŠáž¾áž˜áŸ’áž”áž¸áž±áŸ’áž™ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“ážšáž›áž¼áž“ážŠáž¼áž…áž˜áž“áž»ážŸáŸ’ážŸáž“áž·áž™áž¶áž™ áž˜áž·áž“áž€áž¶ážáŸ‹áŸ—"""
     out = []
     for s, e, t in segments:
         if out:
@@ -2745,9 +2766,9 @@ def shorten_groq(api_key, text, max_seconds):
     return text
 
 
-BG_VOLUME = 0.07
+BG_VOLUME = 0.04
 
-# ល្បឿនអានធម្មតា៖ មិនឱ្យលឿនពេក ឬយឺតពេក
+# áž›áŸ’áž”áž¿áž“áž¢áž¶áž“áž’áž˜áŸ’áž˜ážáž¶áŸ– áž˜áž·áž“áž±áŸ’áž™áž›áž¿áž“áž–áŸáž€ áž¬áž™ážºážáž–áŸáž€
 SPEED_MIN = 0.95
 SPEED_MAX = 1.4
 
@@ -2783,7 +2804,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     def gen(i):
         s_, e_, t_ = segments[i]
         next_s_ = segments[i + 1][0] if i + 1 < n_seg else duration
-        # ទុកពេលឱ្យអានបានយូរជាងមុន ដើម្បីកុំចាំបាច់បង្កើនល្បឿន
+        # áž‘áž»áž€áž–áŸáž›áž±áŸ’áž™áž¢áž¶áž“áž”áž¶áž“áž™áž¼ážšáž‡áž¶áž„áž˜áž»áž“ ážŠáž¾áž˜áŸ’áž”áž¸áž€áž»áŸ†áž…áž¶áŸ†áž”áž¶áž…áŸ‹áž”áž„áŸ’áž€áž¾áž“áž›áŸ’áž”áž¿áž“
         slot0 = max(0.8, min(next_s_ - 0.05, e_ + 0.8) - s_)
         path_ = os.path.join(folder, f"tts_{i}.mp3")
         try:
@@ -2828,10 +2849,10 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 if eqs:
                     voice_eq[v_] = eqs
         if notes is not None and voice_eq:
-            notes.append("🎚 ផ្គូផ្គងពណ៌សំឡេងស្រដៀងសំឡេងគំរូ")
+            notes.append("ðŸŽš áž•áŸ’áž‚áž¼áž•áŸ’áž‚áž„áž–ážŽáŸŒážŸáŸ†áž¡áŸáž„ážŸáŸ’ážšážŠáŸ€áž„ážŸáŸ†áž¡áŸáž„áž‚áŸ†ážšáž¼")
     if notes is not None and clone_voice:
-        notes.append(f"🧑‍🎤 ក្លូនសំឡេងបាន {clone_stats['ok']}/{n_seg} ឃ្លា"
-                     + (f" (បរាជ័យ: {clone_stats['err']})" if clone_stats["fail"] else ""))
+        notes.append(f"ðŸ§‘â€ðŸŽ¤ áž€áŸ’áž›áž¼áž“ážŸáŸ†áž¡áŸáž„áž”áž¶áž“ {clone_stats['ok']}/{n_seg} ážƒáŸ’áž›áž¶"
+                     + (f" (áž”ážšáž¶áž‡áŸáž™: {clone_stats['err']})" if clone_stats["fail"] else ""))
     cursor = 0.0
     plan = []
     skipped = 0
@@ -2846,7 +2867,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if start >= duration - 0.3:
             break
         slot = max(0.8, min(next_s - 0.05, e + 0.5) - start)
-        # ល្បឿនជិតធម្មតា (១.០) បើវែងពេកទើបបង្កើនបន្តិច មិនលើសកំណត់
+        # áž›áŸ’áž”áž¿áž“áž‡áž·ážáž’áž˜áŸ’áž˜ážáž¶ (áŸ¡.áŸ ) áž”áž¾ážœáŸ‚áž„áž–áŸáž€áž‘áž¾áž”áž”áž„áŸ’áž€áž¾áž“áž”áž“áŸ’ážáž·áž… áž˜áž·áž“áž›áž¾ážŸáž€áŸ†ážŽážáŸ‹
         speed = min(SPEED_MAX, max(SPEED_MIN, d / slot))
         cursor = start + d / speed + 0.12
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
@@ -2854,7 +2875,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
                      "eq": voice_eq.get(voices_[i], "")})
     if notes is not None and skipped:
-        notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
+        notes.append(f"âš ï¸ áž˜áž·áž“áž¢áž¶áž…áž”áž„áŸ’áž€áž¾ážážŸáŸ†áž¡áŸáž„ {skipped} ážƒáŸ’áž›áž¶")
     if not plan:
         return False
     base = {}
@@ -2886,8 +2907,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         n += 1
     if notes is not None:
         for v, (ratios, tgts) in stats.items():
-            who = "ប្រុស" if v == VOICE_MALE else "ស្រី"
-            notes.append(f"🧬 សំឡេង AI {who}៖ ~{int(base[v])}Hz → " f"សំឡេងដើម ~{int(statistics.median(tgts))}Hz " f"(កែ ×{statistics.mean(ratios):.2f})")
+            who = "áž”áŸ’ážšáž»ážŸ" if v == VOICE_MALE else "ážŸáŸ’ážšáž¸"
+            notes.append(f"ðŸ§¬ ážŸáŸ†áž¡áŸáž„ AI {who}áŸ– ~{int(base[v])}Hz â†’ " f"ážŸáŸ†áž¡áŸáž„ážŠáž¾áž˜ ~{int(statistics.median(tgts))}Hz " f"(áž€áŸ‚ Ã—{statistics.mean(ratios):.2f})")
     labels = "[bg]" if keep_bg else ""
     labels += "".join(f"[a{k}]" for k in range(first_voice, n))
     limiter = ",alimiter=limit=0.95" if emotions is not None else ""
@@ -2943,9 +2964,9 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         best = (family, log)
         if ok:
             break
-        dbg(status, f"Font {family} មិនត្រូវបានប្រើ កំពុងសាកវិធីផ្សេង...")
+        dbg(status, f"Font {family} áž˜áž·áž“ážáŸ’ážšáž¼ážœáž”áž¶áž“áž”áŸ’ážšáž¾ áž€áŸ†áž–áž»áž„ážŸáž¶áž€ážœáž·áž’áž¸áž•áŸ’ážŸáŸáž„...")
     if not have_output:
-        raise RuntimeError("Render មិនបាន។\n" + "\n".join(attempts))
+        raise RuntimeError("Render áž˜áž·áž“áž”áž¶áž“áŸ”\n" + "\n".join(attempts))
     with open(output_path, "rb") as f:
         data = f.read()
     return data, best[0], best[1], attempts
@@ -2954,7 +2975,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
 def new_item(name, path=None, url=None):
     return {
         "name": name, "path": path, "url": url, "state": "queued",
-        "stage": "ក្នុងជួររង់ចាំ...", "pct": 0.0, "warn": [], "log": [],
+        "stage": "áž€áŸ’áž“áž»áž„áž‡áž½ážšážšáž„áŸ‹áž…áž¶áŸ†...", "pct": 0.0, "warn": [], "log": [],
         "video": None, "captions": [], "voice_lines": [], "error": None,
         "raw_error": "", "debug": {}, "t0": None, "elapsed": None,
     }
@@ -2974,7 +2995,7 @@ class Job:
 
 
 def engine_name(engine):
-    return "ឥតគិតថ្លៃ (Groq)" if engine == "free" else "Gemini"
+    return "áž¥ážáž‚áž·ážážáŸ’áž›áŸƒ (Groq)" if engine == "free" else "Gemini"
 
 
 def run_worker(job, item, settings, fonts_data):
@@ -2991,23 +3012,23 @@ def run_worker(job, item, settings, fonts_data):
                 item["path"] = None
             else:
                 item["pct"] = 0.03
-                rep.write("កំពុងទាញយកវីដេអូ...")
+                rep.write("áž€áŸ†áž–áž»áž„áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼...")
                 download_video(item["url"], source, rep)
             item["pct"] = 0.12
-            rep.write("១/៤ កំពុងរៀបចំ...")
+            rep.write("áŸ¡/áŸ¤ áž€áŸ†áž–áž»áž„ážšáŸ€áž”áž…áŸ†...")
             fonts = install_fonts(folder, fonts_data)
             _want = settings.get("font_choice", DEFAULT_FONT)
             if settings.get("subs_on", True) and _want in FONT_CHOICES and fonts_data[0][2] != FONT_CHOICES[_want][2]:
-                item["warn"].append(f"ទាញយក Font «{_want}» មិនបាន ប្រើ Font ស្តង់ដារជំនួស។")
+                item["warn"].append(f"áž‘áž¶áž‰áž™áž€ Font Â«{_want}Â» áž˜áž·áž“áž”áž¶áž“ áž”áŸ’ážšáž¾ Font ážŸáŸ’ážáž„áŸ‹ážŠáž¶ážšáž‡áŸ†áž“áž½ážŸáŸ”")
             item["pct"] = 0.18
-            rep.write("២/៤ កំពុងដកសំឡេង...")
+            rep.write("áŸ¢/áŸ¤ áž€áŸ†áž–áž»áž„ážŠáž€ážŸáŸ†áž¡áŸáž„...")
             extract_audio(source, audio_path, master_path)
             duration, vid_w, vid_h = probe_media(source)
             if duration > MAX_DURATION_MIN * 60:
-                raise UserError(f"វីដេអូវែងពេក។ សូមប្រើវីដេអូខ្លីជាង {MAX_DURATION_MIN} នាទី។")
+                raise UserError(f"ážœáž¸ážŠáŸáž¢áž¼ážœáŸ‚áž„áž–áŸáž€áŸ” ážŸáž¼áž˜áž”áŸ’ážšáž¾ážœáž¸ážŠáŸáž¢áž¼ážáŸ’áž›áž¸áž‡áž¶áž„ {MAX_DURATION_MIN} áž“áž¶áž‘áž¸áŸ”")
             speech = detect_speech(master_path, duration)
             item["pct"] = 0.25
-            rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
+            rep.write("áŸ£/áŸ¤ áž€áŸ†áž–áž»áž„ážŸáŸ’ážáž¶áž”áŸ‹ áž“áž·áž„áž”áž€áž”áŸ’ážšáŸ‚áž‡áž¶áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš...")
             order = (["free", "gemini"] if settings["engine"] == "free" else ["gemini", "free"])
             order = [k for k in order if (k == "free" and settings["groq_key"]) or (k == "gemini" and settings["gemini_key"])]
             segments = None
@@ -3029,10 +3050,10 @@ def run_worker(job, item, settings, fonts_data):
                     reason = f"{engine_name(engine)}: {str(e)[:400]}"
                     engine_errors.append(reason)
                     if idx + 1 < len(order):
-                        item["warn"].append("ម៉ាស៊ីនទីមួយមានបញ្ហា កម្មវិធីបានប្តូរទៅម៉ាស៊ីនបម្រុងដោយស្វ័យប្រវត្តិ។" f"\n\nមូលហេតុ → {reason}")
-                        rep.write("កំពុងប្តូរទៅម៉ាស៊ីនបម្រុង...")
+                        item["warn"].append("áž˜áŸ‰áž¶ážŸáŸŠáž¸áž“áž‘áž¸áž˜áž½áž™áž˜áž¶áž“áž”áž‰áŸ’áž áž¶ áž€áž˜áŸ’áž˜ážœáž·áž’áž¸áž”áž¶áž“áž”áŸ’ážáž¼ážšáž‘áŸ…áž˜áŸ‰áž¶ážŸáŸŠáž¸áž“áž”áž˜áŸ’ážšáž»áž„ážŠáŸ„áž™ážŸáŸ’ážœáŸáž™áž”áŸ’ážšážœážáŸ’ážáž·áŸ”" f"\n\náž˜áž¼áž›áž áŸážáž» â†’ {reason}")
+                        rep.write("áž€áŸ†áž–áž»áž„áž”áŸ’ážáž¼ážšáž‘áŸ…áž˜áŸ‰áž¶ážŸáŸŠáž¸áž“áž”áž˜áŸ’ážšáž»áž„...")
             if segments is None:
-                raise UserError("ម៉ាស៊ីនបកប្រែទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(engine_errors))
+                raise UserError("áž˜áŸ‰áž¶ážŸáŸŠáž¸áž“áž”áž€áž”áŸ’ážšáŸ‚áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹áž”ážšáž¶áž‡áŸáž™áŸ”\n\n" + "\n\n".join(engine_errors))
             # Suppress the misleading warning when the video produced usable
             # captions. Empty/silent chunks may be counted by the transcription
             # backend even though the completed result is valid.
@@ -3040,11 +3061,11 @@ def run_worker(job, item, settings, fonts_data):
             segments = snap_segments(segments, speech, duration)
             captions, sync_mode = build_captions(segments, duration)
             if not captions:
-                raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
+                raise UserError("ážšáž€áž˜áž·áž“ážƒáž¾áž‰ážŸáŸ†áž¡áŸáž„áž“áž·áž™áž¶áž™áž€áŸ’áž“áž»áž„ážœáž¸ážŠáŸáž¢áž¼áž“áŸáŸ‡áž‘áŸáŸ”")
             dub_ok = False
             if settings["dub_on"]:
                 item["pct"] = 0.6
-                rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+                rep.write("ðŸŽ™ áž€áŸ†áž–áž»áž„áž”áž„áŸ’áž€áž¾ážážŸáŸ†áž¡áŸáž„ážáŸ’áž˜áŸ‚ážš...")
                 try:
                     client = (genai.Client(api_key=settings["gemini_key"]) if used_engine == "gemini" else None)
                     dub_segments = merge_for_dub(segments)
@@ -3058,7 +3079,7 @@ def run_worker(job, item, settings, fonts_data):
                     need_audio = (settings["auto_gender"] or settings["voice_match"] or settings["emotion"] or settings.get("timbre"))
                     if need_audio:
                         try:
-                            rep.write("🔍 កំពុងវិភាគសំឡេងអ្នកនិយាយដើម...")
+                            rep.write("ðŸ” áž€áŸ†áž–áž»áž„ážœáž·áž—áž¶áž‚ážŸáŸ†áž¡áŸáž„áž¢áŸ’áž“áž€áž“áž·áž™áž¶áž™ážŠáž¾áž˜...")
                             pcm = load_pcm(master_path)
                             tracks = pitch_track(pcm)
                             pitch_inf = {"times": tracks[0], "f0": tracks[1], "rms": tracks[2]}
@@ -3085,24 +3106,24 @@ def run_worker(job, item, settings, fonts_data):
                             voice_notes = []
                             pitch_inf = None
                             runs_ = None
-                            item["warn"].append("វិភាគសំឡេងអ្នកនិយាយមិនបាន ប្រើសំឡេងតែមួយតាមដែលបានជ្រើស។")
+                            item["warn"].append("ážœáž·áž—áž¶áž‚ážŸáŸ†áž¡áŸáž„áž¢áŸ’áž“áž€áž“áž·áž™áž¶áž™áž˜áž·áž“áž”áž¶áž“ áž”áŸ’ážšáž¾ážŸáŸ†áž¡áŸáž„ážáŸ‚áž˜áž½áž™ážáž¶áž˜ážŠáŸ‚áž›áž”áž¶áž“áž‡áŸ’ážšáž¾ážŸáŸ”")
                     if settings["emotion"]:
                         try:
-                            rep.write("🎭 កំពុងវិភាគអារម្មណ៍...")
+                            rep.write("ðŸŽ­ áž€áŸ†áž–áž»áž„ážœáž·áž—áž¶áž‚áž¢áž¶ážšáž˜áŸ’áž˜ážŽáŸ...")
                             emotions, emo_lines = plan_emotions(dub_segments, seg_voices, pitch_inf, runs_, settings["groq_key"], settings["gemini_key"])
                             voice_notes = voice_notes + emo_lines
                         except Exception:
                             emotions = None
-                            item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
+                            item["warn"].append("ážœáž·áž—áž¶áž‚áž¢áž¶ážšáž˜áŸ’áž˜ážŽáŸáž˜áž·áž“áž”áž¶áž“ áž”áŸ’ážšáž¾ážŸáŸ†áž¡áŸáž„áž’áž˜áŸ’áž˜ážáž¶áŸ”")
                     clone_voice = None
                     if settings.get("clone_sample") and settings.get("eleven_key"):
                         try:
-                            rep.write("🧑‍🎤 កំពុងក្លូនសំឡេងគំរូ...")
+                            rep.write("ðŸ§‘â€ðŸŽ¤ áž€áŸ†áž–áž»áž„áž€áŸ’áž›áž¼áž“ážŸáŸ†áž¡áŸáž„áž‚áŸ†ážšáž¼...")
                             clone_voice = eleven_add_voice(settings["eleven_key"], settings["clone_sample"])
                             targets = None
                         except Exception as ce:
-                            item["warn"].append("ក្លូនសំឡេងមិនបាន ប្រើសំឡេង AI ធម្មតា។ មូលហេតុ: " + str(ce)[:200])
-                    rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
+                            item["warn"].append("áž€áŸ’áž›áž¼áž“ážŸáŸ†áž¡áŸáž„áž˜áž·áž“áž”áž¶áž“ áž”áŸ’ážšáž¾ážŸáŸ†áž¡áŸáž„ AI áž’áž˜áŸ’áž˜ážáž¶áŸ” áž˜áž¼áž›áž áŸážáž»: " + str(ce)[:200])
+                    rep.write("ðŸŽ™ áž€áŸ†áž–áž»áž„áž”áž„áŸ’áž€áž¾ážážŸáŸ†áž¡áŸáž„ážáŸ’áž˜áŸ‚ážš...")
                     match_notes = []
                     try:
                         dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, base_rate=settings.get("tts_rate", 0))
@@ -3113,27 +3134,27 @@ def run_worker(job, item, settings, fonts_data):
                 except Exception:
                     dub_ok = False
                 if not dub_ok:
-                    item["warn"].append("បង្កើតសំឡេងអានមិនបានទេ។ វីដេអូមានតែអក្សរ។")
+                    item["warn"].append("áž”áž„áŸ’áž€áž¾ážážŸáŸ†áž¡áŸáž„áž¢áž¶áž“áž˜áž·áž“áž”áž¶áž“áž‘áŸáŸ” ážœáž¸ážŠáŸáž¢áž¼áž˜áž¶áž“ážáŸ‚áž¢áž€áŸ’ážŸážšáŸ”")
             item["pct"] = 0.75
-            rep.write("៤/៤ កំពុងរង់ចាំដាក់អក្សរចូលវីដេអូ...")
+            rep.write("áŸ¤/áŸ¤ áž€áŸ†áž–áž»áž„ážšáž„áŸ‹áž…áž¶áŸ†ážŠáž¶áž€áŸ‹áž¢áž€áŸ’ážŸážšáž…áž¼áž›ážœáž¸ážŠáŸáž¢áž¼...")
             with job.render_slots:
                 item["pct"] = 0.82
-                rep.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
+                rep.write("áŸ¤/áŸ¤ áž€áŸ†áž–áž»áž„ážŠáž¶áž€áŸ‹áž¢áž€áŸ’ážŸážšáž…áž¼áž›ážœáž¸ážŠáŸáž¢áž¼...")
                 video, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, alignment=settings.get("position", 2), subs=settings.get("subs_on", True))
             item["video"] = video
             item["captions"] = [t for _, _, t in captions]
             item["debug"] = {
-                "ម៉ាស៊ីន": used_engine, "ម៉ូដែល": used_model,
-                "ការតម្រឹម": sync_mode, "ផ្នែកបរាជ័យ": failed_chunks,
-                "Font ដែលប្រើ": used_font, "Dubbing": dub_ok,
-                "អ្នកនិយាយ": (item["voice_lines"][0] if item["voice_lines"] else ""),
-                "ទំហំលទ្ធផល": f"{len(video) / (1024 * 1024):.1f}MB",
-                "ការសាក Font": "\n".join(attempts),
+                "áž˜áŸ‰áž¶ážŸáŸŠáž¸áž“": used_engine, "áž˜áŸ‰áž¼ážŠáŸ‚áž›": used_model,
+                "áž€áž¶ážšážáž˜áŸ’ážšáž¹áž˜": sync_mode, "áž•áŸ’áž“áŸ‚áž€áž”ážšáž¶áž‡áŸáž™": failed_chunks,
+                "Font ážŠáŸ‚áž›áž”áŸ’ážšáž¾": used_font, "Dubbing": dub_ok,
+                "áž¢áŸ’áž“áž€áž“áž·áž™áž¶áž™": (item["voice_lines"][0] if item["voice_lines"] else ""),
+                "áž‘áŸ†áž áŸ†áž›áž‘áŸ’áž’áž•áž›": f"{len(video) / (1024 * 1024):.1f}MB",
+                "áž€áž¶ážšážŸáž¶áž€ Font": "\n".join(attempts),
                 "fontselect": "\n".join(line for line in ffmpeg_log.splitlines() if "fontselect" in line.lower())[:1500],
-                "ម៉ោងអក្សរ": "\n".join(f"[{s:.1f}-{e:.1f}] {t}" for s, e, t in captions),
+                "áž˜áŸ‰áŸ„áž„áž¢áž€áŸ’ážŸážš": "\n".join(f"[{s:.1f}-{e:.1f}] {t}" for s, e, t in captions),
             }
             item["pct"] = 1.0
-            item["stage"] = "រួចរាល់"
+            item["stage"] = "ážšáž½áž…ážšáž¶áž›áŸ‹"
             item["elapsed"] = time.time() - item["t0"]
             item["state"] = "done"
     except Exception as error:
@@ -3143,7 +3164,7 @@ def run_worker(job, item, settings, fonts_data):
         item["state"] = "error"
     finally:
         if item["state"] == "running":
-            item["error"] = "ការបង្កើតវីដេអូមិនបានសម្រេច។ សូមសាកម្តងទៀត។"
+            item["error"] = "áž€áž¶ážšáž”áž„áŸ’áž€áž¾ážážœáž¸ážŠáŸáž¢áž¼áž˜áž·áž“áž”áž¶áž“ážŸáž˜áŸ’ážšáŸáž…áŸ” ážŸáž¼áž˜ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€ážáŸ”"
             item["state"] = "error"
         try:
             record_result(item["state"] == "done")
@@ -3183,10 +3204,10 @@ def work_area(job, was_running):
     failed = sum(1 for it in items if it["state"] == "error")
     working = total - done - failed
     c1, c2, c3 = st.columns(3)
-    c1.metric("⏳ កំពុងធ្វើ", working)
-    c2.metric("✅ រួចរាល់", done)
-    c3.metric("❌ បរាជ័យ", failed)
-    st.progress((done + failed) / total, text=f"សរុប {done + failed} / {total}")
+    c1.metric("â³ áž€áŸ†áž–áž»áž„áž’áŸ’ážœáž¾", working)
+    c2.metric("âœ… ážšáž½áž…ážšáž¶áž›áŸ‹", done)
+    c3.metric("âŒ áž”ážšáž¶áž‡áŸáž™", failed)
+    st.progress((done + failed) / total, text=f"ážŸážšáž»áž” {done + failed} / {total}")
     for i, it in enumerate(items, start=1):
         with st.container(border=True):
             left, right = st.columns([4, 1])
@@ -3196,11 +3217,11 @@ def work_area(job, was_running):
                     secs = it["elapsed"]
                 else:
                     secs = time.time() - it["t0"]
-                right.caption(f"⏱ {int(secs)} វិនាទី")
+                right.caption(f"â± {int(secs)} ážœáž·áž“áž¶áž‘áž¸")
             if it["state"] == "done":
-                st.success("✅ រួចរាល់ — ទាញយកបាននៅផ្នែកខាងក្រោម ⬇️")
+                st.success("âœ… ážšáž½áž…ážšáž¶áž›áŸ‹ â€” áž‘áž¶áž‰áž™áž€áž”áž¶áž“áž“áŸ…áž•áŸ’áž“áŸ‚áž€ážáž¶áž„áž€áŸ’ážšáŸ„áž˜ â¬‡ï¸")
             elif it["state"] == "error":
-                st.error(it["error"] or "មិនបានសម្រេច។")
+                st.error(it["error"] or "áž˜áž·áž“áž”áž¶áž“ážŸáž˜áŸ’ážšáŸáž…áŸ”")
                 if DEBUG and it["raw_error"]:
                     st.text(it["raw_error"])
             else:
@@ -3214,30 +3235,30 @@ def work_area(job, was_running):
 def download_area(job):
     done = [(i, it) for i, it in enumerate(job.items, start=1) if it["state"] == "done"]
     if job.zip:
-        dl_button("📦 ទាញយកទាំងអស់ (ZIP)", job.zip, "khmer_videos.zip", "application/zip", key=f"zip_{job.id}", use_container_width=True)
+        dl_button("ðŸ“¦ áž‘áž¶áž‰áž™áž€áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹ (ZIP)", job.zip, "khmer_videos.zip", "application/zip", key=f"zip_{job.id}", use_container_width=True)
     if not done:
-        st.info("វីដេអូណាដែលរួចរាល់ នឹងលេចឡើងនៅទីនេះភ្លាមៗ ហើយអាចទាញយកបានតែម្តង។")
+        st.info("ážœáž¸ážŠáŸáž¢áž¼ážŽáž¶ážŠáŸ‚áž›ážšáž½áž…ážšáž¶áž›áŸ‹ áž“áž¹áž„áž›áŸáž…áž¡áž¾áž„áž“áŸ…áž‘áž¸áž“áŸáŸ‡áž—áŸ’áž›áž¶áž˜áŸ— áž áž¾áž™áž¢áž¶áž…áž‘áž¶áž‰áž™áž€áž”áž¶áž“ážáŸ‚áž˜áŸ’ážáž„áŸ”")
         return
     for i, it in done:
         with st.container(border=True):
             st.markdown(f"**{i}. {it['name']}**")
             st.video(it["video"])
-            dl_button("⬇️ ទាញយកវីដេអូនេះ", it["video"], f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
-            with st.expander("📝 មើលអត្ថបទខ្មែរ"):
+            dl_button("â¬‡ï¸ áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼áž“áŸáŸ‡", it["video"], f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
+            with st.expander("ðŸ“ áž˜áž¾áž›áž¢ážáŸ’ážáž”áž‘ážáŸ’áž˜áŸ‚ážš"):
                 for text in it["captions"]:
                     st.write(text)
             if it.get("voice_lines"):
-                with st.expander("👫 ព័ត៌មានសំឡេងអាន"):
+                with st.expander("ðŸ‘« áž–áŸážáŸŒáž˜áž¶áž“ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“"):
                     for line in it["voice_lines"]:
                         st.write(line)
             if DEBUG:
-                with st.expander("🛠 DEBUG"):
+                with st.expander("ðŸ›  DEBUG"):
                     for key, value in it["debug"].items():
                         st.text(f"{key}: {value}")
                     st.text("\n".join(it["log"][-30:]))
 
 
-# ដាក់តំណវីដេអូ TikTok ដែលអ្នកចង់ឱ្យអ្នកប្រើមើលពេលរង់ចាំ នៅទីនេះ (មួយតំណក្នុងមួយបន្ទាត់)
+# ážŠáž¶áž€áŸ‹ážáŸ†ážŽážœáž¸ážŠáŸáž¢áž¼ TikTok ážŠáŸ‚áž›áž¢áŸ’áž“áž€áž…áž„áŸ‹áž±áŸ’áž™áž¢áŸ’áž“áž€áž”áŸ’ážšáž¾áž˜áž¾áž›áž–áŸáž›ážšáž„áŸ‹áž…áž¶áŸ† áž“áŸ…áž‘áž¸áž“áŸáŸ‡ (áž˜áž½áž™ážáŸ†ážŽáž€áŸ’áž“áž»áž„áž˜áž½áž™áž”áž“áŸ’áž‘áž¶ážáŸ‹)
 TIKTOK_VIDEOS = [
     # "https://www.tiktok.com/@username/video/1234567890123456789",
     # "https://vm.tiktok.com/xxxxxxx/",
@@ -3287,7 +3308,7 @@ def render_tiktok_box():
     ids = tiktok_playlist()
     if not ids:
         if is_admin():
-            st.info("🔐 (ម្ចាស់ប៉ុណ្ណោះ) មិនទាន់មានវីដេអូ TikTok ទេ។ សូមដាក់តំណក្នុង TIKTOK_VIDEOS (ក្នុងកូដ) ឬ TIKTOK_LINKS (ក្នុង Secrets)។")
+            st.info("ðŸ” (áž˜áŸ’áž…áž¶ážŸáŸ‹áž”áŸ‰áž»ážŽáŸ’ážŽáŸ„áŸ‡) áž˜áž·áž“áž‘áž¶áž“áŸ‹áž˜áž¶áž“ážœáž¸ážŠáŸáž¢áž¼ TikTok áž‘áŸáŸ” ážŸáž¼áž˜ážŠáž¶áž€áŸ‹ážáŸ†ážŽáž€áŸ’áž“áž»áž„ TIKTOK_VIDEOS (áž€áŸ’áž“áž»áž„áž€áž¼ážŠ) áž¬ TIKTOK_LINKS (áž€áŸ’áž“áž»áž„ Secrets)áŸ”")
         return
     order = st.session_state.get("tt_order")
     if not order or set(order) != set(ids):
@@ -3295,14 +3316,14 @@ def render_tiktok_box():
         st.session_state["tt_order"] = order
         st.session_state["tt_idx"] = 0
     idx = st.session_state.get("tt_idx", 0) % len(order)
-    with st.expander("🎵 មើល TikTok ពេលរង់ចាំ", expanded=True):
+    with st.expander("ðŸŽµ áž˜áž¾áž› TikTok áž–áŸáž›ážšáž„áŸ‹áž…áž¶áŸ†", expanded=True):
         c1, c2, c3 = st.columns([1, 2, 1])
-        if c1.button("⏮", key="tt_prev", use_container_width=True):
+        if c1.button("â®", key="tt_prev", use_container_width=True):
             idx = (idx - 1) % len(order)
-        if c3.button("⏭ បន្ទាប់", key="tt_next", type="primary", use_container_width=True):
+        if c3.button("â­ áž”áž“áŸ’áž‘áž¶áž”áŸ‹", key="tt_next", type="primary", use_container_width=True):
             idx = (idx + 1) % len(order)
         st.session_state["tt_idx"] = idx
-        c2.caption(f"វីដេអូ {idx + 1} / {len(order)}")
+        c2.caption(f"ážœáž¸ážŠáŸáž¢áž¼ {idx + 1} / {len(order)}")
         components.html(
             f"""
             <div style="display:flex;justify-content:center;">
@@ -3342,15 +3363,15 @@ def scroll_to_downloads():
 
 import html as _html
 
-GEMINI_KEY = ""  # Gemini ត្រូវបានបិទ មិនដំណើរការទេ
+GEMINI_KEY = ""  # Gemini ážáŸ’ážšáž¼ážœáž”áž¶áž“áž”áž·áž‘ áž˜áž·áž“ážŠáŸ†ážŽáž¾ážšáž€áž¶ážšáž‘áŸ
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
 USER_ID = get_user_id()
 sync_browser_id(USER_ID)
 
-# បង្ហាញជាទំព័រ PC លើទូរសព្ទ៖ បង្រួមទាំងមូលតាមទទឹងអេក្រង់ (ដេក និងឈរ)
-# កែ៖ ពេលបង្រួម (zoom) ត្រូវបង្កើនកម្ពស់ឱ្យស្មើ innerHeight / zoom ដើម្បីឱ្យមាតិកាពេញអេក្រង់
+# áž”áž„áŸ’áž áž¶áž‰áž‡áž¶áž‘áŸ†áž–áŸážš PC áž›áž¾áž‘áž¼ážšážŸáž–áŸ’áž‘áŸ– áž”áž„áŸ’ážšáž½áž˜áž‘áž¶áŸ†áž„áž˜áž¼áž›ážáž¶áž˜áž‘áž‘áž¹áž„áž¢áŸáž€áŸ’ážšáž„áŸ‹ (ážŠáŸáž€ áž“áž·áž„ážˆážš)
+# áž€áŸ‚áŸ– áž–áŸáž›áž”áž„áŸ’ážšáž½áž˜ (zoom) ážáŸ’ážšáž¼ážœáž”áž„áŸ’áž€áž¾áž“áž€áž˜áŸ’áž–ážŸáŸ‹áž±áŸ’áž™ážŸáŸ’áž˜áž¾ innerHeight / zoom ážŠáž¾áž˜áŸ’áž”áž¸áž±áŸ’áž™áž˜áž¶ážáž·áž€áž¶áž–áŸáž‰áž¢áŸáž€áŸ’ážšáž„áŸ‹
 components.html(
     """
     <script>
@@ -3392,39 +3413,39 @@ components.html(
 )
 
 if not GROQ_KEY:
-    st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
+    st.error("áž€áž˜áŸ’áž˜ážœáž·áž’áž¸áž˜áž·áž“áž‘áž¶áž“áŸ‹ážšáž½áž…ážšáž¶áž›áŸ‹áž‘áŸáŸ” ážŸáž¼áž˜áž‘áž¶áž€áŸ‹áž‘áž„áž˜áŸ’áž…áž¶ážŸáŸ‹áž€áž˜áŸ’áž˜ážœáž·áž’áž¸áŸ”")
     st.stop()
 
 # ---------------------------------------------------------------------
-#  ជម្រើសផ្សេងៗ
+#  áž‡áž˜áŸ’ážšáž¾ážŸáž•áŸ’ážŸáŸáž„áŸ—
 # ---------------------------------------------------------------------
 PAGE_LABELS = {
-    "home": "🏠 ទំព័រដើម",
-    "sub": "💬 អក្សរខ្មែរ",
-    "dub": "🎙 សំឡេង AI",
-    "batch": "📚 ច្រើនវីដេអូ",
-    "videos": "🎞 វីដេអូខ្ញុំ",
-    "help": "❓ ជំនួយ",
+    "home": "ðŸ  áž‘áŸ†áž–áŸážšážŠáž¾áž˜",
+    "sub": "ðŸ’¬ áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážš",
+    "dub": "ðŸŽ™ ážŸáŸ†áž¡áŸáž„ AI",
+    "batch": "ðŸ“š áž…áŸ’ážšáž¾áž“ážœáž¸ážŠáŸáž¢áž¼",
+    "videos": "ðŸŽž ážœáž¸ážŠáŸáž¢áž¼ážáŸ’áž‰áž»áŸ†",
+    "help": "â“ áž‡áŸ†áž“áž½áž™",
 }
 PAGE_IDS = list(PAGE_LABELS.keys())
 
 COLOR_OPTIONS = {
-    "⚪ ស": ("&H00FFFFFF", "#FFFFFF"),
-    "🟡 លឿង": ("&H0000FFFF", "#FFE600"),
-    "🟢 បៃតង": ("&H0000FF00", "#3DDC64"),
-    "🔵 ខៀវ": ("&H00FF0000", "#3D7BFF"),
-    "🔴 ក្រហម": ("&H000000FF", "#FF4D5E"),
+    "âšª ážŸ": ("&H00FFFFFF", "#FFFFFF"),
+    "ðŸŸ¡ áž›áž¿áž„": ("&H0000FFFF", "#FFE600"),
+    "ðŸŸ¢ áž”áŸƒážáž„": ("&H0000FF00", "#3DDC64"),
+    "ðŸ”µ ážáŸ€ážœ": ("&H00FF0000", "#3D7BFF"),
+    "ðŸ”´ áž€áŸ’ážšáž áž˜": ("&H000000FF", "#FF4D5E"),
 }
-POSITION_OPTIONS = {"⬇ ក្រោម": 2, "⏺ កណ្ដាល": 5, "⬆ លើ": 8}
-MODES = ["📁 Upload · ផ្ទុកវីដេអូ", "🔗 Link · តំណ", "📚 Batch · ច្រើនវីដេអូ"]
+POSITION_OPTIONS = {"â¬‡ áž€áŸ’ážšáŸ„áž˜": 2, "âº áž€ážŽáŸ’ážŠáž¶áž›": 5, "â¬† áž›áž¾": 8}
+MODES = ["ðŸ“ Upload Â· áž•áŸ’áž‘áž»áž€ážœáž¸ážŠáŸáž¢áž¼", "ðŸ”— Link Â· ážáŸ†ážŽ", "ðŸ“š Batch Â· áž…áŸ’ážšáž¾áž“ážœáž¸ážŠáŸáž¢áž¼"]
 VIDEO_TYPES = ["mp4", "mov", "mkv", "avi", "webm"]
 
-ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
-ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
+ENGINE_FREE = "ðŸ†“ áž¥ážáž‚áž·ážážáŸ’áž›áŸƒ (Groq + Google Translate)"
+ENGINE_GEMINI = "âœ¨ Gemini (áž’áž˜áŸ’áž˜áž‡áž¶ážáž·áž‡áž¶áž„ ážáŸ‚áž˜áž¶áž“áž€áž¼ážáž¶)"
 
-# រក្សាតម្លៃការកំណត់ ពេលប្តូរទំព័រ
+# ážšáž€áŸ’ážŸáž¶ážáž˜áŸ’áž›áŸƒáž€áž¶ážšáž€áŸ†ážŽážáŸ‹ áž–áŸáž›áž”áŸ’ážáž¼ážšáž‘áŸ†áž–áŸážš
 SETTING_KEYS = ["fs", "ol", "fc", "pos", "voice", "spd", "qual", "eng", "lang",
-                "auto_gender", "voice_match", "emotion", "keep_bg", "timbre", "subs_on", "font_choice"]
+                "keep_bg", "subs_on", "font_choice"]
 for _k in SETTING_KEYS:
     if _k in st.session_state:
         st.session_state[_k] = st.session_state[_k]
@@ -3441,7 +3462,7 @@ def fmt_mb(n):
 
 
 # ---------------------------------------------------------------------
-#  Sidebar (ម៉ឺនុយ)
+#  Sidebar (áž˜áŸ‰ážºáž“áž»áž™)
 # ---------------------------------------------------------------------
 
 # ---------------------------------------------------------------------
@@ -3449,21 +3470,21 @@ def fmt_mb(n):
 # ---------------------------------------------------------------------
 st.markdown(
     '<div class="kac-hero"><div>'
-    '<h1>បកប្រែរឿងមក<span>និយាយភាសាខ្មែរ</span></h1>'
-    '<p>បង្កើតវីដេអូមានអក្សរខ្មែរ និងសំឡេងអាន AI · ប្រើបានគ្មានដែនកំណត់</p></div>'
+    '<h1>áž”áž€áž”áŸ’ážšáŸ‚ážšáž¿áž„áž˜áž€<span>áž“áž·áž™áž¶áž™áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš</span></h1>'
+    '<p>áž”áž„áŸ’áž€áž¾ážážœáž¸ážŠáŸáž¢áž¼áž˜áž¶áž“áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážš áž“áž·áž„ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“ AI Â· áž”áŸ’ážšáž¾áž”áž¶áž“áž‚áŸ’áž˜áž¶áž“ážŠáŸ‚áž“áž€áŸ†ážŽážáŸ‹</p></div>'
     '<div class="kac-feats">'
-    '<div><i>💬</i><b>Auto Subtitle</b><small>បង្កើតអក្សរខ្មែរ</small></div>'
-    '<div><i>🎙</i><b>AI Dubbing</b><small>បញ្ចូលសំឡេង AI</small></div>'
-    '<div><i>🅰</i><b>Custom Style</b><small>កំណត់ចេស្រស់</small></div>'
-    '<div><i>HD</i><b>High Quality</b><small>គុណភាពខ្ពស់</small></div>'
+    '<div><i>ðŸ’¬</i><b>Auto Subtitle</b><small>áž”áž„áŸ’áž€áž¾ážáž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážš</small></div>'
+    '<div><i>ðŸŽ™</i><b>AI Dubbing</b><small>áž”áž‰áŸ’áž…áž¼áž›ážŸáŸ†áž¡áŸáž„ AI</small></div>'
+    '<div><i>ðŸ…°</i><b>Custom Style</b><small>áž€áŸ†ážŽážáŸ‹áž…áŸážŸáŸ’ážšážŸáŸ‹</small></div>'
+    '<div><i>HD</i><b>High Quality</b><small>áž‚áž»ážŽáž—áž¶áž–ážáŸ’áž–ážŸáŸ‹</small></div>'
     '</div></div>'
-    '<div class="kac-rotate">📱 សូមបង្វិលទូរសព្ទដេក (ផ្ដេក) ដើម្បីប្រើបានស្រួលជាងនេះ</div>',
+    '<div class="kac-rotate">ðŸ“± ážŸáž¼áž˜áž”áž„áŸ’ážœáž·áž›áž‘áž¼ážšážŸáž–áŸ’áž‘ážŠáŸáž€ (áž•áŸ’ážŠáŸáž€) ážŠáž¾áž˜áŸ’áž”áž¸áž”áŸ’ážšáž¾áž”áž¶áž“ážŸáŸ’ážšáž½áž›áž‡áž¶áž„áž“áŸáŸ‡</div>',
     unsafe_allow_html=True,
 )
 
 nav_col, fs_col = st.columns([6, 1])
 with nav_col:
-    page_id = st.radio("ម៉ឺនុយ", PAGE_IDS, format_func=lambda k: PAGE_LABELS[k],
+    page_id = st.radio("áž˜áŸ‰ážºáž“áž»áž™", PAGE_IDS, format_func=lambda k: PAGE_LABELS[k],
                        horizontal=True, label_visibility="collapsed", key="page")
 with fs_col:
     components.html(
@@ -3477,7 +3498,7 @@ with fs_col:
           }
           button:active { background: #2F6BFF; }
         </style>
-        <button id="fs">⛶ ពេញអេក្រង់</button>
+        <button id="fs">â›¶ áž–áŸáž‰áž¢áŸáž€áŸ’ážšáž„áŸ‹</button>
         <script>
           document.getElementById("fs").onclick = function () {
             try {
@@ -3501,11 +3522,11 @@ def section(title, extra=""):
 
 
 # ---------------------------------------------------------------------
-#  បន្ទាត់វីដេអូ (Completed / My Videos)
+#  áž”áž“áŸ’áž‘áž¶ážáŸ‹ážœáž¸ážŠáŸáž¢áž¼ (Completed / My Videos)
 # ---------------------------------------------------------------------
 def video_rows(entries, prefix):
     if not entries:
-        st.info("មិនទាន់មានវីដេអូរួចរាល់ទេ។ វីដេអូណាដែលរួចរាល់ នឹងលេចឡើងនៅទីនេះភ្លាមៗ។")
+        st.info("áž˜áž·áž“áž‘áž¶áž“áŸ‹áž˜áž¶áž“ážœáž¸ážŠáŸáž¢áž¼ážšáž½áž…ážšáž¶áž›áŸ‹áž‘áŸáŸ” ážœáž¸ážŠáŸáž¢áž¼ážŽáž¶ážŠáŸ‚áž›ážšáž½áž…ážšáž¶áž›áŸ‹ áž“áž¹áž„áž›áŸáž…áž¡áž¾áž„áž“áŸ…áž‘áž¸áž“áŸáŸ‡áž—áŸ’áž›áž¶áž˜áŸ—áŸ”")
         return
     for item, owner in entries:
         k = f"{prefix}_{id(item)}"
@@ -3513,18 +3534,18 @@ def video_rows(entries, prefix):
             c_name, c_play, c_dl, c_del = st.columns([3.2, 1.1, 1.5, 0.8])
             secs = int(item.get("elapsed") or 0)
             c_name.markdown(
-                f'<div class="kac-vname">✅ <b>{esc(item["name"])}</b>'
-                f'<small>⏱ {secs} វិនាទី · {fmt_mb(len(item["video"]))}</small></div>',
+                f'<div class="kac-vname">âœ… <b>{esc(item["name"])}</b>'
+                f'<small>â± {secs} ážœáž·áž“áž¶áž‘áž¸ Â· {fmt_mb(len(item["video"]))}</small></div>',
                 unsafe_allow_html=True,
             )
             playing = st.session_state.get(f"play_{k}", False)
-            if c_play.button("⏹ បិទ" if playing else "▶ មើល", key=f"pb_{k}", use_container_width=True):
+            if c_play.button("â¹ áž”áž·áž‘" if playing else "â–¶ áž˜áž¾áž›", key=f"pb_{k}", use_container_width=True):
                 playing = not playing
                 st.session_state[f"play_{k}"] = playing
             with c_dl:
-                dl_button("⬇ ទាញយក", item["video"], f"{safe_filename(item['name'])}_khmer.mp4",
+                dl_button("â¬‡ áž‘áž¶áž‰áž™áž€", item["video"], f"{safe_filename(item['name'])}_khmer.mp4",
                           "video/mp4", key=f"dl_{k}", type="primary", use_container_width=True)
-            if c_del.button("🗑", key=f"del_{k}", use_container_width=True, help="លុបវីដេអូនេះ"):
+            if c_del.button("ðŸ—‘", key=f"del_{k}", use_container_width=True, help="áž›áž»áž”ážœáž¸ážŠáŸáž¢áž¼áž“áŸáŸ‡"):
                 try:
                     owner.remove(item)
                 except ValueError:
@@ -3533,15 +3554,15 @@ def video_rows(entries, prefix):
                 st.rerun()
             if playing:
                 st.video(item["video"])
-            with st.expander("📝 មើលអត្ថបទខ្មែរ"):
+            with st.expander("ðŸ“ áž˜áž¾áž›áž¢ážáŸ’ážáž”áž‘ážáŸ’áž˜áŸ‚ážš"):
                 for text in item["captions"]:
                     st.write(text)
             if item.get("voice_lines"):
-                with st.expander("👫 ព័ត៌មានសំឡេងអាន"):
+                with st.expander("ðŸ‘« áž–áŸážáŸŒáž˜áž¶áž“ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“"):
                     for line in item["voice_lines"]:
                         st.write(line)
             if DEBUG:
-                with st.expander("🛠 DEBUG"):
+                with st.expander("ðŸ›  DEBUG"):
                     for key, value in item["debug"].items():
                         st.text(f"{key}: {value}")
                     st.text("\n".join(item["log"][-30:]))
@@ -3554,14 +3575,14 @@ def processing_panel(job, was_running):
     done = sum(1 for it in items if it["state"] == "done")
     head, btn = st.columns([3, 1.3])
     head.markdown(
-        f'<div class="kac-sec">កំពុងដំណើរការ <b>({len(active)}) · ✅ {done} · ❌ {len(failed)}</b></div>',
+        f'<div class="kac-sec">áž€áŸ†áž–áž»áž„ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš <b>({len(active)}) Â· âœ… {done} Â· âŒ {len(failed)}</b></div>',
         unsafe_allow_html=True,
     )
-    if active and btn.button("⛔ បោះបង់ទាំងអស់", key=f"cancel_all_{job.id}", use_container_width=True):
+    if active and btn.button("â›” áž”áŸ„áŸ‡áž”áž„áŸ‹áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹", key=f"cancel_all_{job.id}", use_container_width=True):
         for _, it in active:
             it["cancel"] = True
     if not active:
-        st.caption("មិនមានការងារកំពុងដំណើរការទេ។")
+        st.caption("áž˜áž·áž“áž˜áž¶áž“áž€áž¶ážšáž„áž¶ážšáž€áŸ†áž–áž»áž„ážŠáŸ†ážŽáž¾ážšáž€áž¶ážšáž‘áŸáŸ”")
     for i, it in active:
         c1, c2 = st.columns([4, 1.1])
         pct = int(max(0.0, min(1.0, it["pct"])) * 100)
@@ -3571,14 +3592,14 @@ def processing_panel(job, was_running):
             f'<div class="meta"><b>{i}. {esc(it["name"])}</b>'
             f'<div class="track"><i style="width:{pct}%"></i></div>'
             f'<small>{esc(it["stage"])}</small></div>'
-            f'<div class="secs">⏱ {secs}s</div></div>',
+            f'<div class="secs">â± {secs}s</div></div>',
             unsafe_allow_html=True,
         )
-        if c2.button("បោះបង់", key=f"cancel_{job.id}_{i}", use_container_width=True):
+        if c2.button("áž”áŸ„áŸ‡áž”áž„áŸ‹", key=f"cancel_{job.id}_{i}", use_container_width=True):
             it["cancel"] = True
-            it["stage"] = "កំពុងបោះបង់..."
+            it["stage"] = "áž€áŸ†áž–áž»áž„áž”áŸ„áŸ‡áž”áž„áŸ‹..."
     for i, it in failed:
-        st.error(f"❌ {i}. {it['name']} — {it['error'] or 'មិនបានសម្រេច។'}")
+        st.error(f"âŒ {i}. {it['name']} â€” {it['error'] or 'áž˜áž·áž“áž”áž¶áž“ážŸáž˜áŸ’ážšáŸáž…áŸ”'}")
         if DEBUG and it["raw_error"]:
             st.text(it["raw_error"])
     for i, it in enumerate(items, start=1):
@@ -3594,7 +3615,7 @@ def completed_panel(job, query):
     if q:
         entries = [(it, ow) for it, ow in entries if q in it["name"].lower()]
     if job.zip:
-        dl_button("📦 ទាញយកទាំងអស់ (ZIP)", job.zip, "khmer_videos.zip", "application/zip",
+        dl_button("ðŸ“¦ áž‘áž¶áž‰áž™áž€áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹ (ZIP)", job.zip, "khmer_videos.zip", "application/zip",
                   key=f"zip_{job.id}", use_container_width=True)
     video_rows(entries, "c")
 
@@ -3603,7 +3624,7 @@ def start_job(items, settings):
     try:
         fonts_data = load_font_bytes(settings.get("font_choice", DEFAULT_FONT))
     except Exception:
-        st.error("ទាញយក Font ខ្មែរមិនបាន។ សូមសាកម្តងទៀត។")
+        st.error("áž‘áž¶áž‰áž™áž€ Font ážáŸ’áž˜áŸ‚ážšáž˜áž·áž“áž”áž¶áž“áŸ” ážŸáž¼áž˜ážŸáž¶áž€áž˜áŸ’ážáž„áž‘áŸ€ážáŸ”")
         st.stop()
     prepare_home_font(fonts_data)
     record_start(USER_ID, len(items))
@@ -3633,33 +3654,33 @@ def start_job(items, settings):
 
 
 # ---------------------------------------------------------------------
-#  ទំព័រធ្វើការ (Home / Subtitle / Dubbing / Batch)
+#  áž‘áŸ†áž–áŸážšáž’áŸ’ážœáž¾áž€áž¶ážš (Home / Subtitle / Dubbing / Batch)
 # ---------------------------------------------------------------------
 def workspace(page_id):
     current_job = st.session_state.get("job")
     busy = bool(current_job and current_job.running())
     left, right = st.columns([1.55, 1], gap="medium")
 
-    # ----- ឆ្វេង៖ បញ្ចូលវីដេអូ -----
+    # ----- áž†áŸ’ážœáŸáž„áŸ– áž”áž‰áŸ’áž…áž¼áž›ážœáž¸ážŠáŸáž¢áž¼ -----
     with left:
-        section("ផ្ទុកវីដេអូ", "Upload")
+        section("áž•áŸ’áž‘áž»áž€ážœáž¸ážŠáŸáž¢áž¼", "Upload")
         with st.container(border=True):
-            mode = st.radio("វិធីបញ្ចូល", MODES, index=2 if page_id == "batch" else 0,
+            mode = st.radio("ážœáž·áž’áž¸áž”áž‰áŸ’áž…áž¼áž›", MODES, index=2 if page_id == "batch" else 0,
                             horizontal=True, label_visibility="collapsed", key=f"mode_{page_id}")
             uploaded_files = []
             link_text = ""
-            if mode.startswith("📁"):
-                one = st.file_uploader("ទាញវីដេអូមកទីនេះ ឬចុចជ្រើសរើស", type=VIDEO_TYPES, key=f"up1_{page_id}")
+            if mode.startswith("ðŸ“"):
+                one = st.file_uploader("áž‘áž¶áž‰ážœáž¸ážŠáŸáž¢áž¼áž˜áž€áž‘áž¸áž“áŸáŸ‡ áž¬áž…áž»áž…áž‡áŸ’ážšáž¾ážŸážšáž¾ážŸ", type=VIDEO_TYPES, key=f"up1_{page_id}")
                 uploaded_files = [one] if one else []
-            elif mode.startswith("🔗"):
+            elif mode.startswith("ðŸ”—"):
                 link_text = st.text_area(
-                    "តំណវីដេអូ (TikTok, .mp4 ផ្ទាល់ ឬ Google Drive សាធារណៈ) — មួយបន្ទាត់ ១ តំណ",
+                    "ážáŸ†ážŽážœáž¸ážŠáŸáž¢áž¼ (TikTok, .mp4 áž•áŸ’áž‘áž¶áž›áŸ‹ áž¬ Google Drive ážŸáž¶áž’áž¶ážšážŽáŸˆ) â€” áž˜áž½áž™áž”áž“áŸ’áž‘áž¶ážáŸ‹ áŸ¡ ážáŸ†ážŽ",
                     placeholder="https://...\nhttps://...", height=120, key=f"link_{page_id}")
             else:
                 uploaded_files = st.file_uploader(
-                    f"ជ្រើសបានដល់ {MAX_VIDEOS} វីដេអូ ក្នុងពេលតែមួយ", type=VIDEO_TYPES,
+                    f"áž‡áŸ’ážšáž¾ážŸáž”áž¶áž“ážŠáž›áŸ‹ {MAX_VIDEOS} ážœáž¸ážŠáŸáž¢áž¼ áž€áŸ’áž“áž»áž„áž–áŸáž›ážáŸ‚áž˜áž½áž™", type=VIDEO_TYPES,
                     accept_multiple_files=True, key=f"upn_{page_id}") or []
-            st.caption(f"MP4, MOV, MKV, AVI, WEBM · វែងបំផុត {MAX_DURATION_MIN} នាទី")
+            st.caption(f"MP4, MOV, MKV, AVI, WEBM Â· ážœáŸ‚áž„áž”áŸ†áž•áž»áž {MAX_DURATION_MIN} áž“áž¶áž‘áž¸")
 
     items = []
     too_many = False
@@ -3674,72 +3695,56 @@ def workspace(page_id):
         for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
             items.append({"name": f"Video {i}", "file": None, "url": url})
 
-    # ----- ស្តាំ៖ មើលជាមុន + ការកំណត់ -----
+    # ----- ážŸáŸ’ážáž¶áŸ†áŸ– áž˜áž¾áž›áž‡áž¶áž˜áž»áž“ + áž€áž¶ážšáž€áŸ†ážŽážáŸ‹ -----
     with right:
         preview_ph = st.container()
 
         with st.container(border=True):
-            st.markdown('<div class="kac-card-title">🅰 កំណត់អក្សរ · Subtitle</div>', unsafe_allow_html=True)
+            st.markdown('<div class="kac-card-title">ðŸ…° áž€áŸ†ážŽážáŸ‹áž¢áž€áŸ’ážŸážš Â· Subtitle</div>', unsafe_allow_html=True)
             if page_id == "sub":
                 subs_on = True
             else:
-                subs_on = st.checkbox("ដាក់អក្សរខ្មែរលើវីដេអូ (Subtitle)", value=True, key="subs_on")
+                subs_on = st.checkbox("ážŠáž¶áž€áŸ‹áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážšáž›áž¾ážœáž¸ážŠáŸáž¢áž¼ (Subtitle)", value=True, key="subs_on")
             font_choice = DEFAULT_FONT
             font_size, outline_size = 22, 2
             color_label = list(COLOR_OPTIONS.keys())[0]
             pos_label = list(POSITION_OPTIONS.keys())[0]
             if subs_on:
-                font_choice = st.selectbox("ពុម្ពអក្សរខ្មែរ", list(FONT_CHOICES.keys()), key="font_choice")
-                font_size = st.slider("ទំហំអក្សរ", 16, 36, 22, key="fs")
-                outline_size = st.slider("កម្រាស់គែមអក្សរ", 1, 5, 2, key="ol")
-                color_label = st.radio("ពណ៌អក្សរ", list(COLOR_OPTIONS.keys()), horizontal=True, key="fc")
-                pos_label = st.radio("ទីតាំងអក្សរ", list(POSITION_OPTIONS.keys()), horizontal=True, key="pos")
+                font_choice = st.selectbox("áž–áž»áž˜áŸ’áž–áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážš", list(FONT_CHOICES.keys()), key="font_choice")
+                font_size = st.slider("áž‘áŸ†áž áŸ†áž¢áž€áŸ’ážŸážš", 16, 36, 22, key="fs")
+                outline_size = st.slider("áž€áž˜áŸ’ážšáž¶ážŸáŸ‹áž‚áŸ‚áž˜áž¢áž€áŸ’ážŸážš", 1, 5, 2, key="ol")
+                color_label = st.radio("áž–ážŽáŸŒáž¢áž€áŸ’ážŸážš", list(COLOR_OPTIONS.keys()), horizontal=True, key="fc")
+                pos_label = st.radio("áž‘áž¸ážáž¶áŸ†áž„áž¢áž€áŸ’ážŸážš", list(POSITION_OPTIONS.keys()), horizontal=True, key="pos")
             else:
-                st.caption("វីដេអូនឹងគ្មានអក្សរលើវីដេអូទេ។")
+                st.caption("ážœáž¸ážŠáŸáž¢áž¼áž“áž¹áž„áž‚áŸ’áž˜áž¶áž“áž¢áž€áŸ’ážŸážšáž›áž¾ážœáž¸ážŠáŸáž¢áž¼áž‘áŸáŸ”")
 
         voice_label = list(TTS_VOICES.keys())[0]
         speed = 1.0
-        keep_bg = auto_gender = voice_match = emotion = timbre = False
-        clone_on = False
-        clone_file = timbre_file = None
+        keep_bg = False
         if page_id == "sub":
             dub_on = False
         else:
             with st.container(border=True):
-                st.markdown('<div class="kac-card-title">🎙 សំឡេង AI · Dubbing</div>', unsafe_allow_html=True)
+                st.markdown('<div class="kac-card-title">ðŸŽ™ ážŸáŸ†áž¡áŸáž„ AI Â· Dubbing</div>', unsafe_allow_html=True)
                 if page_id == "dub":
                     dub_on = True
                 else:
-                    dub_on = st.checkbox("បន្ថែមសំឡេងអានជាភាសាខ្មែរ (Dubbing)", key=f"dub_{page_id}")
+                    dub_on = st.checkbox("áž”áž“áŸ’ážáŸ‚áž˜ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“áž‡áž¶áž—áž¶ážŸáž¶ážáŸ’áž˜áŸ‚ážš (Dubbing)", key=f"dub_{page_id}")
                 if dub_on:
-                    voice_label = st.selectbox("សំឡេង", list(TTS_VOICES.keys()), key="voice")
-                    speed = st.slider("ល្បឿនអាន", 0.8, 1.4, 1.0, 0.05, key="spd", format="%.2fx")
-                    st.caption("💡 ដើម្បីឱ្យ AI និយាយធម្មតា និងរលូនបំផុត សូមកុំបើកជម្រើសបន្ថែម។")
-                    with st.expander("⚙ ជម្រើសបន្ថែម"):
-                        auto_gender = st.checkbox("👫 ជ្រើសសំឡេងប្រុស/ស្រី តាមអ្នកនិយាយ", key="auto_gender")
-                        voice_match = st.checkbox("🧬 សំឡេងស្រដៀងសំឡេងដើម (បន្តិចបន្តួច)", key="voice_match")
-                        emotion = st.checkbox("🎭 បន្ថែមអារម្មណ៍ស្រាលៗ", key="emotion")
-                        keep_bg = st.checkbox("🔈 រក្សាសំឡេងដើមតិចៗ", key="keep_bg")
-                        timbre = st.checkbox("🎚 ពណ៌សំឡេងស្រដៀងសំឡេងគំរូ (ឥតគិតថ្លៃ)", key="timbre")
-                        if timbre:
-                            timbre_file = st.file_uploader(
-                                "សំឡេងគំរូ (ជម្រើស — ១៥ វិនាទីឡើង គ្មានភ្លេង)",
-                                type=["mp3", "wav", "m4a", "ogg", "flac"], key="timbre_sample")
-                        if ELEVEN_KEY:
-                            clone_on = st.checkbox("🧑‍🎤 ក្លូនសំឡេង (សំឡេងខ្លួនឯង ឬមានការអនុញ្ញាត)", key=f"clone_{page_id}")
-                            if clone_on:
-                                clone_file = st.file_uploader(
-                                    "សំឡេងគំរូ (និយាយច្បាស់ ១–២ នាទី គ្មានភ្លេង)",
-                                    type=["mp3", "wav", "m4a", "ogg", "flac"], key="clone_sample")
+                    voice_label = st.selectbox("ážŸáŸ†áž¡áŸáž„", list(TTS_VOICES.keys()), key="voice")
+                    speed = st.slider("áž›áŸ’áž”áž¿áž“áž¢áž¶áž“", 0.8, 1.4, 1.0, 0.05, key="spd", format="%.2fx")
+                    keep_bg = st.checkbox(
+                        "ðŸ”ˆ ážšáž€áŸ’ážŸáž¶ážŸáŸ†áž¡áŸáž„ážŠáž¾áž˜ážáž·áž…áŸ— (áž”áž“áŸ’ážáž™ážŸáŸ†áž¡áŸáž„ážŠáž¾áž˜)",
+                        value=True, key="keep_bg")
 
-        # ----- មើលជាមុន (បំពេញក្នុង container ខាងលើ) -----
+        # ----- áž˜áž¾áž›áž‡áž¶áž˜áž»áž“ (áž”áŸ†áž–áŸáž‰áž€áŸ’áž“áž»áž„ container ážáž¶áž„áž›áž¾) -----
         css_color = COLOR_OPTIONS[color_label][1]
         align = POSITION_OPTIONS[pos_label]
         valign = {2: "flex-end", 5: "center", 8: "flex-start"}[align]
         with preview_ph:
             with st.container(border=True):
-                st.markdown('<div class="kac-card-title">🎬 មើលជាមុន · Preview</div>', unsafe_allow_html=True)
-                if uploaded_files and st.checkbox("▶ មើលវីដេអូដែលបានជ្រើស", key="prev_vid"):
+                st.markdown('<div class="kac-card-title">ðŸŽ¬ áž˜áž¾áž›áž‡áž¶áž˜áž»áž“ Â· Preview</div>', unsafe_allow_html=True)
+                if uploaded_files and st.checkbox("â–¶ áž˜áž¾áž›ážœáž¸ážŠáŸáž¢áž¼ážŠáŸ‚áž›áž”áž¶áž“áž‡áŸ’ážšáž¾ážŸ", key="prev_vid"):
                     try:
                         st.video(uploaded_files[0])
                     except Exception:
@@ -3755,39 +3760,39 @@ def workspace(page_id):
                         f'<div class="kac-stage" style="align-items:{valign}">'
                         f'<div class="cap" style="color:{css_color};font-size:{px}px;text-shadow:{shadow};'
                         f"font-family:'{fam}','Kantumruy Pro',sans-serif\">"
-                        'សួស្តី! នេះជាអក្សរគំរូ</div></div>',
+                        'ážŸáž½ážŸáŸ’ážáž¸! áž“áŸáŸ‡áž‡áž¶áž¢áž€áŸ’ážŸážšáž‚áŸ†ážšáž¼</div></div>',
                         unsafe_allow_html=True,
                     )
                 else:
                     st.markdown(
                         '<div class="kac-stage"></div>', unsafe_allow_html=True)
-                    st.caption("មិនដាក់អក្សរលើវីដេអូ")
+                    st.caption("áž˜áž·áž“ážŠáž¶áž€áŸ‹áž¢áž€áŸ’ážŸážšáž›áž¾ážœáž¸ážŠáŸáž¢áž¼")
 
-    # ----- ឆ្វេង៖ លទ្ធផល + ប៊ូតុងចាប់ផ្តើម (នៅក្រោមការបញ្ចូលវីដេអូ) -----
+    # ----- áž†áŸ’ážœáŸáž„áŸ– áž›áž‘áŸ’áž’áž•áž› + áž”áŸŠáž¼ážáž»áž„áž…áž¶áž”áŸ‹áž•áŸ’ážáž¾áž˜ (áž“áŸ…áž€áŸ’ážšáŸ„áž˜áž€áž¶ážšáž”áž‰áŸ’áž…áž¼áž›ážœáž¸ážŠáŸáž¢áž¼) -----
     with left:
         with st.container(border=True):
-            st.markdown('<div class="kac-card-title">⚙ លទ្ធផល · Output</div>', unsafe_allow_html=True)
-            quality_label = st.selectbox("គុណភាពវីដេអូ", list(QUALITY.keys()), index=1, key="qual")
-            language_label = st.selectbox("ភាសាក្នុងវីដេអូ", list(LANGUAGES.keys()), index=0, key="lang")
+            st.markdown('<div class="kac-card-title">âš™ áž›áž‘áŸ’áž’áž•áž› Â· Output</div>', unsafe_allow_html=True)
+            quality_label = st.selectbox("áž‚áž»ážŽáž—áž¶áž–ážœáž¸ážŠáŸáž¢áž¼", list(QUALITY.keys()), index=1, key="qual")
+            language_label = st.selectbox("áž—áž¶ážŸáž¶áž€áŸ’áž“áž»áž„ážœáž¸ážŠáŸáž¢áž¼", list(LANGUAGES.keys()), index=0, key="lang")
             engine_label = ENGINE_FREE
 
-        # ----- ប៊ូតុងចាប់ផ្តើម -----
+        # ----- áž”áŸŠáž¼ážáž»áž„áž…áž¶áž”áŸ‹áž•áŸ’ážáž¾áž˜ -----
         run = False
         if too_many:
-            st.warning(f"អាចធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូម្តង។ នឹងធ្វើតែ {MAX_VIDEOS} ដំបូង។")
+            st.warning(f"áž¢áž¶áž…áž’áŸ’ážœáž¾áž”áž¶áž“ážáŸ’ážšáž¹áž˜ {MAX_VIDEOS} ážœáž¸ážŠáŸáž¢áž¼áž˜áŸ’ážáž„áŸ” áž“áž¹áž„áž’áŸ’ážœáž¾ážáŸ‚ {MAX_VIDEOS} ážŠáŸ†áž”áž¼áž„áŸ”")
         st.markdown('<div class="kac-start">', unsafe_allow_html=True)
         if busy:
-            st.button("⏳ កំពុងធ្វើការ... សូមរង់ចាំ", disabled=True, use_container_width=True, key="start_busy")
+            st.button("â³ áž€áŸ†áž–áž»áž„áž’áŸ’ážœáž¾áž€áž¶ážš... ážŸáž¼áž˜ážšáž„áŸ‹áž…áž¶áŸ†", disabled=True, use_container_width=True, key="start_busy")
         elif not items:
-            st.button("✨ ចាប់ផ្តើមដំណើរការ", disabled=True, use_container_width=True, key="start_none")
-            st.caption("សូមជ្រើសរើសវីដេអូ ឬបិទភ្ជាប់តំណជាមុនសិន។")
+            st.button("âœ¨ áž…áž¶áž”áŸ‹áž•áŸ’ážáž¾áž˜ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš", disabled=True, use_container_width=True, key="start_none")
+            st.caption("ážŸáž¼áž˜áž‡áŸ’ážšáž¾ážŸážšáž¾ážŸážœáž¸ážŠáŸáž¢áž¼ áž¬áž”áž·áž‘áž—áŸ’áž‡áž¶áž”áŸ‹ážáŸ†ážŽáž‡áž¶áž˜áž»áž“ážŸáž·áž“áŸ”")
         elif not subs_on and not dub_on:
-            st.button("✨ ចាប់ផ្តើមដំណើរការ", disabled=True, use_container_width=True, key="start_nothing")
-            st.caption("សូមបើកយ៉ាងហោចណាស់មួយ៖ អក្សរខ្មែរ ឬសំឡេងអាន AI។")
+            st.button("âœ¨ áž…áž¶áž”áŸ‹áž•áŸ’ážáž¾áž˜ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš", disabled=True, use_container_width=True, key="start_nothing")
+            st.caption("ážŸáž¼áž˜áž”áž¾áž€áž™áŸ‰áž¶áž„áž áŸ„áž…ážŽáž¶ážŸáŸ‹áž˜áž½áž™áŸ– áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážš áž¬ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“ AIáŸ”")
         else:
-            label = "✨ ចាប់ផ្តើមដំណើរការ"
+            label = "âœ¨ áž…áž¶áž”áŸ‹áž•áŸ’ážáž¾áž˜ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš"
             if len(items) > 1:
-                label += f" ({len(items)} វីដេអូ)"
+                label += f" ({len(items)} ážœáž¸ážŠáŸáž¢áž¼)"
             run = st.button(label, type="primary", use_container_width=True, key="start_go")
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -3799,24 +3804,22 @@ def workspace(page_id):
             "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
             "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
             "tts_rate": int(round((speed - 1.0) * 100)),
-            "keep_bg": keep_bg, "auto_gender": auto_gender,
-            "voice_match": voice_match, "emotion": emotion,
-            "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
-            "eleven_key": ELEVEN_KEY,
-            "timbre": timbre,
-            "timbre_sample": (timbre_file.getvalue() if (timbre and timbre_file) else None),
+            "keep_bg": keep_bg, "auto_gender": False,
+            "voice_match": False, "emotion": False,
+            "clone_sample": None, "eleven_key": None,
+            "timbre": False, "timbre_sample": None,
             "font_size": font_size, "outline_size": outline_size,
             "subs_on": subs_on, "font_choice": font_choice,
             "color": COLOR_OPTIONS[color_label][0], "position": align,
         }
         start_job(items, settings)
 
-    # ----- ឆ្វេង៖ កំពុងដំណើរការ + រួចរាល់ -----
+    # ----- áž†áŸ’ážœáŸáž„áŸ– áž€áŸ†áž–áž»áž„ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš + ážšáž½áž…ážšáž¶áž›áŸ‹ -----
     with left:
         job = st.session_state.get("job")
         if not job:
-            section("កំពុងដំណើរការ", "Processing")
-            st.caption("នៅទំនេរ។ ជ្រើសវីដេអូ រួចចុច «ចាប់ផ្តើមដំណើរការ»។")
+            section("áž€áŸ†áž–áž»áž„ážŠáŸ†ážŽáž¾ážšáž€áž¶ážš", "Processing")
+            st.caption("áž“áŸ…áž‘áŸ†áž“áŸážšáŸ” áž‡áŸ’ážšáž¾ážŸážœáž¸ážŠáŸáž¢áž¼ ážšáž½áž…áž…áž»áž… Â«áž…áž¶áž”áŸ‹áž•áŸ’ážáž¾áž˜ážŠáŸ†ážŽáž¾ážšáž€áž¶ážšÂ»áŸ”")
             return
         running = job.running()
         if not running and not job.zip_done:
@@ -3828,12 +3831,12 @@ def workspace(page_id):
             render_tiktok_box()
         st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
         head, search = st.columns([2, 2])
-        head.markdown('<div class="kac-sec">រួចរាល់ <b>Completed</b></div>', unsafe_allow_html=True)
-        query = search.text_input("ស្វែងរក", placeholder="🔍 ស្វែងរកវីដេអូ...",
+        head.markdown('<div class="kac-sec">ážšáž½áž…ážšáž¶áž›áŸ‹ <b>Completed</b></div>', unsafe_allow_html=True)
+        query = search.text_input("ážŸáŸ’ážœáŸ‚áž„ážšáž€", placeholder="ðŸ” ážŸáŸ’ážœáŸ‚áž„ážšáž€ážœáž¸ážŠáŸáž¢áž¼...",
                                   label_visibility="collapsed", key="q_home")
         st.fragment(run_every=refresh)(completed_panel)(job, query)
         if not running:
-            if st.button("🗑 លុបលទ្ធផលទាំងអស់", key="clear_job"):
+            if st.button("ðŸ—‘ áž›áž»áž”áž›áž‘áŸ’áž’áž•áž›áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹", key="clear_job"):
                 shutil.rmtree(job.folder, ignore_errors=True)
                 st.session_state.pop("job", None)
                 st.rerun()
@@ -3844,22 +3847,22 @@ def workspace(page_id):
 
 
 def videos_page():
-    section("វីដេអូរបស់ខ្ញុំ", "My Videos")
+    section("ážœáž¸ážŠáŸáž¢áž¼ážšáž”ážŸáŸ‹ážáŸ’áž‰áž»áŸ†", "My Videos")
     job = st.session_state.get("job")
     entries = []
     if job:
         entries += [(it, job.items) for it in job.items if it["state"] == "done"]
     lib = st.session_state["library"]
     entries += [(it, lib) for it in reversed(lib)]
-    q = st.text_input("ស្វែងរក", placeholder="🔍 ស្វែងរកវីដេអូ...", label_visibility="collapsed", key="q_videos")
+    q = st.text_input("ážŸáŸ’ážœáŸ‚áž„ážšáž€", placeholder="ðŸ” ážŸáŸ’ážœáŸ‚áž„ážšáž€ážœáž¸ážŠáŸáž¢áž¼...", label_visibility="collapsed", key="q_videos")
     if q.strip():
         entries = [(it, ow) for it, ow in entries if q.strip().lower() in it["name"].lower()]
     if job and job.zip:
-        dl_button("📦 ទាញយកទាំងអស់ (ZIP)", job.zip, "khmer_videos.zip", "application/zip",
+        dl_button("ðŸ“¦ áž‘áž¶áž‰áž™áž€áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹ (ZIP)", job.zip, "khmer_videos.zip", "application/zip",
                   key=f"zipv_{job.id}", use_container_width=True)
     video_rows(entries, "v")
-    st.caption("វីដេអូត្រូវបានរក្សាទុកបណ្តោះអាសន្នក្នុងកម្មវិធី។ សូមទាញយកទុកភ្លាមៗ។")
-    if entries and st.button("🗑 លុបវីដេអូទាំងអស់", key="clear_all_videos"):
+    st.caption("ážœáž¸ážŠáŸáž¢áž¼ážáŸ’ážšáž¼ážœáž”áž¶áž“ážšáž€áŸ’ážŸáž¶áž‘áž»áž€áž”ážŽáŸ’ážáŸ„áŸ‡áž¢áž¶ážŸáž“áŸ’áž“áž€áŸ’áž“áž»áž„áž€áž˜áŸ’áž˜ážœáž·áž’áž¸áŸ” ážŸáž¼áž˜áž‘áž¶áž‰áž™áž€áž‘áž»áž€áž—áŸ’áž›áž¶áž˜áŸ—áŸ”")
+    if entries and st.button("ðŸ—‘ áž›áž»áž”ážœáž¸ážŠáŸáž¢áž¼áž‘áž¶áŸ†áž„áž¢ážŸáŸ‹", key="clear_all_videos"):
         if job:
             shutil.rmtree(job.folder, ignore_errors=True)
             st.session_state.pop("job", None)
@@ -3868,30 +3871,30 @@ def videos_page():
 
 
 def help_page():
-    section("ជំនួយ", "Help")
+    section("áž‡áŸ†áž“áž½áž™", "Help")
     with st.container(border=True):
         st.markdown(
-            "**របៀបប្រើ (៣ជំហាន)**\n\n"
-            "1. 📁 ជ្រើសវីដេអូ (Upload / Link / Batch)\n"
-            "2. ⚙ កំណត់អក្សរ និងសំឡេង (ឬទុកដូចដើម)\n"
-            "3. ✨ ចុច «ចាប់ផ្តើមដំណើរការ» រួចរង់ចាំ ហើយទាញយក\n"
+            "**ážšáž”áŸ€áž”áž”áŸ’ážšáž¾ (áŸ£áž‡áŸ†áž áž¶áž“)**\n\n"
+            "1. ðŸ“ áž‡áŸ’ážšáž¾ážŸážœáž¸ážŠáŸáž¢áž¼ (Upload / Link / Batch)\n"
+            "2. âš™ áž€áŸ†ážŽážáŸ‹áž¢áž€áŸ’ážŸážš áž“áž·áž„ážŸáŸ†áž¡áŸáž„ (áž¬áž‘áž»áž€ážŠáž¼áž…ážŠáž¾áž˜)\n"
+            "3. âœ¨ áž…áž»áž… Â«áž…áž¶áž”áŸ‹áž•áŸ’ážáž¾áž˜ážŠáŸ†ážŽáž¾ážšáž€áž¶ážšÂ» ážšáž½áž…ážšáž„áŸ‹áž…áž¶áŸ† áž áž¾áž™áž‘áž¶áž‰áž™áž€\n"
         )
     with st.container(border=True):
         st.markdown(
-            "**ម៉ឺនុយ**\n\n"
-            "- 🏠 ទំព័រដើម៖ ធ្វើបានទាំងអក្សរ និងសំឡេង\n"
-            "- 💬 ដាក់អក្សរខ្មែរ៖ តែអក្សររត់ប៉ុណ្ណោះ\n"
-            "- 🎙 សំឡេង AI៖ អក្សរ + សំឡេងអានខ្មែរ\n"
-            "- 📚 ច្រើនវីដេអូ៖ ធ្វើច្រើនវីដេអូស្មើគ្នា\n"
-            "- 🎞 វីដេអូរបស់ខ្ញុំ៖ មើល និងទាញយកវីដេអូដែលរួចរាល់\n"
+            "**áž˜áŸ‰ážºáž“áž»áž™**\n\n"
+            "- ðŸ  áž‘áŸ†áž–áŸážšážŠáž¾áž˜áŸ– áž’áŸ’ážœáž¾áž”áž¶áž“áž‘áž¶áŸ†áž„áž¢áž€áŸ’ážŸážš áž“áž·áž„ážŸáŸ†áž¡áŸáž„\n"
+            "- ðŸ’¬ ážŠáž¶áž€áŸ‹áž¢áž€áŸ’ážŸážšážáŸ’áž˜áŸ‚ážšáŸ– ážáŸ‚áž¢áž€áŸ’ážŸážšážšážáŸ‹áž”áŸ‰áž»ážŽáŸ’ážŽáŸ„áŸ‡\n"
+            "- ðŸŽ™ ážŸáŸ†áž¡áŸáž„ AIáŸ– áž¢áž€áŸ’ážŸážš + ážŸáŸ†áž¡áŸáž„áž¢áž¶áž“ážáŸ’áž˜áŸ‚ážš\n"
+            "- ðŸ“š áž…áŸ’ážšáž¾áž“ážœáž¸ážŠáŸáž¢áž¼áŸ– áž’áŸ’ážœáž¾áž…áŸ’ážšáž¾áž“ážœáž¸ážŠáŸáž¢áž¼ážŸáŸ’áž˜áž¾áž‚áŸ’áž“áž¶\n"
+            "- ðŸŽž ážœáž¸ážŠáŸáž¢áž¼ážšáž”ážŸáŸ‹ážáŸ’áž‰áž»áŸ†áŸ– áž˜áž¾áž› áž“áž·áž„áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼ážŠáŸ‚áž›ážšáž½áž…ážšáž¶áž›áŸ‹\n"
         )
     with st.container(border=True):
         st.markdown(
-            "**គន្លឹះ**\n\n"
-            "- 📱 ប្រើទូរសព្ទ សូមបង្វិលដេក (ផ្ដេក) ដើម្បីឃើញម៉ឺនុយ និងការកំណត់ពេញលេញ\n"
-            "- 🗣 ចង់ឱ្យ AI និយាយធម្មតា និងរលូន សូមកុំបើកជម្រើសបន្ថែមក្នុងផ្នែកសំឡេង\n"
-            "- ⏱ វីដេអូខ្លីៗ ធ្វើបានលឿន និងមានកំហុសតិច\n"
-            "- ⬇ សូមទាញយកវីដេអូភ្លាមៗពេលរួចរាល់\n"
+            "**áž‚áž“áŸ’áž›áž¹áŸ‡**\n\n"
+            "- ðŸ“± áž”áŸ’ážšáž¾áž‘áž¼ážšážŸáž–áŸ’áž‘ ážŸáž¼áž˜áž”áž„áŸ’ážœáž·áž›ážŠáŸáž€ (áž•áŸ’ážŠáŸáž€) ážŠáž¾áž˜áŸ’áž”áž¸ážƒáž¾áž‰áž˜áŸ‰ážºáž“áž»áž™ áž“áž·áž„áž€áž¶ážšáž€áŸ†ážŽážáŸ‹áž–áŸáž‰áž›áŸáž‰\n"
+            "- ðŸ—£ áž…áž„áŸ‹áž±áŸ’áž™ AI áž“áž·áž™áž¶áž™áž’áž˜áŸ’áž˜ážáž¶ áž“áž·áž„ážšáž›áž¼áž“ ážŸáž¼áž˜áž”áŸ’ážšáž¾áž€áž¶ážšáž€áŸ†ážŽážáŸ‹ážŸáŸ†áž¡áŸáž„ážáž¶áž˜áž’áž˜áŸ’áž˜ážáž¶\n"
+            "- â± ážœáž¸ážŠáŸáž¢áž¼ážáŸ’áž›áž¸áŸ— áž’áŸ’ážœáž¾áž”áž¶áž“áž›áž¿áž“ áž“áž·áž„áž˜áž¶áž“áž€áŸ†áž áž»ážŸážáž·áž…\n"
+            "- â¬‡ ážŸáž¼áž˜áž‘áž¶áž‰áž™áž€ážœáž¸ážŠáŸáž¢áž¼áž—áŸ’áž›áž¶áž˜áŸ—áž–áŸáž›ážšáž½áž…ážšáž¶áž›áŸ‹\n"
         )
 
 
@@ -3906,21 +3909,21 @@ else:
 ADMIN_KEY = st.secrets.get("ADMIN_KEY", "")
 if ADMIN_KEY and st.query_params.get("admin", "") == ADMIN_KEY:
     st.divider()
-    section("📊 ស្ថិតិ", "Admin")
+    section("ðŸ“Š ážŸáŸ’ážáž·ážáž·", "Admin")
     today_rec = today_stats()
     a1, a2, a3, a4 = st.columns(4)
-    a1.metric("🎬 វីដេអូ", today_rec["videos"])
-    a2.metric("👥 អ្នកប្រើ", len(today_rec["users"]))
-    a3.metric("✅ ជោគជ័យ", today_rec["done"])
-    a4.metric("❌ បរាជ័យ", today_rec["failed"])
+    a1.metric("ðŸŽ¬ ážœáž¸ážŠáŸáž¢áž¼", today_rec["videos"])
+    a2.metric("ðŸ‘¥ áž¢áŸ’áž“áž€áž”áŸ’ážšáž¾", len(today_rec["users"]))
+    a3.metric("âœ… áž‡áŸ„áž‚áž‡áŸáž™", today_rec["done"])
+    a4.metric("âŒ áž”ážšáž¶áž‡áŸáž™", today_rec["failed"])
     all_stats = _load_stats()
     rows = [
         {
-            "ថ្ងៃ": day,
-            "វីដេអូ": all_stats[day]["videos"],
-            "អ្នកប្រើ": len(all_stats[day]["users"]),
-            "ជោគជ័យ": all_stats[day]["done"],
-            "បរាជ័យ": all_stats[day]["failed"],
+            "ážáŸ’áž„áŸƒ": day,
+            "ážœáž¸ážŠáŸáž¢áž¼": all_stats[day]["videos"],
+            "áž¢áŸ’áž“áž€áž”áŸ’ážšáž¾": len(all_stats[day]["users"]),
+            "áž‡áŸ„áž‚áž‡áŸáž™": all_stats[day]["done"],
+            "áž”ážšáž¶áž‡áŸáž™": all_stats[day]["failed"],
         }
         for day in sorted(all_stats.keys(), reverse=True)[:14]
     ]
