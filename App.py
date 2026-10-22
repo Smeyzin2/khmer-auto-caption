@@ -49,7 +49,13 @@ MAX_DUB_SPEED = 1.6  # បង្កើនល្បឿនសំឡេងអាន
 # ការកាត់សំឡេងជាផ្នែកៗ ដើម្បីឱ្យម៉ោងត្រឹមត្រូវ
 CHUNK_TARGET = 20.0  # វិនាទី
 CHUNK_MAX = 28.0
-MAX_CHUNK_WORKERS = 3
+MAX_CHUNK_WORKERS = 4
+
+# ចំនួន thread ស្មើគ្នា (ធ្វើឱ្យលឿន)
+TTS_WORKERS = 6  # បង្កើតសំឡេងអានស្មើគ្នា
+LLM_WORKERS = 3  # ហៅ AI បកប្រែ/កែ ស្មើគ្នា
+GS_WORKERS = 4  # Google Speech ស្មើគ្នា
+TRANSLATE_WORKERS = 3  # Google Translate ស្មើគ្នា
 
 # ម៉ាស៊ីនឥតគិតថ្លៃ (Groq Whisper)
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
@@ -66,7 +72,10 @@ GROQ_CHAT_PREFERRED = [
     "qwen/qwen3-32b",
     "llama-3.1-8b-instant",
 ]
-_groq_chat_cache = {"models": None, "good": None}
+_groq_chat_cache = {"models": None, "good": None, "dead": {}}
+
+# ផ្តល់អ្នកផ្តល់សេវា (provider) ដែលអស់កូតា ឱ្យរំលងមួយរយៈ (កុំសាកម្តងទៀតឥតប្រយោជន៍)
+_provider_dead = {"gemini": 0.0, "groq": 0.0}
 
 
 # លេខកូដភាសាសម្រាប់ Whisper
@@ -359,24 +368,29 @@ def fetch_font(name):
 
 def load_fonts_for(selected):
     """
-    ទាញយក Font ដែលបានជ្រើសជាមុន រួចតាមដោយ Font បម្រុង។
+    ទាញយក Font ដែលបានជ្រើសជាមុន រួចតាមដោយ Font បម្រុង (ស្មើគ្នា)។
     ត្រឡប់ (បញ្ជី Font, សារព្រមាន)។
     """
     if selected not in FONT_MAP:
         selected = DEFAULT_FONT
     order = [selected] + [n for n in FALLBACK_FONTS if n != selected]
 
-    out = []
-    warn = ""
-    for i, name in enumerate(order):
+    def one(name):
         try:
-            out.append(fetch_font(name))
+            return fetch_font(name)
         except Exception:
-            if i == 0:
-                warn = (
-                    f"ពុម្ពអក្សរ {selected} ទាញយកមិនបាន "
-                    "ប្រើពុម្ពអក្សរផ្សេងជំនួស។"
-                )
+            return None
+
+    with ThreadPoolExecutor(max_workers=len(order)) as ex:
+        results = list(ex.map(one, order))
+
+    out = [r for r in results if r]
+    warn = ""
+    if results and results[0] is None:
+        warn = (
+            f"ពុម្ពអក្សរ {selected} ទាញយកមិនបាន "
+            "ប្រើពុម្ពអក្សរផ្សេងជំនួស។"
+        )
     if not out:
         raise RuntimeError("ទាញយក Font ខ្មែរមិនបាន។")
     return out, warn
@@ -500,7 +514,7 @@ def download_video(url, path, progress):
             done = 0
             with open(path, "wb") as f:
                 while True:
-                    chunk = response.read(1024 * 256)
+                    chunk = response.read(1024 * 1024)
                     if not chunk:
                         break
                     f.write(chunk)
@@ -526,7 +540,7 @@ def download_video(url, path, progress):
 
 def extract_audio(video_path, audio_path, master_path):
     """
-    ដកសំឡេងពីរបែប៖
+    ដកសំឡេងពីរបែបក្នុងការហៅ FFmpeg តែម្តង៖
     - audio.mp3 (ស្រាល) សម្រាប់លាយសំឡេងពេល Dubbing និងម៉ាស៊ីនឥតគិតថ្លៃ
     - master.flac (គ្មានការបាត់បង់គុណភាព) សម្រាប់ឱ្យ AI ស្តាប់
     """
@@ -903,7 +917,7 @@ def call_with_retry(client, model, prompt, audio_bytes, mime, config,
             quota = "429" in low or "resource_exhausted" in low
 
             if busy and attempt < 2:
-                wait = 4 * (attempt + 1)
+                wait = 3 * (attempt + 1)
                 status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
                 dbg(status, f"[{model}] busy, wait {wait}s")
                 time.sleep(wait)
@@ -911,8 +925,8 @@ def call_with_retry(client, model, prompt, audio_bytes, mime, config,
 
             if quota and attempt < 1:
                 status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
-                dbg(status, f"[{model}] quota, wait 20s")
-                time.sleep(20)
+                dbg(status, f"[{model}] quota, wait 15s")
+                time.sleep(15)
                 continue
 
             raise
@@ -1292,8 +1306,10 @@ def groq_transcribe(api_key, audio_path, language, status):
                 last = e
                 text = str(e)
                 if ("429" in text or "503" in text) and attempt == 0:
+                    if "per day" in text.lower():
+                        break  # អស់កូតាថ្ងៃ → ម៉ូដែលបន្ទាប់ភ្លាម
                     status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
-                    time.sleep(12)
+                    time.sleep(8)
                     continue
                 break
             except Exception as e:
@@ -1329,14 +1345,14 @@ def _google_once(text):
     )
 
 
-def google_translate_request(text, retries=3):
+def google_translate_request(text, retries=2):
     """ហៅ Google Translate ហើយរង់ចាំបន្តិចបើជួប 429។"""
     for attempt in range(retries):
         try:
             return _google_once(text)
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries - 1:
-                time.sleep(3 * (attempt + 1))
+                time.sleep(2)
                 continue
             raise
 
@@ -1356,6 +1372,18 @@ def http_detail(e):
     except Exception:
         body = ""
     return f"HTTP {e.code}: {body}".strip()
+
+
+def provider_alive(name):
+    return time.time() >= _provider_dead.get(name, 0.0)
+
+
+def mark_provider(name, error_text):
+    """បើ provider អស់កូតា → រំលងវាមួយរយៈ កុំសាកម្តងទៀតឥតប្រយោជន៍។"""
+    low = str(error_text).lower()
+    if "429" in low or "resource_exhausted" in low or "quota" in low:
+        wait = 3600 if "per day" in low else 300
+        _provider_dead[name] = time.time() + wait
 
 
 def groq_chat_models(api_key):
@@ -1381,7 +1409,10 @@ def groq_chat_models(api_key):
                 continue
             if any(
                 x in low
-                for x in ("whisper", "tts", "guard", "prompt", "orpheus")
+                for x in (
+                    "whisper", "tts", "guard", "prompt", "orpheus",
+                    "allam",
+                )
             ):
                 continue
             found.append(mid)
@@ -1400,13 +1431,18 @@ def groq_chat_models(api_key):
 
 def groq_json_list(api_key, system, user_text, count, temperature=0.5):
     """ឱ្យ Groq LLM ឆ្លើយជាបញ្ជី JSON ដែលមានចំនួនបន្ទាត់ត្រូវគ្នា។"""
-    models = groq_chat_models(api_key)
+    now = time.time()
+    dead = _groq_chat_cache["dead"]
+    models = [m for m in groq_chat_models(api_key) if dead.get(m, 0) < now]
     good = _groq_chat_cache["good"]
     if good in models:
         models = [good] + [m for m in models if m != good]
 
-    last = "មិនមានម៉ូដែល"
-    for model in models[:6]:
+    if not models:
+        raise RuntimeError("Groq: ម៉ូដែលទាំងអស់អស់កូតា")
+
+    errs = []
+    for model in models[:8]:
         body = json.dumps({
             "model": model,
             "temperature": temperature,
@@ -1443,19 +1479,27 @@ def groq_json_list(api_key, system, user_text, count, temperature=0.5):
                         clean_translation(x) if isinstance(x, str) else None
                         for x in items
                     ]
-                last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                errs.append(f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា")
                 break
             except urllib.error.HTTPError as e:
-                last = f"{model}: {http_detail(e)}"
+                detail = http_detail(e)
+                errs.append(f"{model}: {detail[:90]}")
+                if e.code == 429 and "per day" in detail.lower():
+                    dead[model] = time.time() + 3600
+                    break  # អស់កូតាថ្ងៃ → ម៉ូដែលបន្ទាប់ភ្លាម
                 if e.code == 429 and attempt == 0:
-                    time.sleep(6)
+                    time.sleep(4)
                     continue
                 break  # 404/400/ផ្សេងៗ → ម៉ូដែលបន្ទាប់
             except Exception as e:
-                last = f"{model}: {e}"
+                errs.append(f"{model}: {e}"[:90])
                 break
 
-    raise RuntimeError(last[:300])
+    # ម៉ូដែលទាំងអស់អស់កូតាថ្ងៃ → រំលង Groq LLM ទាំងមូលមួយរយៈ
+    if errs and all("per day" in x.lower() for x in errs):
+        _provider_dead["groq"] = time.time() + 3600
+
+    raise RuntimeError(" | ".join(errs)[:400] or "Groq LLM បរាជ័យ")
 
 
 TRANSLATE_SYSTEM = (
@@ -1466,24 +1510,15 @@ TRANSLATE_SYSTEM = (
 )
 
 
-def groq_translate_chunk(api_key, texts):
-    """បកប្រែជាក្រុមដោយ Groq LLM (ម៉ាស៊ីនបម្រុង ពេល Google ត្រូវបានរារាំង)។"""
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-    return groq_json_list(
-        api_key, TRANSLATE_SYSTEM, numbered, len(texts), 0.2
-    )
-
-
-def translate_texts(texts, groq_key=None):
+def translate_texts(texts):
     """
-    បកប្រែអត្ថបទជាភាសាខ្មែរ (ឥតគិតថ្លៃ)។
-    ១) Google Translate ម្តងមួយក្រុម (បើជួប 429 ឈប់ភ្លាម)
-    ២) ឃ្លាដែលនៅខ្វះ → Groq LLM
+    បកប្រែដោយ Google Translate (ឥតគិតថ្លៃ) ជាក្រុមៗ ស្មើគ្នា។
+    បើជួប 429 → ឈប់ភ្លាម ហើយទុកឃ្លាដែលនៅខ្វះឱ្យ AI បកជំនួស។
     ត្រឡប់ (លទ្ធផល, បញ្ជីមូលហេតុបរាជ័យ)។
     """
     errors = []
     outs = [None] * len(texts)
-    google_blocked = False
+    blocked = {"v": False}
 
     # បែងជាក្រុម (~1200 តួអក្សរ ក្នុងមួយសំណើ)
     batches, cur, size = [], [], 0
@@ -1497,10 +1532,9 @@ def translate_texts(texts, groq_key=None):
     if cur:
         batches.append(cur)
 
-    # ១) Google ម្តងមួយក្រុម (មិនស្មើគ្នា)
-    for batch in batches:
-        if google_blocked:
-            break
+    def work(batch):
+        if blocked["v"]:
+            return
         try:
             raw = google_translate_request("\n".join(t for _, t in batch))
             lines = (raw or "").strip("\n").split("\n")
@@ -1509,23 +1543,10 @@ def translate_texts(texts, groq_key=None):
                     outs[i] = clean_translation(line)
         except Exception as e:
             errors.append(f"google: {e}"[:200])
-            google_blocked = True
-        time.sleep(0.5)
+            blocked["v"] = True
 
-    # ២) ឃ្លាដែលនៅទទេ → Groq LLM
-    missing = [i for i, o in enumerate(outs) if o is None]
-    if missing and groq_key:
-        for k in range(0, len(missing), 20):
-            idxs = missing[k:k + 20]
-            try:
-                res = groq_translate_chunk(
-                    groq_key, [str(texts[i]).strip() for i in idxs]
-                )
-                for i, r in zip(idxs, res):
-                    outs[i] = r
-            except Exception as e:
-                errors.append(f"groq-llm: {e}"[:200])
-            time.sleep(1)
+    with ThreadPoolExecutor(max_workers=TRANSLATE_WORKERS) as ex:
+        list(ex.map(work, batches))
 
     return outs, errors
 
@@ -1534,7 +1555,8 @@ NATURAL_SYSTEM = (
     "You are an expert Khmer subtitle and dubbing writer. "
     "You receive numbered subtitle lines. For each line you get the "
     "ORIGINAL text (source language, may be empty), a literal DRAFT "
-    "Khmer translation (may be empty), the time available in "
+    "Khmer translation (may be empty, then translate from the "
+    "original yourself), the time available in "
     "\"seconds\" and a hard limit \"max_chars\" (Khmer characters). "
     "Do NOT translate word by word. For every line, first understand "
     "what the speaker really means and feels in that moment, then say "
@@ -1584,6 +1606,7 @@ def gemini_json_list(api_key, system, user_text, count):
     models = _gemini_models_cache["models"] or []
 
     last = "មិនមានម៉ូដែល"
+    all_quota = bool(models)
     for model in models[:4]:
         for attempt in range(2):
             try:
@@ -1606,15 +1629,20 @@ def gemini_json_list(api_key, system, user_text, count):
                         clean_translation(x) if isinstance(x, str) else None
                         for x in data
                     ]
+                all_quota = False
                 last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
                 break
             except Exception as e:
                 last = f"{model}: {e}"
                 low = str(e).lower()
+                if not ("429" in low or "resource_exhausted" in low):
+                    all_quota = False
                 if ("503" in low or "unavailable" in low) and attempt == 0:
-                    time.sleep(4)
+                    time.sleep(3)
                     continue
                 break
+    if all_quota:
+        mark_provider("gemini", last)
     raise RuntimeError(last[:300])
 
 
@@ -1627,17 +1655,19 @@ def ask_ai_list(system, payload, count, gemini_key, groq_key, errors,
                 tag, temperature=0.5):
     """សួរ Gemini មុន បើមិនបានសួរ Groq។ ត្រឡប់បញ្ជី ឬ None។"""
     res = None
-    if gemini_key:
+    if gemini_key and provider_alive("gemini"):
         try:
             res = gemini_json_list(gemini_key, system, payload, count)
         except Exception as e:
+            mark_provider("gemini", e)
             errors.append(f"gemini-{tag}: {e}"[:200])
-    if res is None and groq_key:
+    if res is None and groq_key and provider_alive("groq"):
         try:
             res = groq_json_list(
                 groq_key, system, payload, count, temperature
             )
         except Exception as e:
+            mark_provider("groq", e)
             errors.append(f"groq-{tag}: {e}"[:200])
     return res
 
@@ -1645,30 +1675,39 @@ def ask_ai_list(system, payload, count, gemini_key, groq_key, errors,
 def naturalize_lines(originals, drafts, gemini_key, groq_key,
                      durations=None):
     """
-    កែការបកប្រែឱ្យទៅជាភាសាខ្មែរនិយាយធម្មជាតិ ដូចមនុស្សនិយាយពិត
-    (មិនបកត្រង់ពាក្យ) ហើយឱ្យខ្លីល្មមនិយាយទាន់ក្នុងម៉ោងរបស់ឃ្លានីមួយៗ។
-    បើ AI មានបញ្ហា ទុកការបកប្រែដើមនៅដដែល។
+    កែ (ឬបកប្រែ បើគ្មានសេចក្តីព្រាង) ឱ្យទៅជាភាសាខ្មែរនិយាយធម្មជាតិ
+    ដូចមនុស្សនិយាយពិត ហើយឱ្យខ្លីល្មមនិយាយទាន់ក្នុងម៉ោងរបស់ឃ្លានីមួយៗ។
+    ក្រុមទាំងអស់ត្រូវបានហៅស្មើគ្នា (លឿនជាងមុន)។
     ត្រឡប់ (លទ្ធផល, បញ្ជីមូលហេតុបរាជ័យ)។
     """
     n = len(drafts)
     out = list(drafts)
     errors = []
 
+    if not (gemini_key or groq_key):
+        return out, errors
+
     if durations is None:
         durations = [4.0] * n
     limits = [char_limit(d) for d in durations]
 
-    # ជំហានទី១៖ សរសេរឡើងវិញជាភាសានិយាយធម្មជាតិ ក្នុងដែនកំណត់ម៉ោង
-    for k in range(0, n, 25):
-        idx = list(range(k, min(n, k + 25)))
-        context = [out[j] for j in range(max(0, k - 3), k) if out[j]]
+    # ជំហានទី១៖ សរសេរឡើងវិញ ក្នុងដែនកំណត់ម៉ោង (ក្រុមស្មើគ្នា)
+    batches = [list(range(k, min(n, k + 25))) for k in range(0, n, 25)]
+
+    def run_natural(idx):
+        k = idx[0]
+        context = []
+        for j in range(max(0, k - 3), k):
+            c = drafts[j] or str(originals[j]).strip()
+            if c:
+                context.append(c)
         payload = json.dumps(
             {
                 "previous_lines": context,
                 "lines": [
                     {
                         "original": str(originals[i]).strip(),
-                        "draft": out[i] or "",
+                        "draft": drafts[i] or "",
                         "seconds": round(float(durations[i]), 1),
                         "max_chars": limits[i],
                     }
@@ -1677,25 +1716,27 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
             },
             ensure_ascii=False,
         )
-
         res = ask_ai_list(
             NATURAL_SYSTEM, payload, len(idx),
             gemini_key, groq_key, errors, "natural", 0.5,
         )
+        return idx, res
 
-        if res:
-            for i, r in zip(idx, res):
-                if r and has_khmer(r):
-                    out[i] = r
-        time.sleep(0.5)
+    with ThreadPoolExecutor(max_workers=LLM_WORKERS) as ex:
+        for idx, res in ex.map(run_natural, batches):
+            if res:
+                for i, r in zip(idx, res):
+                    if r and has_khmer(r):
+                        out[i] = r
 
-    # ជំហានទី២៖ ឃ្លាណាដែលនៅវែងពេក បង្រួមម្តងទៀត
+    # ជំហានទី២៖ ឃ្លាណាដែលនៅវែងពេក បង្រួមម្តងទៀត (ក្រុមស្មើគ្នា)
     long_idx = [
         i for i in range(n)
         if out[i] and len(out[i]) > limits[i] * 1.2
     ]
-    for k in range(0, len(long_idx), 25):
-        idx = long_idx[k:k + 25]
+    sbatches = [long_idx[k:k + 25] for k in range(0, len(long_idx), 25)]
+
+    def run_short(idx):
         payload = json.dumps(
             {
                 "lines": [
@@ -1709,13 +1750,46 @@ def naturalize_lines(originals, drafts, gemini_key, groq_key,
             SHORTEN_SYSTEM, payload, len(idx),
             gemini_key, groq_key, errors, "shorten", 0.4,
         )
-        if res:
-            for i, r in zip(idx, res):
-                if r and has_khmer(r) and len(r) < len(out[i]):
-                    out[i] = r
-        time.sleep(0.5)
+        return idx, res
+
+    if sbatches:
+        with ThreadPoolExecutor(max_workers=LLM_WORKERS) as ex:
+            for idx, res in ex.map(run_short, sbatches):
+                if res:
+                    for i, r in zip(idx, res):
+                        if r and has_khmer(r) and len(r) < len(out[i]):
+                            out[i] = r
 
     return out, errors
+
+
+def fill_missing_translations(originals, outs, gemini_key, groq_key,
+                              errors):
+    """ឃ្លាណាដែលនៅទទេ → បកប្រែសាមញ្ញ ដោយ Gemini/Groq (ក្រុមស្មើគ្នា)។"""
+    missing = [i for i, o in enumerate(outs) if not o]
+    if not missing or not (gemini_key or groq_key):
+        return outs
+
+    batches = [missing[k:k + 25] for k in range(0, len(missing), 25)]
+
+    def run(idx):
+        numbered = "\n".join(
+            f"{n + 1}. {str(originals[i]).strip()}"
+            for n, i in enumerate(idx)
+        )
+        res = ask_ai_list(
+            TRANSLATE_SYSTEM, numbered, len(idx),
+            gemini_key, groq_key, errors, "translate", 0.2,
+        )
+        return idx, res
+
+    with ThreadPoolExecutor(max_workers=LLM_WORKERS) as ex:
+        for idx, res in ex.map(run, batches):
+            if res:
+                for i, r in zip(idx, res):
+                    if r and has_khmer(r):
+                        outs[i] = r
+    return outs
 
 
 def retime_by_speech(segs, speech, duration, pad=0.6):
@@ -1798,7 +1872,7 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech,
     """
     ភាសាខ្មែរ៖ ផ្ញើទៅ Whisper ម្តងមួយផ្នែកខ្លីៗ (~10 វិនាទី)
     ដូច្នេះម៉ោងមិនអាចរសាត់ឆ្ងាយបាន។ ក្នុងផ្នែកនីមួយៗ ចែកអក្សរតាម
-    ចន្លោះដែលមានសំឡេងនិយាយពិត។
+    ចន្លោះដែលមានសំឡេងនិយាយពិត។ (ធ្វើម្តងមួយ ដើម្បីកុំលើសកូតា Groq)
     """
     folder = os.path.dirname(audio_path)
     base = os.path.basename(audio_path)
@@ -1851,7 +1925,7 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech,
             f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({i + 1}/{len(chunks)})"
         )
         # កុំឱ្យលើសកូតា Groq ក្នុងមួយនាទី
-        wait = 3.2 - (time.time() - t0)
+        wait = 3.0 - (time.time() - t0)
         if wait > 0:
             time.sleep(wait)
 
@@ -1904,19 +1978,20 @@ def google_speech_request(flac_bytes, lang="km-KH"):
 def transcribe_khmer_google(audio_path, duration, speech, status):
     """
     ភាសាខ្មែរ៖ កាត់ជាផ្នែក ~10 វិនាទី ត្រង់ចន្លោះស្ងាត់ ស្តាប់ដោយ
-    Google Speech (ស្គាល់ខ្មែរបានល្អជាង Whisper) រួចចែកអក្សរតាមសំឡេងពិត។
-    មិនប្រើ Gemini ទេ។
+    Google Speech ស្មើគ្នាច្រើនផ្នែកក្នុងពេលតែមួយ (លឿនជាងមុនច្រើន)
+    រួចចែកអក្សរតាមសំឡេងពិត។ មិនប្រើ Gemini ទេ។
     """
     folder = os.path.dirname(audio_path)
     base = os.path.basename(audio_path)
-    chunks = plan_short_chunks(duration, speech)
-    out = []
-    got = 0
-    errors_in_row = 0
+    chunks = [
+        c for c in plan_short_chunks(duration, speech) if c[1] - c[0] >= 0.5
+    ]
+    total = len(chunks)
+    texts = [None] * total
+    stats = {"fail": 0, "done": 0}
 
-    for i, (a, b) in enumerate(chunks):
-        if b - a < 0.5:
-            continue
+    def work(i):
+        a, b = chunks[i]
         name = f"gs_{i}.flac"
         try:
             run_ffmpeg(
@@ -1937,33 +2012,35 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
             for attempt in range(2):
                 try:
                     text = google_speech_request(data)
-                    errors_in_row = 0
                     break
                 except urllib.error.HTTPError as e:
                     if e.code in (429, 503) and attempt == 0:
-                        time.sleep(4)
+                        time.sleep(3)
                         continue
                     raise
-
-            if text:
-                got += 1
-                out.extend(
-                    retime_by_speech(
-                        [(a, b, text)], speech, duration, pad=0.0
-                    )
-                )
+            texts[i] = text or ""
         except Exception:
-            errors_in_row += 1
-            if errors_in_row >= 3:
-                raise  # ត្រូវបានរារាំង → ប្តូរទៅវិធីបម្រុង
-
+            stats["fail"] += 1
+        stats["done"] += 1
         status.write(
-            f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({i + 1}/{len(chunks)})"
+            f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({stats['done']}/{total})"
         )
-        time.sleep(0.6)
 
-    if got == 0:
+    with ThreadPoolExecutor(max_workers=GS_WORKERS) as ex:
+        list(ex.map(work, range(total)))
+
+    got = [i for i, t in enumerate(texts) if t]
+    if not got:
+        if stats["fail"] >= 3:
+            raise RuntimeError("Google Speech ត្រូវបានរារាំង")
         return []
+
+    out = []
+    for i in got:
+        a, b = chunks[i]
+        out.extend(
+            retime_by_speech([(a, b, texts[i])], speech, duration, pad=0.0)
+        )
     out.sort(key=lambda x: x[0])
     return out
 
@@ -1971,7 +2048,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
 def transcribe_free(groq_key, audio_path, duration, source_language,
                     status, speech=None, gemini_key=None):
     """
-    ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Groq LLM)។
+    ស្តាប់ដោយ Groq Whisper រួចបកដោយ Google Translate (បម្រុង Gemini/Groq LLM)។
     ត្រឡប់ (segments, ឈ្មោះម៉ូដែល, ចំនួនឃ្លាបរាជ័យ)។
     """
     code = WHISPER_LANG.get(source_language) if source_language else None
@@ -1986,6 +2063,9 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
             gs = []
         if gs:
             return gs, "Google Speech (km-KH)", 0
+
+    if not groq_key:
+        raise RuntimeError("មិនមាន Groq API Key សម្រាប់ម៉ាស៊ីនឥតគិតថ្លៃ")
 
     data, model = groq_transcribe(groq_key, audio_path, code, status)
     detected = str(data.get("language", "") or "").lower()
@@ -2045,11 +2125,16 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
             ]
             segs = retime_by_speech(segs, speech, duration)
     else:
-        status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
         originals = [t for _, _, t in keep]
-        outs, errs = translate_texts(originals, groq_key)
+        errs = []
 
-        # កែឱ្យទៅជាភាសានិយាយធម្មជាតិ ដូចមនុស្សនិយាយពិត ហើយនិយាយទាន់ម៉ោង
+        # ១) Google Translate (លឿន ស្មើគ្នា) ជាសេចក្តីព្រាង
+        status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
+        outs, g_errs = translate_texts(originals)
+        errs += g_errs
+
+        # ២) AI កែឱ្យជាភាសានិយាយធម្មជាតិ + ឃ្លាដែលគ្មានសេចក្តីព្រាង
+        #    ត្រូវបានបកពីដើមដោយ AI តែម្តង (ជំនួសការបកពីរដង)
         status.write("៣/៤ កំពុងកែឱ្យជាភាសានិយាយធម្មជាតិ...")
         try:
             outs, nat_errs = naturalize_lines(
@@ -2059,9 +2144,14 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
                 groq_key,
                 durations=[e - s for s, e, _ in keep],
             )
-            errs = errs + nat_errs
-        except Exception:
-            pass
+            errs += nat_errs
+        except Exception as e:
+            errs.append(f"natural: {e}"[:200])
+
+        # ៣) នៅសល់ទទេ → បកប្រែសាមញ្ញ
+        outs = fill_missing_translations(
+            originals, outs, gemini_key, groq_key, errs
+        )
 
         segs = []
         for (s, e, _), out in zip(keep, outs):
@@ -2071,7 +2161,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language,
                 failed += 1
 
         if not segs or failed > len(keep) * 0.5:
-            reason = " | ".join(errs[:2]) or "មិនស្គាល់មូលហេតុ"
+            reason = " | ".join(errs[:3]) or "មិនស្គាល់មូលហេតុ"
             raise RuntimeError(
                 "ការបកប្រែបរាជ័យ។ "
                 f"(ស្តាប់បាន {len(keep)} ឃ្លា បកបាន {len(segs)}) "
@@ -2095,27 +2185,40 @@ def tts_segment(text, voice, path):
     asyncio.run(_go())
 
 
-def shorten_text(gemini_key, groq_key, text, max_seconds):
+def shorten_batch(gemini_key, groq_key, items):
     """
-    ឱ្យ AI បង្រួមប្រយោគខ្មែរ ឱ្យអានទាន់ក្នុងពេលកំណត់ (ដូចមនុស្សនិយាយពិត)។
-    ប្រើបានទាំង Gemini និង Groq (ម៉ាស៊ីនឥតគិតថ្លៃ)។
+    បង្រួមប្រយោគខ្មែរច្រើនឃ្លាក្នុងការហៅ AI តែម្តងក្នុងមួយក្រុម (ស្មើគ្នា)។
+    items = [(អត្ថបទ, វិនាទីដែលមាន)] → បញ្ជីអត្ថបទថ្មី (ឬដដែលបើបរាជ័យ)។
     """
-    limit = max(6, int(max_seconds * CHARS_PER_SEC))
-    if len(text) <= limit:
-        return text
-
-    payload = json.dumps(
-        {"lines": [{"text": text, "max_chars": limit}]},
-        ensure_ascii=False,
-    )
+    out = [t for t, _ in items]
+    limits = [max(6, int(sec * CHARS_PER_SEC)) for _, sec in items]
+    idx_all = [i for i in range(len(items)) if len(out[i]) > limits[i]]
+    batches = [idx_all[k:k + 25] for k in range(0, len(idx_all), 25)]
     errors = []
-    res = ask_ai_list(
-        SHORTEN_SYSTEM, payload, 1, gemini_key, groq_key,
-        errors, "dubshort", 0.4,
-    )
-    if res and res[0] and has_khmer(res[0]):
-        return res[0]
-    return text
+
+    def run(idx):
+        payload = json.dumps(
+            {
+                "lines": [
+                    {"text": out[i], "max_chars": limits[i]} for i in idx
+                ]
+            },
+            ensure_ascii=False,
+        )
+        res = ask_ai_list(
+            SHORTEN_SYSTEM, payload, len(idx),
+            gemini_key, groq_key, errors, "dubshort", 0.4,
+        )
+        return idx, res
+
+    if batches:
+        with ThreadPoolExecutor(max_workers=LLM_WORKERS) as ex:
+            for idx, res in ex.map(run, batches):
+                if res:
+                    for i, r in zip(idx, res):
+                        if r and has_khmer(r) and len(r) < len(out[i]):
+                            out[i] = r
+    return out
 
 
 # ---------- ស្គាល់សំឡេងប្រុស/ស្រី តាមអ្នកនិយាយ ----------
@@ -2482,9 +2585,60 @@ def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
              groq_key, seg_voices=None):
     """
     បង្កើត dub.wav ពីអត្ថបទខ្មែរ ឱ្យត្រូវតាមម៉ោងនីមួយៗនៃវីដេអូដើម។
-    ឃ្លាណាអានវែងជាងពេលដែលមាន → បង្រួមប្រយោគដោយ AI (Gemini ឬ Groq)
-    ហើយទើបបង្កើនល្បឿនបន្តិច (មិនលើស MAX_DUB_SPEED)។
+    លឿន៖ បង្កើតសំឡេងអានគ្រប់ឃ្លាស្មើគ្នា (TTS_WORKERS thread)
+    ឃ្លាណាអានវែងជាងពេលដែលមាន → បង្រួមជាក្រុមតែម្តងដោយ AI
+    រួចអានឡើងវិញស្មើគ្នា ហើយទើបបង្កើនល្បឿនបន្តិច (មិនលើស MAX_DUB_SPEED)។
     """
+    n_seg = len(segments)
+    if n_seg == 0:
+        return False
+
+    texts = [t for _, _, t in segments]
+    voices_for = [
+        seg_voices[i] if seg_voices else voice for i in range(n_seg)
+    ]
+    paths = [os.path.join(folder, f"tts_{i}.mp3") for i in range(n_seg)]
+    durs = [None] * n_seg
+
+    # ពេលវេលាដែលមានសម្រាប់ឃ្លានីមួយៗ (ប៉ាន់ស្មាន មិនទាន់គិតការជាន់គ្នា)
+    nominal = []
+    for i, (s, e, _) in enumerate(segments):
+        next_s = segments[i + 1][0] if i + 1 < n_seg else duration
+        nominal.append(max(0.5, min(next_s - 0.05, e + 0.4) - s))
+
+    def synth(i):
+        try:
+            tts_segment(texts[i], voices_for[i], paths[i])
+            durs[i] = probe_video(paths[i])[0]
+        except Exception:
+            durs[i] = None
+
+    # ជំហានទី១៖ បង្កើតសំឡេងអានទាំងអស់ស្មើគ្នា
+    with ThreadPoolExecutor(max_workers=TTS_WORKERS) as ex:
+        list(ex.map(synth, range(n_seg)))
+
+    # ជំហានទី២៖ ឃ្លាវែងពេក → បង្រួមជាក្រុម ហើយអានឡើងវិញស្មើគ្នា
+    if gemini_key or groq_key:
+        long_idx = [
+            i for i in range(n_seg)
+            if durs[i] and durs[i] > nominal[i] * 1.15
+        ]
+        if long_idx:
+            new = shorten_batch(
+                gemini_key,
+                groq_key,
+                [(texts[i], nominal[i]) for i in long_idx],
+            )
+            changed = []
+            for i, t2 in zip(long_idx, new):
+                if t2 != texts[i]:
+                    texts[i] = t2
+                    changed.append(i)
+            if changed:
+                with ThreadPoolExecutor(max_workers=TTS_WORKERS) as ex:
+                    list(ex.map(synth, changed))
+
+    # ជំហានទី៣៖ រៀបម៉ោង និងលាយសំឡេង
     inputs, filters = [], []
     n = 0
 
@@ -2496,37 +2650,22 @@ def make_dub(folder, segments, voice, duration, keep_bg, gemini_key,
     first_voice = n
     voices = 0
     cursor = 0.0  # ម៉ោងដែលឃ្លាមុនអានចប់ (កុំឱ្យសំឡេងជាន់គ្នា)
-    can_shorten = bool(gemini_key or groq_key)
 
-    for i, (s, e, t) in enumerate(segments):
-        next_s = segments[i + 1][0] if i + 1 < len(segments) else duration
+    for i, (s, e, _) in enumerate(segments):
+        d = durs[i]
+        if not d:
+            continue
+        next_s = segments[i + 1][0] if i + 1 < n_seg else duration
         start = max(s, cursor)
         if start >= duration - 0.3:
             break
         slot = max(0.5, min(next_s - 0.05, e + 0.4) - start)
 
-        name = f"tts_{i}.mp3"
-        path = os.path.join(folder, name)
-        v = seg_voices[i] if seg_voices else voice
-
-        try:
-            tts_segment(t, v, path)
-            d, _, _ = probe_video(path)
-
-            # វែងពេក → បង្រួមប្រយោគឱ្យនិយាយទាន់ ហើយអានម្តងទៀត
-            if can_shorten and d > slot * 1.15:
-                t2 = shorten_text(gemini_key, groq_key, t, slot)
-                if t2 != t:
-                    tts_segment(t2, v, path)
-                    d, _, _ = probe_video(path)
-        except Exception:
-            continue
-
         speed = min(MAX_DUB_SPEED, max(1.0, d / slot))
         delay = int(start * 1000)
         cursor = start + d / speed + 0.08
 
-        inputs += ["-i", name]
+        inputs += ["-i", f"tts_{i}.mp3"]
         filters.append(
             f"[{n}:a]atempo={speed:.3f},adelay={delay}:all=1[a{n}]"
         )
@@ -2604,6 +2743,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
     """
     Render វីដេអូ ហើយពិនិត្យថា Font ខ្មែរត្រូវបានប្រើពិតឬទេ។
     បើមិនបាន សាកវិធី ឬ Font ផ្សេងបន្ត។
+    លឿន៖ ប្រើ fontconfig ផ្ទាល់ខ្លួនតាំងពីដំបូង (កុំ render ទ្វេដង)
     """
     ass_path = os.path.join(folder, "captions.ass")
     output_path = os.path.join(folder, "output.mp4")
@@ -2613,7 +2753,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
     conf_env = make_fontconfig_env(folder)
 
     # (លេខ Font, ប្រើ fontconfig ផ្ទាល់ខ្លួនឬទេ)
-    plan = [(0, False), (0, True)]
+    plan = [(0, True)]
     plan += [(i, True) for i in range(1, len(fonts))]
 
     attempts = []
@@ -2640,6 +2780,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
             "-c:v", "libx264",
             "-preset", preset,
             "-crf", str(crf),
+            "-threads", "0",
             "-c:a", "aac",
             "-b:a", "128k",
             "-movflags", "+faststart",
@@ -2808,18 +2949,21 @@ def run_worker(job, item, settings, fonts_data):
                     reason = f"{engine_name(engine)}: {str(e)[:400]}"
                     engine_errors.append(reason)
                     if idx + 1 < len(order):
-                        item["warn"].append(
-                            "ម៉ាស៊ីនទីមួយមានបញ្ហា "
-                            "កម្មវិធីបានប្តូរទៅម៉ាស៊ីនបម្រុងដោយស្វ័យប្រវត្តិ។"
-                            f"\n\nមូលហេតុ → {reason}"
-                        )
+                        if DEBUG:
+                            item["warn"].append(
+                                "ម៉ាស៊ីនទីមួយមានបញ្ហា "
+                                "កម្មវិធីបានប្តូរទៅម៉ាស៊ីនបម្រុងដោយស្វ័យប្រវត្តិ។"
+                                f"\n\nមូលហេតុ → {reason}"
+                            )
                         rep.write("កំពុងប្តូរទៅម៉ាស៊ីនបម្រុង...")
 
             if segments is None:
-                raise UserError(
-                    "ម៉ាស៊ីនបកប្រែទាំងអស់បរាជ័យ។\n\n"
-                    + "\n\n".join(engine_errors)
+                err = UserError(
+                    "ការបង្កើតវីដេអូមិនបានសម្រេច។ "
+                    "សូមរង់ចាំមួយភ្លែត រួចសាកម្តងទៀត។"
                 )
+                err.detail = "\n\n".join(engine_errors)
+                raise err
 
             if failed_chunks:
                 item["warn"].append(
@@ -2946,7 +3090,7 @@ def run_worker(job, item, settings, fonts_data):
 
     except Exception as error:
         item["error"] = friendly_message(error)
-        item["raw_error"] = str(error)
+        item["raw_error"] = getattr(error, "detail", None) or str(error)
         item["elapsed"] = time.time() - (item["t0"] or time.time())
         item["state"] = "error"
 
@@ -3381,8 +3525,9 @@ def work_area(job, was_running):
                     text=it["stage"],
                 )
 
-            for w in it["warn"]:
-                st.warning(w)
+            if DEBUG:
+                for w in it["warn"]:
+                    st.warning(w)
 
     # ធ្វើការរួចទាំងអស់ → ផ្ទុកទំព័រឡើងវិញម្តង ដើម្បីបញ្ឈប់ការធ្វើបច្ចុប្បន្នភាព
     if was_running and not job.running():
