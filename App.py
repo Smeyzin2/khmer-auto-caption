@@ -1358,7 +1358,7 @@ TRANS_SYSTEM = (
 )
 
 
-def groq_translate_chunk(api_key, texts, budgets=None):
+def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False):
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
@@ -1373,7 +1373,7 @@ def groq_translate_chunk(api_key, texts, budgets=None):
             "model": model, "temperature": 0.2,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": TRANS_SYSTEM},
+                {"role": "system", "content": system or TRANS_SYSTEM},
                 {"role": "user", "content": numbered},
             ],
         }).encode("utf-8")
@@ -1387,7 +1387,7 @@ def groq_translate_chunk(api_key, texts, budgets=None):
                 items = json.loads(content).get("translations") or []
                 if len(items) == len(texts):
                     _groq_chat_cache["good"] = model
-                    return [clean_translation(x) for x in items]
+                    return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
                 last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
                 break
             except urllib.error.HTTPError as e:
@@ -1402,7 +1402,101 @@ def groq_translate_chunk(api_key, texts, budgets=None):
     raise RuntimeError(last[:300])
 
 
-def translate_texts(texts, groq_key=None, budgets=None):
+EN_SYSTEM = (
+    "You are an expert subtitle translator. The numbered lines are consecutive sentences from ONE video; "
+    "use the surrounding lines as context. Translate each line into natural, fluent, idiomatic English that "
+    "keeps the real meaning, tone, slang and idioms. Fix obvious speech-recognition mistakes using context. "
+    "Never translate word for word and never omit information. "
+    "Return JSON: {\"translations\": [...]} with exactly the same number of items, in the same order."
+)
+
+
+def gemini_translate_khmer(api_key, texts, english=None, budgets=None):
+    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+    models = get_available_models(client)[:3]
+    rows = []
+    for i, t in enumerate(texts):
+        row = f"{i + 1}. {t}"
+        if english and english[i]:
+            row += f"\n   (English meaning: {english[i]})"
+        if budgets and budgets[i]:
+            row += f"\n   [max {budgets[i]} chars]"
+        rows.append(row)
+    prompt = (
+        TRANS_SYSTEM
+        + " Some items include an English meaning to help you understand; translate the true meaning into Khmer. "
+        "Never output the English text or the tags.\n\n" + "\n".join(rows)
+    )
+    last = None
+    for model in models:
+        try:
+            resp = client.models.generate_content(
+                model=model, contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.3, response_mime_type="application/json"),
+            )
+            raw = (getattr(resp, "text", "") or "").strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+            data = json.loads(raw)
+            items = data.get("translations") if isinstance(data, dict) else data
+            if isinstance(items, list) and len(items) == len(texts):
+                return [clean_translation(x) for x in items]
+            last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+        except Exception as e:
+            last = f"{model}: {e}"
+    raise RuntimeError(str(last)[:300])
+
+
+def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
+    n = len(texts)
+    errors = []
+    outs = [None] * n
+    english = [None] * n
+    batches = [list(range(k, min(k + 12, n))) for k in range(0, n, 12)]
+    # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (AI ពូកែភាសាអង់គ្លេសជាងខ្មែរ)
+    if groq_key:
+        for idxs in batches:
+            try:
+                res = groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs], None, system=EN_SYSTEM, to_english=True)
+                for i, r in zip(idxs, res):
+                    english[i] = r
+            except Exception as e:
+                errors.append(f"groq-en: {e}"[:200])
+            time.sleep(0.4)
+    # ជំហាន ២: ពីអង់គ្លេស/ដើម → ខ្មែរ ដោយ Gemini (បើមាន Key)
+    if gemini_key:
+        for idxs in batches:
+            try:
+                res = gemini_translate_khmer(
+                    gemini_key, [str(texts[i]).strip() for i in idxs],
+                    [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
+                )
+                for i, r in zip(idxs, res):
+                    outs[i] = r
+            except Exception as e:
+                errors.append(f"gemini: {e}"[:200])
+    # បម្រុង: Google Translate លើអត្ថបទអង់គ្លេស (ត្រឹមត្រូវជាងបកពីចិន/ថៃ/វៀតណាមផ្ទាល់)
+    missing = [i for i, o in enumerate(outs) if o is None]
+    if missing:
+        src = [english[i] or str(texts[i]) for i in missing]
+        g_outs, g_errs = _translate_texts_old(src, None)
+        errors += g_errs
+        for i, o in zip(missing, g_outs):
+            outs[i] = o
+    # បម្រុងចុងក្រោយ: LLM បកផ្ទាល់ទៅខ្មែរ
+    missing = [i for i, o in enumerate(outs) if o is None]
+    if missing and groq_key:
+        for k in range(0, len(missing), 12):
+            idxs = missing[k:k + 12]
+            try:
+                res = groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs], [budgets[i] for i in idxs] if budgets else None)
+                for i, r in zip(idxs, res):
+                    outs[i] = r
+            except Exception as e:
+                errors.append(f"groq-km: {e}"[:200])
+    return outs, errors
+
+
+def _translate_texts_prev(texts, groq_key=None, budgets=None):
     errors = []
     outs = [None] * len(texts)
     if groq_key:
@@ -1653,7 +1747,7 @@ def merge_for_translate(segs, max_chars=160, max_gap=0.6, max_len=10.0):
     return out
 
 
-def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False):
+def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False, gemini_key=None):
     code = WHISPER_LANG.get(source_language) if source_language else None
     if source_language == "Khmer" and khmer_ok:
         try:
@@ -1704,7 +1798,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
         keep = merge_for_translate(keep)
         budgets = [max(10, int(((e - s) + 0.8) * 12)) for s, e, _ in keep] if dub else None
-        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets)
+        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key)
         segs = []
         for (s, e, _), out in zip(keep, outs):
             if out:
@@ -2729,7 +2823,7 @@ def run_worker(job, item, settings, fonts_data):
             for idx, engine in enumerate(order):
                 try:
                     if engine == "free":
-                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"])
+                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"])
                     else:
                         segments, used_model, failed_chunks = transcribe(settings["gemini_key"], master_path, duration, settings["language"], rep, concise=settings["dub_on"], speech=speech)
                     used_engine = engine
