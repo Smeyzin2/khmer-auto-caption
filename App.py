@@ -496,6 +496,58 @@ def translate_texts(texts):
     return outs, errors
 
 
+NLLB_SRC = {
+    "zh": "zho_Hans", "chinese": "zho_Hans", "en": "eng_Latn",
+    "english": "eng_Latn", "th": "tha_Thai", "thai": "tha_Thai",
+    "vi": "vie_Latn", "vietnamese": "vie_Latn", "ja": "jpn_Jpan",
+    "japanese": "jpn_Jpan", "ko": "kor_Hang", "korean": "kor_Hang",
+    "fr": "fra_Latn", "french": "fra_Latn",
+}
+NLLB_REPO = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
+NLLB_TOK = "facebook/nllb-200-distilled-600M"
+_nllb = {"m": None, "tok": {}}
+_nllb_lock = threading.Lock()
+
+
+def nllb_translate(texts, src_code):
+    """បកប្រែក្នុងកម្មវិធីផ្ទាល់ (NLLB) ឥតគិតថ្លៃ គ្មានកូតា គ្មាន Key។"""
+    import ctranslate2
+    from huggingface_hub import snapshot_download
+    from transformers import AutoTokenizer
+
+    with _nllb_lock:
+        if _nllb["m"] is None:
+            path = snapshot_download(NLLB_REPO)
+            _nllb["m"] = ctranslate2.Translator(
+                path, device="cpu", compute_type="int8",
+                inter_threads=1, intra_threads=2,
+            )
+        if src_code not in _nllb["tok"]:
+            _nllb["tok"][src_code] = AutoTokenizer.from_pretrained(
+                NLLB_TOK, src_lang=src_code
+            )
+        tok = _nllb["tok"][src_code]
+        tr = _nllb["m"]
+
+        outs = []
+        for k in range(0, len(texts), 16):
+            part = [str(t).replace("\n", " ") for t in texts[k:k + 16]]
+            toks = [tok.convert_ids_to_tokens(tok.encode(t)) for t in part]
+            res = tr.translate_batch(
+                toks,
+                target_prefix=[["khm_Khmr"]] * len(toks),
+                beam_size=2,
+                max_batch_size=8,
+            )
+            for r in res:
+                hyp = r.hypotheses[0][1:]
+                text = tok.decode(
+                    tok.convert_tokens_to_ids(hyp), skip_special_tokens=True
+                )
+                outs.append(clean_translation(text))
+    return outs
+
+
 _edge_tok = {"t": None, "ts": 0.0}
 
 
@@ -806,6 +858,20 @@ def transcribe(groq_key, gemini_key, audio_path, duration, language, dub, rep):
                             outs[i] = g
                 except Exception as e:
                     errs.append(f"edge: {e}"[:200])
+            left = [i for i, o in enumerate(outs) if not o]
+            if left:
+                rep.write("៣/៤ កំពុងបកប្រែដោយម៉ាស៊ីនក្នុងកម្មវិធី (គ្មានកំណត់)...")
+                try:
+                    src_code = NLLB_SRC.get(
+                        str(language or detected).lower(), "eng_Latn"
+                    )
+                    for i, g in zip(
+                        left, nllb_translate([originals[i] for i in left], src_code)
+                    ):
+                        if g:
+                            outs[i] = g
+                except Exception as e:
+                    errs.append(f"nllb: {e}"[:200])
             # ឃ្លាដែលនៅខ្វះ → សាកបកម្តងមួយៗ (កុំឱ្យរំលង)
             for i in [i for i, o in enumerate(outs) if not o]:
                 try:
