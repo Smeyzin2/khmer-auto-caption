@@ -1797,7 +1797,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
         keep = merge_for_translate(keep)
-        budgets = [max(10, int(((e - s) + 0.8) * 12)) for s, e, _ in keep] if dub else None
+        budgets = [max(8, int(((e - s) + 0.3) * 11)) for s, e, _ in keep] if dub else None
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key)
         segs = []
         for (s, e, _), out in zip(keep, outs):
@@ -2496,6 +2496,9 @@ def eq_filters(ref, tts, limit=6.0):
     return ",".join(parts)
 
 
+MERGE_TIGHT = (50, 0.4, 5.0)
+
+
 def merge_for_dub(segments, max_chars=80, max_gap=0.6, max_len=8.0):
     """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
     out = []
@@ -2555,7 +2558,7 @@ def shorten_groq(api_key, text, max_seconds):
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0):
+             clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0, tight=True):
     inputs, filters = [], []
     n = 0
     if keep_bg:
@@ -2578,7 +2581,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     def gen(i):
         s_, e_, t_ = segments[i]
         next_s_ = segments[i + 1][0] if i + 1 < n_seg else duration
-        slot0 = max(0.6, min(next_s_ - 0.08, e_ + 1.0) - s_)
+        slot0 = max(0.6, min(next_s_ - 0.08, e_ + (0.3 if tight else 1.0)) - s_)
         path_ = os.path.join(folder, f"tts_{i}.mp3")
         try:
             if not tts_retry(t_, voices_[i], path_, pros[i]):
@@ -2643,8 +2646,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         start = max(s + offset, cursor, 0.0)
         if start >= duration - 0.3:
             break
-        slot = max(0.6, min(next_s - 0.08, e + 1.0) - start)
-        speed = min(1.4, max(1.0, d / slot))
+        slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
+        speed = min(1.4, max(0.85 if tight else 1.0, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -2851,7 +2854,7 @@ def run_worker(job, item, settings, fonts_data):
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
                     client = (genai.Client(api_key=settings["gemini_key"]) if used_engine == "gemini" else None)
-                    dub_segments = merge_for_dub(segments)
+                    dub_segments = merge_for_dub(segments, *(MERGE_TIGHT if settings.get("tight_sync", True) else ()))
                     seg_voices = None
                     targets = None
                     emotions = None
@@ -2883,7 +2886,7 @@ def run_worker(job, item, settings, fonts_data):
                             if settings["voice_match"]:
                                 targets = compute_targets(dub_segments, seg_voices, pitch_inf, runs_)
                         except Exception:
-                            dub_segments = merge_for_dub(segments)
+                            dub_segments = merge_for_dub(segments, *(MERGE_TIGHT if settings.get("tight_sync", True) else ()))
                             seg_voices = None
                             targets = None
                             voice_notes = []
@@ -2909,7 +2912,7 @@ def run_worker(job, item, settings, fonts_data):
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     try:
-                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=settings.get("dub_offset", 0.0))
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=settings.get("dub_offset", 0.0), tight=settings.get("tight_sync", True))
                     finally:
                         if clone_voice:
                             eleven_delete_voice(settings["eleven_key"], clone_voice)
@@ -3090,6 +3093,7 @@ clone_file = None
 timbre = False
 timbre_file = None
 dub_offset = 0.2
+tight_sync = True
 
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
@@ -3147,6 +3151,8 @@ with tab_voice:
         keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
         dub_offset = st.slider("⏱ កែម៉ោងសំឡេងអាន (វិនាទី)", -1.0, 1.5, 0.2, 0.1,
                                help="អានមុនវីដេអូ → ដំឡើងលេខ (+) · អានយឺតជាងវីដេអូ → បន្ថយលេខ (−)")
+        tight_sync = st.toggle("👄 តម្រឹមឱ្យជិតមាត់ (ចាប់ផ្តើម និងបញ្ចប់ត្រូវនឹងការនិយាយ)", value=True,
+                               help="កាត់ឃ្លាខ្លីៗ និងរំកិលល្បឿនអាន ឱ្យចប់ព្រមមាត់។ បិទវិញ បើស្តាប់ទៅកាត់ៗពេក។")
         if not dub_on:
             st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើជម្រើសទាំងនេះ។")
     if dub_on:
@@ -3233,7 +3239,7 @@ if run:
         "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
-        "keep_bg": keep_bg, "dub_offset": dub_offset, "auto_gender": auto_gender,
+        "keep_bg": keep_bg, "dub_offset": dub_offset, "tight_sync": tight_sync, "auto_gender": auto_gender,
         "voice_match": voice_match, "emotion": emotion,
         "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
         "eleven_key": ELEVEN_KEY,
