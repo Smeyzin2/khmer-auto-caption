@@ -1346,8 +1346,23 @@ def groq_chat_models(api_key):
     return ordered
 
 
-def groq_translate_chunk(api_key, texts):
-    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+TRANS_SYSTEM = (
+    "You are a professional subtitle and dubbing translator into spoken Khmer (Khmer script only). "
+    "The numbered lines are consecutive sentences from ONE video, so use the surrounding lines as context. "
+    "Rules: (1) Translate the MEANING and tone into natural, everyday Khmer that a Cambodian would really say; "
+    "never translate word for word. (2) Fix obvious speech-recognition mistakes using the context. "
+    "(3) Do not leave out any important information. (4) Keep names as they are or transliterate them. "
+    "(5) If a line has [max N chars], keep the Khmer within about N characters by choosing shorter natural wording, "
+    "not by dropping meaning. Never output the [max N chars] tag. "
+    "Return JSON: {\"translations\": [...]} with exactly the same number of items, in the same order."
+)
+
+
+def groq_translate_chunk(api_key, texts, budgets=None):
+    numbered = "\n".join(
+        f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
+        for i, t in enumerate(texts)
+    )
     models = groq_chat_models(api_key)
     good = _groq_chat_cache["good"]
     if good in models:
@@ -1358,7 +1373,7 @@ def groq_translate_chunk(api_key, texts):
             "model": model, "temperature": 0.2,
             "response_format": {"type": "json_object"},
             "messages": [
-                {"role": "system", "content": ("You translate subtitles into natural, fluent " "Khmer (Khmer script only). Translate meaning, " "not word for word. Return JSON: " "{\"translations\": [...]} with exactly the " "same number of items, in the same order.")},
+                {"role": "system", "content": TRANS_SYSTEM},
                 {"role": "user", "content": numbered},
             ],
         }).encode("utf-8")
@@ -1387,7 +1402,32 @@ def groq_translate_chunk(api_key, texts):
     raise RuntimeError(last[:300])
 
 
-def translate_texts(texts, groq_key=None):
+def translate_texts(texts, groq_key=None, budgets=None):
+    errors = []
+    outs = [None] * len(texts)
+    if groq_key:
+        for k in range(0, len(texts), 12):
+            idxs = list(range(k, min(k + 12, len(texts))))
+            try:
+                res = groq_translate_chunk(
+                    groq_key, [str(texts[i]).strip() for i in idxs],
+                    [budgets[i] for i in idxs] if budgets else None,
+                )
+                for i, r in zip(idxs, res):
+                    outs[i] = r
+            except Exception as e:
+                errors.append(f"groq-llm: {e}"[:200])
+            time.sleep(0.4)
+    missing = [i for i, o in enumerate(outs) if o is None]
+    if missing:
+        g_outs, g_errs = _translate_texts_old([texts[i] for i in missing], None)
+        errors += g_errs
+        for i, o in zip(missing, g_outs):
+            outs[i] = o
+    return outs, errors
+
+
+def _translate_texts_old(texts, groq_key=None):
     errors = []
     outs = [None] * len(texts)
     google_blocked = False
@@ -1600,7 +1640,20 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
     return out
 
 
-def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True):
+def merge_for_translate(segs, max_chars=160, max_gap=0.6, max_len=10.0):
+    out = []
+    for s, e, t in segs:
+        if out:
+            ps, pe, pt = out[-1]
+            ended = pt.rstrip()[-1:] in ".!?។…"
+            if (not ended) and s - pe <= max_gap and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
+                out[-1] = (ps, max(pe, e), (pt + " " + t).strip())
+                continue
+        out.append((s, e, t))
+    return out
+
+
+def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False):
     code = WHISPER_LANG.get(source_language) if source_language else None
     if source_language == "Khmer" and khmer_ok:
         try:
@@ -1649,7 +1702,9 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             segs = retime_by_speech(segs, speech, duration)
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        outs, errs = translate_texts([t for _, _, t in keep], groq_key)
+        keep = merge_for_translate(keep)
+        budgets = [max(10, int(((e - s) + 0.8) * 12)) for s, e, _ in keep] if dub else None
+        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets)
         segs = []
         for (s, e, _), out in zip(keep, outs):
             if out:
@@ -2406,7 +2461,7 @@ def shorten_groq(api_key, text, max_seconds):
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             clone_voice=None, eleven_key=None, ref_bands=None):
+             clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0):
     inputs, filters = [], []
     n = 0
     if keep_bg:
@@ -2435,7 +2490,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
-            if d_ > slot0 * 1.2:
+            if d_ > slot0 * 1.4:
                 t2 = t_
                 if client is not None:
                     t2 = shorten_khmer(client, model, t_, slot0)
@@ -2491,11 +2546,11 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             continue
         d, f0, _tb = res
         next_s = segments[i + 1][0] if i + 1 < n_seg else duration
-        start = max(s, cursor)
+        start = max(s + offset, cursor, 0.0)
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + 1.0) - start)
-        speed = min(1.7, max(1.0, d / slot))
+        speed = min(1.4, max(1.0, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -2674,7 +2729,7 @@ def run_worker(job, item, settings, fonts_data):
             for idx, engine in enumerate(order):
                 try:
                     if engine == "free":
-                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech)
+                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"])
                     else:
                         segments, used_model, failed_chunks = transcribe(settings["gemini_key"], master_path, duration, settings["language"], rep, concise=settings["dub_on"], speech=speech)
                     used_engine = engine
@@ -2760,7 +2815,7 @@ def run_worker(job, item, settings, fonts_data):
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     try:
-                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands)
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=settings.get("dub_offset", 0.0))
                     finally:
                         if clone_voice:
                             eleven_delete_voice(settings["eleven_key"], clone_voice)
@@ -2940,6 +2995,7 @@ clone_on = False
 clone_file = None
 timbre = False
 timbre_file = None
+dub_offset = 0.2
 
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
@@ -2995,6 +3051,8 @@ with tab_voice:
     with st.container(border=True):
         voice_label = st.radio("សំឡេងអាន", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
         keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
+        dub_offset = st.slider("⏱ កែម៉ោងសំឡេងអាន (វិនាទី)", -1.0, 1.5, 0.2, 0.1,
+                               help="អានមុនវីដេអូ → ដំឡើងលេខ (+) · អានយឺតជាងវីដេអូ → បន្ថយលេខ (−)")
         if not dub_on:
             st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើជម្រើសទាំងនេះ។")
     if dub_on:
@@ -3081,7 +3139,7 @@ if run:
         "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
-        "keep_bg": keep_bg, "auto_gender": auto_gender,
+        "keep_bg": keep_bg, "dub_offset": dub_offset, "auto_gender": auto_gender,
         "voice_match": voice_match, "emotion": emotion,
         "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
         "eleven_key": ELEVEN_KEY,
