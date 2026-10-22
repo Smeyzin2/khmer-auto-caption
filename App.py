@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+
 import os
 import io
 import re
@@ -1187,14 +1187,44 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
     base = os.path.basename(audio_path)
     done_counter = {"n": 0}
     dbg(status, f"បែងចែកជា {total} ផ្នែក")
-    def work(i, start, end):
-        out_name = f"chunk_{i}.flac"
+    fatal_keys = ("429", "503", "404", "500", "resource_exhausted", "មិនមែនអក្សរខ្មែរ")
+
+    def clip_range(tag, start, end, depth=0):
+        out_name = f"chunk_{tag}.flac"
         run_ffmpeg(["-ss", f"{start:.3f}", "-t", f"{end - start:.3f}", "-i", base, "-c:a", "flac", out_name], cwd=folder)
         with open(os.path.join(folder, out_name), "rb") as f:
             data = f.read()
         if len(data) > 15 * 1024 * 1024:
             raise UserError("សំឡេងធំពេក។")
-        segs, model, errors = transcribe_clip(client, models, data, "audio/flac", end - start, source_language, concise, status)
+        all_errs = []
+        for attempt in range(3):
+            segs, model, errors = transcribe_clip(client, models, data, "audio/flac", end - start, source_language, concise, status)
+            if segs or not any(k in err.lower() for err in errors for k in fatal_keys):
+                return segs, model, errors
+            all_errs += errors
+            time.sleep(2 + 3 * attempt)
+        # នៅតែបរាជ័យ → ចែកផ្នែកជាពីរ រួចសាកម្តងទៀត
+        if depth < 2 and end - start > 12:
+            mid = (start + end) / 2.0
+            parts, got_model = [], None
+            for j, (a, b) in enumerate(((start, mid), (mid, end))):
+                try:
+                    s2, m2, e2 = clip_range(f"{tag}_{j}", a, b, depth + 1)
+                except UserError:
+                    raise
+                except Exception as ex_:
+                    s2, m2, e2 = [], None, [str(ex_)]
+                if s2:
+                    got_model = got_model or m2
+                    parts += [(x + (a - start), y + (a - start), t) for x, y, t in s2]
+                else:
+                    all_errs += e2
+            if parts:
+                return parts, got_model, []
+        return [], None, all_errs
+
+    def work(i, start, end):
+        segs, model, errors = clip_range(str(i), start, end)
         done_counter["n"] += 1
         if total > 1:
             status.write(f"៣/៤ កំពុងស្តាប់ និងបកប្រែ... ({done_counter['n']}/{total})")
@@ -1203,7 +1233,6 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
     used_models = []
     failed = 0
     fatal_errors = []
-    fatal_keys = ("429", "503", "404", "500", "resource_exhausted")
     workers = max(1, min(MAX_CHUNK_WORKERS, total))
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(work, i, s, e) for i, (s, e) in enumerate(chunks)]
@@ -1228,6 +1257,18 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
             raise RuntimeError("ម៉ូដែលទាំងអស់បរាជ័យ។\n\n" + "\n\n".join(fatal_errors))
         raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
     all_segments.sort(key=lambda x: x[0])
+    # ឃ្លាដែលម៉ូដែលទុកជាភាសាដើម (មិនមែនខ្មែរ) → បកម្តងទៀតឱ្យគ្រប់
+    pending = [k for k, (_, _, t) in enumerate(all_segments)
+               if not has_khmer(t) and re.search(r"[^\W\d_]", t)]
+    if pending:
+        try:
+            outs_, _errs = translate_texts([all_segments[k][2] for k in pending], None, None, api_key)
+        except Exception:
+            outs_ = [None] * len(pending)
+        for k, o in zip(pending, outs_):
+            if o and has_khmer(str(o)):
+                a, b, _ = all_segments[k]
+                all_segments[k] = (a, b, o)
     main_model = Counter(used_models).most_common(1)[0][0]
     return all_segments, main_model, failed
 
@@ -1487,8 +1528,18 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
         errors += g_errs
         for i, o in zip(missing, g_outs):
             outs[i] = o
+    def has_letters(x):
+        return bool(re.search(r"[^\W\d_]", str(x or "")))
+
+    def bad(i):
+        o = outs[i]
+        if o and has_khmer(str(o)):
+            return False
+        # ឃ្លាដែលគ្មានអក្សរ (លេខ/សញ្ញា/ភ្លេង) មិនចាំបាច់បកទេ
+        return has_letters(texts[i])
+
     # ជំហាន ៣: សាកបកប្រែឡើងវិញសម្រាប់ឃ្លាដែលលទ្ធផលទទេ/មិនមានអក្សរខ្មែរ
-    missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
+    missing = [i for i in range(n) if bad(i)]
     if missing and gemini_key:
         for k in range(0, len(missing), 8):
             idxs = missing[k:k + 8]
@@ -1503,8 +1554,8 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
                         outs[i] = r
             except Exception as e:
                 errors.append(f"gemini-retry: {e}"[:200])
-    # ជំហាន ៤: បម្រុងចុងក្រោយ បកផ្ទាល់ទៅខ្មែរ ដោយ Groq
-    missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
+    # ជំហាន ៤: បម្រុង បកផ្ទាល់ទៅខ្មែរ ដោយ Groq
+    missing = [i for i in range(n) if bad(i)]
     if missing and groq_key:
         for k in range(0, len(missing), 8):
             idxs = missing[k:k + 8]
@@ -1519,10 +1570,50 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
             except Exception as e:
                 errors.append(f"groq-km-retry: {e}"[:200])
             time.sleep(0.5)
-    # កុំទុកលទ្ធផលទទេ ឬអង់គ្លេសសុទ្ធឱ្យបន្តជាសំឡេង dubbing
-    for i, o in enumerate(outs):
-        if not o or not has_khmer(str(o)):
-            outs[i] = None
+    # ជំហាន ៥: បកម្តងមួយឃ្លាៗ ជាមួយ Google → Gemini → Groq (សាកច្រើនដង)
+    missing = [i for i in range(n) if bad(i)]
+    for i in missing:
+        src = str(texts[i]).strip()
+        got = None
+        for cand in [c for c in (english[i], src) if c]:
+            for attempt in range(3):
+                try:
+                    r = clean_translation(google_translate_request(cand))
+                    if r and has_khmer(r):
+                        got = r
+                        break
+                except Exception as e:
+                    errors.append(f"google-single: {e}"[:200])
+                    time.sleep(1.5 * (attempt + 1))
+            if got:
+                break
+        if not got and gemini_key:
+            try:
+                r = gemini_translate_khmer(gemini_key, [src], [english[i]], [budgets[i]] if budgets else None)[0]
+                if r and has_khmer(str(r)):
+                    got = r
+            except Exception as e:
+                errors.append(f"gemini-single: {e}"[:200])
+        if not got and groq_key:
+            try:
+                r = groq_translate_chunk(groq_key, [src], [budgets[i]] if budgets else None)[0]
+                if r and has_khmer(str(r)):
+                    got = r
+            except Exception as e:
+                errors.append(f"groq-single: {e}"[:200])
+        outs[i] = got
+    # ជំហានចុងក្រោយ: បើនៅតែបកមិនបាន ទុកអត្ថបទអង់គ្លេស/ដើម (កុំឱ្យឃ្លាបាត់) — មានតែករណីកម្រខ្លាំងប៉ុណ្ណោះ
+    for i in range(n):
+        o = outs[i]
+        if o and has_khmer(str(o)):
+            continue
+        if not has_letters(texts[i]):
+            outs[i] = str(texts[i]).strip() or None
+            continue
+        fallback = (english[i] or "").strip() or CJK_RE.sub("", str(texts[i])).strip()
+        outs[i] = fallback or None
+        if fallback:
+            errors.append(f"fallback-source: ឃ្លាទី {i + 1} បកមិនបាន ទុកអត្ថបទដើម")
     return outs, errors
 
 
@@ -1554,7 +1645,6 @@ def _translate_texts_prev(texts, groq_key=None, budgets=None):
 def _translate_texts_old(texts, groq_key=None):
     errors = []
     outs = [None] * len(texts)
-    google_blocked = False
     batches, cur, size = [], [], 0
     for i, t in enumerate(texts):
         flat = str(t).replace("\n", " ").strip()
@@ -1566,17 +1656,32 @@ def _translate_texts_old(texts, groq_key=None):
     if cur:
         batches.append(cur)
     for batch in batches:
-        if google_blocked:
-            break
+        ok = False
         try:
             raw = google_translate_request("\n".join(t for _, t in batch))
             lines = (raw or "").strip("\n").split("\n")
             if len(lines) == len(batch):
                 for (i, _), line in zip(batch, lines):
                     outs[i] = clean_translation(line)
+                ok = True
         except Exception as e:
             errors.append(f"google: {e}"[:200])
-            google_blocked = True
+            time.sleep(1.5)
+        if not ok:
+            # ចំនួនបន្ទាត់មិនត្រូវគ្នា ឬ batch បរាជ័យ → បកម្តងមួយឃ្លាៗ
+            for i, t in batch:
+                if not t:
+                    continue
+                for attempt in range(3):
+                    try:
+                        r = clean_translation(google_translate_request(t))
+                        if r:
+                            outs[i] = r
+                            break
+                    except Exception as e:
+                        errors.append(f"google-line: {e}"[:200])
+                        time.sleep(1.5 * (attempt + 1))
+                time.sleep(0.15)
         time.sleep(0.2)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
@@ -1663,7 +1768,15 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech, status):
         name = f"kchunk_{i}.mp3"
         try:
             run_ffmpeg(["-ss", f"{a:.3f}", "-t", f"{b - a:.3f}", "-i", base, "-c:a", "libmp3lame", "-b:a", "64k", name], cwd=folder)
-            data, _ = groq_transcribe(groq_key, os.path.join(folder, name), "km", status)
+            data = None
+            for attempt in range(3):
+                try:
+                    data, _ = groq_transcribe(groq_key, os.path.join(folder, name), "km", status)
+                    break
+                except Exception:
+                    if attempt == 2:
+                        raise
+                    time.sleep(3 * (attempt + 1))
             texts = []
             for sg in data.get("segments") or []:
                 text = fix_khmer(sg.get("text", ""))
@@ -1728,13 +1841,18 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
             with open(os.path.join(folder, name), "rb") as f:
                 data = f.read()
             text = ""
-            for attempt in range(2):
+            for attempt in range(4):
                 try:
                     text = google_speech_request(data)
                     break
                 except urllib.error.HTTPError as e:
-                    if e.code in (429, 503) and attempt == 0:
-                        time.sleep(3)
+                    if e.code in (429, 503) and attempt < 3:
+                        time.sleep(3 * (attempt + 1))
+                        continue
+                    raise
+                except Exception:
+                    if attempt < 3:
+                        time.sleep(2 * (attempt + 1))
                         continue
                     raise
             res = retime_by_speech([(a, b, text)], speech, duration, pad=0.0) if text else []
@@ -1835,13 +1953,6 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
                 segs.append((s, e, out))
             else:
                 failed += 1
-        # កុំបង្កើតវីដេអូដែលមានឃ្លាបាត់សំឡេងបកប្រែស្ងាត់ៗ
-        if failed > 0 or len(segs) != len(keep):
-            reason = " | ".join(errs[:3]) or "AI មិនបានផ្តល់អត្ថបទខ្មែរសម្រាប់ឃ្លាខ្លះ"
-            raise RuntimeError(
-                "ការបកប្រែមិនគ្រប់ឃ្លា ដូច្នេះបានបញ្ឈប់ដើម្បីកុំឱ្យវីដេអូបាត់អត្ថបទ។ "
-                f"(ស្តាប់បាន {len(keep)} ឃ្លា បកបាន {len(segs)} ឃ្លា) មូលហេតុ: {reason}"
-            )
     if not segs:
         raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
     segs.sort(key=lambda x: x[0])
