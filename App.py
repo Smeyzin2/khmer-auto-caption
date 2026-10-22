@@ -2756,7 +2756,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
-        speed = min(1.55, max(1.50, d / slot))
+        # Natural dubbing speed; only speed up slightly if a line must fit.
+        speed = min(1.15, max(1.0, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -3260,6 +3261,12 @@ with tab_voice:
     with st.container(border=True):
         # Keep only the simple voice choices requested by the user.
         voice_label = st.radio("ជ្រើសសំឡេងនិយាយ", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
+        auto_gender = st.toggle(
+            "🎭 ឱ្យ AI ប្តូរសំឡេងប្រុស/ស្រីតាមអ្នកនិយាយក្នុងវីដេអូ",
+            value=False,
+            help="បើបើក AI នឹងវិភាគសំឡេងដើម ហើយប្រើសំឡេងប្រុសសម្រាប់អ្នកនិយាយប្រុស និងសំឡេងស្រីសម្រាប់អ្នកនិយាយស្រី។ ត្រូវការសំឡេងដើមច្បាស់។",
+            key="auto_gender_pick",
+        )
         keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
         if not dub_on:
             st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើការនិយាយ។")
@@ -3334,7 +3341,7 @@ if run:
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
-        "keep_bg": keep_bg, "dub_offset": 0.0, "tight_sync": False, "auto_gender": False,
+        "keep_bg": keep_bg, "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
         "voice_match": False, "emotion": False,
         "clone_sample": None,
         "eleven_key": ELEVEN_KEY,
