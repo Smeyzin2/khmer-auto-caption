@@ -3,6 +3,7 @@ import os
 import io
 import re
 import json
+import sqlite3
 import time
 import uuid
 import shutil
@@ -471,6 +472,72 @@ MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 3
 MAX_DURATION_MIN = 15
+
+# Shared gallery storage (all app users). Configure KAC_PUBLIC_STORAGE_DIR
+# to a persistent disk/mounted volume on the deployment host.
+PUBLIC_STORAGE_DIR = os.environ.get("KAC_PUBLIC_STORAGE_DIR", os.path.join(os.getcwd(), "public_video_storage"))
+PUBLIC_VIDEO_DIR = os.path.join(PUBLIC_STORAGE_DIR, "videos")
+PUBLIC_DB_PATH = os.path.join(PUBLIC_STORAGE_DIR, "gallery.sqlite3")
+_gallery_lock = threading.Lock()
+
+
+def init_public_gallery():
+    os.makedirs(PUBLIC_VIDEO_DIR, exist_ok=True)
+    with _gallery_lock:
+        with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as conn:
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS public_videos (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    filename TEXT NOT NULL,
+                    created_at REAL NOT NULL,
+                    size_bytes INTEGER NOT NULL
+                )
+            """)
+            conn.commit()
+
+
+def save_to_public_gallery(name, video_bytes):
+    """Automatically publish a completed Khmer-translated video to shared gallery."""
+    init_public_gallery()
+    if not video_bytes:
+        return None
+    video_id = uuid.uuid4().hex
+    filename = f"{video_id}.mp4"
+    final_path = os.path.join(PUBLIC_VIDEO_DIR, filename)
+    temp_path = final_path + ".tmp"
+    safe_title = safe_filename(name)[:100] or "khmer_video"
+    with _gallery_lock:
+        with open(temp_path, "wb") as f:
+            f.write(video_bytes)
+        os.replace(temp_path, final_path)
+        try:
+            with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as conn:
+                conn.execute(
+                    "INSERT INTO public_videos (id, name, filename, created_at, size_bytes) VALUES (?, ?, ?, ?, ?)",
+                    (video_id, safe_title, filename, time.time(), len(video_bytes)),
+                )
+                conn.commit()
+        except Exception:
+            try:
+                os.remove(final_path)
+            except OSError:
+                pass
+            raise
+    return video_id
+
+
+def get_public_gallery(limit=100):
+    init_public_gallery()
+    with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as conn:
+        rows = conn.execute(
+            "SELECT id, name, filename, created_at, size_bytes FROM public_videos ORDER BY created_at DESC LIMIT ?",
+            (int(limit),),
+        ).fetchall()
+    return [
+        {"id": r[0], "name": r[1], "path": os.path.join(PUBLIC_VIDEO_DIR, r[2]), "created_at": r[3], "size_bytes": r[4]}
+        for r in rows if os.path.isfile(os.path.join(PUBLIC_VIDEO_DIR, r[2]))
+    ]
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
@@ -2978,6 +3045,13 @@ def run_worker(job, item, settings, fonts_data):
             item["pct"] = 1.0
             item["stage"] = "រួចរាល់"
             item["elapsed"] = time.time() - item["t0"]
+            # Automatically add the translated output to the shared public gallery.
+            try:
+                item["gallery_id"] = save_to_public_gallery(item["name"], video)
+                item["gallery_saved"] = True
+            except Exception as gallery_error:
+                item["gallery_saved"] = False
+                item["gallery_error"] = str(gallery_error)[:300]
             item["state"] = "done"
     except Exception as error:
         item["error"] = friendly_message(error)
@@ -3132,8 +3206,8 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
 
-tab_vid, tab_trans, tab_voice, tab_text, tab_out = st.tabs(
-    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក"]
+tab_vid, tab_trans, tab_voice, tab_text, tab_out, tab_gallery = st.tabs(
+    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក", "🌍 វីដេអូរួម"]
 )
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
@@ -3312,3 +3386,29 @@ with tab_out:
                 shutil.rmtree(job.folder, ignore_errors=True)
                 st.session_state.pop("job", None)
                 st.rerun()
+
+
+# ============================ ផ្ទាំង ៦: វីដេអូរួម ============================
+with tab_gallery:
+    st.info("វីដេអូដែលអ្នកប្រើប្រាស់បកប្រែរួច នឹងត្រូវរក្សាទុក និងបង្ហាញនៅទីនេះដោយស្វ័យប្រវត្តិ។ អ្នកប្រើទាំងអស់អាចមើល និងទាញយកបាន។")
+    try:
+        public_items = get_public_gallery(limit=100)
+    except Exception as gallery_error:
+        public_items = []
+        st.error("មិនអាចបើក Storage វីដេអូរួមបានទេ។ សូមពិនិត្យទីតាំង Storage របស់ Server។")
+    if not public_items:
+        st.caption("មិនទាន់មានវីដេអូក្នុងបញ្ជីទេ។")
+    else:
+        st.caption(f"វីដេអូសរុបដែលបង្ហាញ៖ {len(public_items)} (បង្ហាញថ្មីៗ ១០០ វីដេអូ)")
+        for public_item in public_items:
+            with st.container(border=True):
+                st.markdown(f"**{public_item['name']}**")
+                st.caption(f"កាលបរិច្ឆេទ៖ {time.strftime('%Y-%m-%d %H:%M', time.localtime(public_item['created_at']))} · {public_item['size_bytes'] / (1024 * 1024):.1f} MB")
+                try:
+                    with open(public_item["path"], "rb") as vf:
+                        public_data = vf.read()
+                    st.video(public_data)
+                    dl_button("⬇️ ទាញយកវីដេអូ", public_data, f"{safe_filename(public_item['name'])}_khmer.mp4", "video/mp4", key=f"public_dl_{public_item['id']}", use_container_width=True)
+                except Exception:
+                    st.warning("ឯកសារវីដេអូនេះមិនអាចអានបានទេ។")
+ 
