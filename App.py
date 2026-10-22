@@ -2562,8 +2562,7 @@ def shorten_groq(api_key, text, max_seconds):
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0, tight=True,
-             voice_speed_limit=1.5):
+             clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0, tight=True):
     inputs, filters = [], []
     n = 0
     if keep_bg:
@@ -2652,8 +2651,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
-        # The UI slider sets the maximum playback speed for generated speech.
-        speed = min(float(voice_speed_limit), max(0.85 if tight else 1.0, d / slot))
+        speed = min(1.4, max(0.85 if tight else 1.0, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -2918,7 +2916,7 @@ def run_worker(job, item, settings, fonts_data):
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     try:
-                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=settings.get("dub_offset", 0.0), tight=settings.get("tight_sync", True), voice_speed_limit=settings.get("voice_speed_limit", 1.5))
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=settings.get("dub_offset", 0.0), tight=settings.get("tight_sync", True))
                     finally:
                         if clone_voice:
                             eleven_delete_voice(settings["eleven_key"], clone_voice)
@@ -3099,7 +3097,6 @@ clone_file = None
 timbre = False
 timbre_file = None
 dub_offset = 0.2
-voice_speed_limit = 1.5
 tight_sync = True
 
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
@@ -3156,8 +3153,6 @@ with tab_voice:
     with st.container(border=True):
         voice_label = st.radio("សំឡេងអាន", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
         keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
-        voice_speed_limit = st.slider("⚡ ល្បឿនសំឡេង AI (អតិបរមា)", 1.0, 2.5, 1.5, 0.1,
-                                     help="បង្កើនលេខ ដើម្បីអនុញ្ញាតឱ្យសំឡេង AI និយាយលឿនជាងមុន ពេលត្រូវតម្រឹមតាមវីដេអូ។")
         dub_offset = st.slider("⏱ កែម៉ោងសំឡេងអាន (វិនាទី)", -1.0, 1.5, 0.2, 0.1,
                                help="អានមុនវីដេអូ → ដំឡើងលេខ (+) · អានយឺតជាងវីដេអូ → បន្ថយលេខ (−)")
         tight_sync = st.toggle("👄 តម្រឹមឱ្យជិតមាត់ (ចាប់ផ្តើម និងបញ្ចប់ត្រូវនឹងការនិយាយ)", value=True,
@@ -3248,8 +3243,7 @@ if run:
         "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
-        "keep_bg": keep_bg, "dub_offset": dub_offset, "voice_speed_limit": voice_speed_limit,
-        "tight_sync": tight_sync, "auto_gender": auto_gender,
+        "keep_bg": keep_bg, "dub_offset": dub_offset, "tight_sync": tight_sync, "auto_gender": auto_gender,
         "voice_match": voice_match, "emotion": emotion,
         "clone_sample": (clone_file.getvalue() if (clone_on and clone_file) else None),
         "eleven_key": ELEVEN_KEY,
