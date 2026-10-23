@@ -1924,7 +1924,7 @@ def tts_segment(text, voice, path, prosody=None):
     async def _go(p):
         # Natural, slightly slower Khmer delivery by default.
         # Emotion-specific prosody still takes precedence when supplied.
-        kw = {"rate": "-8%"}
+        kw = {"rate": "-12%"}
         if p:
             kw = {"rate": p["rate"], "volume": p["volume"], "pitch": p["pitch"]}
         await edge_tts.Communicate(text, voice, **kw).save(path)
@@ -2703,14 +2703,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
-            if d_ > slot0 * 1.4:
-                t2 = t_
-                if client is not None:
-                    t2 = shorten_khmer(client, model, t_, slot0)
-                elif groq_key:
-                    t2 = shorten_groq(groq_key, t_, slot0)
-                if t2 != t_ and tts_retry(t2, voices_[i], path_, pros[i]):
-                    d_, _, _ = probe_media(path_)
+            # Preserve the complete translated sentence. Do not automatically
+            # ask an LLM to shorten it, since that can omit words or meaning.
             if clone_voice:
                 try:
                     eleven_sts(eleven_key, clone_voice, path_)
@@ -2759,21 +2753,15 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             continue
         d, f0, _tb = res
         next_s = segments[i + 1][0] if i + 1 < n_seg else duration
-        start = max(s + offset, cursor, 0.0)
+        start = max(s + offset, 0.0)
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
-        # Adjust speaking pace by the source segment's available time:
-        # short Chinese segments -> allow Khmer to speak faster;
-        # long Chinese segments -> slow Khmer down.
-        source_span = max(0.1, e - s)
-        if source_span <= 2.0:
-            speed = min(1.18, max(1.04, d / slot))
-        elif source_span >= 5.0:
-            speed = min(0.96, max(0.82, d / slot))
-        else:
-            speed = min(1.08, max(0.92, d / slot))
-        cursor = start + d / speed + 0.08
+        # Fit the complete generated sentence into its available slot when
+        # possible. atempo > 1 speeds up; < 1 slows down. Avoid extreme rates
+        # that make Khmer hard to understand.
+        speed = min(1.0, max(0.92, d / slot))
+        cursor = max(cursor, start + d / speed + 0.03)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
