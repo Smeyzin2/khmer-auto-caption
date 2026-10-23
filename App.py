@@ -3614,14 +3614,25 @@ def scroll_to_downloads():
     )
 
 
-GEMINI_KEY = "\n".join(split_keys([
-    get_secret("GEMINI_API_KEY", ""),
-    get_secret("GEMINI_API_KEYS", ""),
-]))  # ទទួលបានច្រើន key (បំបែកដោយ , ឬបន្ទាត់ថ្មី ឬជា list)
-GROQ_KEY = "\n".join(split_keys([
-    get_secret("GROQ_API_KEY", ""),
-    get_secret("GROQ_API_KEYS", ""),
-]))
+# API keys: អាចដាក់ច្រើនក្នុង Secret តែមួយដោយបំបែកជាក្បៀស ឬបន្ទាត់ថ្មី។
+# ក៏អាចប្រើ GEMINI_API_KEY_1, GEMINI_API_KEY_2 ... និង GROQ_API_KEY_1, GROQ_API_KEY_2 ... បាន។
+def collect_api_keys(prefix):
+    values = [get_secret(prefix, ""), get_secret(prefix + "S", "")]
+    # អាន numbered secrets រហូតដល់ 20 keys; ឈប់ពេលជួប 5 លេខទទេជាប់គ្នា។
+    empty_streak = 0
+    for i in range(1, 21):
+        value = get_secret(f"{prefix}_{i}", "")
+        if value:
+            values.append(value)
+            empty_streak = 0
+        else:
+            empty_streak += 1
+            if empty_streak >= 5 and i >= 5:
+                break
+    return "\n".join(split_keys(values))
+
+GEMINI_KEY = collect_api_keys("GEMINI_API_KEY")
+GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 ELEVEN_KEY = get_secret("ELEVENLABS_API_KEY", "")
 
 render_header()
