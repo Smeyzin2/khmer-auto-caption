@@ -1361,13 +1361,13 @@ def _google_once(text):
     return "".join(part[0] for part in (data[0] or []) if part and part[0])
 
 
-def google_translate_request(text, retries=3):
+def google_translate_request(text, retries=5):
     for attempt in range(retries):
         try:
             return _google_once(text)
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries - 1:
-                time.sleep(3 * (attempt + 1))
+                time.sleep(5 * (attempt + 1))
                 continue
             raise
 
@@ -1400,7 +1400,7 @@ def groq_chat_models(api_key):
             low = mid.lower()
             if not mid or m.get("active") is False:
                 continue
-            if any(x in low for x in ("whisper", "tts", "guard", "prompt", "orpheus")):
+            if any(x in low for x in ("whisper", "tts", "guard", "prompt", "orpheus", "allam", "safeguard")):
                 continue
             found.append(mid)
     except Exception:
@@ -1596,6 +1596,31 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
             except Exception as e:
                 errors.append(f"groq-km-retry: {e}"[:200])
             time.sleep(0.5)
+    # ជំហានចុងក្រោយ: បកម្តងមួយឃ្លាៗ (មិនអាចខុសចំនួនបន្ទាត់) ជាមួយ Gemini/Groq រួចទើប Google
+    missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
+    for i in missing:
+        one = [str(texts[i]).strip()]
+        bud = [budgets[i]] if budgets else None
+        r = None
+        if gemini_key:
+            try:
+                r = gemini_translate_khmer(gemini_key, one, [english[i]], bud)[0]
+            except Exception as e:
+                errors.append(f"gemini-1: {e}"[:200])
+        if (not r or not has_khmer(str(r))) and groq_key:
+            try:
+                r = groq_translate_chunk(groq_key, one, bud)[0]
+            except Exception as e:
+                errors.append(f"groq-1: {e}"[:200])
+            time.sleep(0.6)
+        if not r or not has_khmer(str(r)):
+            try:
+                r = clean_translation(google_translate_request(english[i] or one[0]))
+            except Exception as e:
+                errors.append(f"google-1: {e}"[:200])
+                time.sleep(5)
+        if r and has_khmer(str(r)):
+            outs[i] = r
     # កុំទុកលទ្ធផលទទេ ឬអង់គ្លេសសុទ្ធឱ្យបន្តជាសំឡេង dubbing
     for i, o in enumerate(outs):
         if not o or not has_khmer(str(o)):
@@ -1642,8 +1667,9 @@ def _translate_texts_old(texts, groq_key=None):
         size += len(flat) + 1
     if cur:
         batches.append(cur)
+    fails = 0
     for batch in batches:
-        if google_blocked:
+        if fails >= 3:
             break
         try:
             raw = google_translate_request("\n".join(t for _, t in batch))
@@ -1651,10 +1677,20 @@ def _translate_texts_old(texts, groq_key=None):
             if len(lines) == len(batch):
                 for (i, _), line in zip(batch, lines):
                     outs[i] = clean_translation(line)
+            else:
+                # line count differs: translate each line on its own
+                for i, flat in batch:
+                    try:
+                        outs[i] = clean_translation(google_translate_request(flat))
+                    except Exception:
+                        pass
+                    time.sleep(0.4)
+            fails = 0
         except Exception as e:
             errors.append(f"google: {e}"[:200])
-            google_blocked = True
-        time.sleep(0.2)
+            fails += 1
+            time.sleep(8)
+        time.sleep(0.5)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
         for k in range(0, len(missing), 20):
@@ -1854,7 +1890,7 @@ def merge_for_translate(segs, max_chars=160, max_gap=0.6, max_len=10.0):
     return out
 
 
-def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False, gemini_key=None):
+def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False, gemini_key=None, keep_failed=False):
     code = WHISPER_LANG.get(source_language) if source_language else None
     if source_language == "Khmer" and khmer_ok:
         try:
@@ -1912,13 +1948,17 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         ] if dub else None
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key)
         segs = []
-        for (s, e, _), out in zip(keep, outs):
+        for (s, e, orig), out in zip(keep, outs):
             if out:
                 segs.append((s, e, out))
+            elif keep_failed:
+                # មានទំព័រកែអត្ថបទ: ទុកឃ្លាដើមដាក់ស្លាក ⚠️ ឱ្យអ្នកកែដោយដៃ
+                segs.append((s, e, "⚠️ " + str(orig)))
+                failed += 1
             else:
                 failed += 1
         # កុំបង្កើតវីដេអូដែលមានឃ្លាបាត់សំឡេងបកប្រែស្ងាត់ៗ
-        if failed > 0 or len(segs) != len(keep):
+        if not keep_failed and (failed > 0 or len(segs) != len(keep)):
             reason = " | ".join(errs[:3]) or "AI មិនបានផ្តល់អត្ថបទខ្មែរសម្រាប់ឃ្លាខ្លះ"
             raise RuntimeError(
                 "ការបកប្រែមិនគ្រប់ឃ្លា ដូច្នេះបានបញ្ឈប់ដើម្បីកុំឱ្យវីដេអូបាត់អត្ថបទ។ "
@@ -2897,6 +2937,7 @@ def new_item(name, path=None, url=None):
         "video": None, "captions": [], "voice_lines": [], "error": None,
         "raw_error": "", "debug": {}, "t0": None, "elapsed": None,
         "srt": "", "srt_on": False,
+        "review_segments": None, "review_final": None, "review_event": None,
     }
 
 
@@ -2910,7 +2951,9 @@ class Job:
         self.zip_done = False
         self.scrolled = False
     def running(self):
-        return any(it["state"] in ("queued", "running") for it in self.items)
+        return any(it["state"] in ("queued", "running", "review") for it in self.items)
+    def reviewing(self):
+        return any(it["state"] == "review" for it in self.items)
 
 
 def engine_name(engine):
@@ -2955,7 +2998,7 @@ def run_worker(job, item, settings, fonts_data):
             for idx, engine in enumerate(order):
                 try:
                     if engine == "free":
-                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"])
+                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"], keep_failed=bool(settings.get("review_on")))
                     else:
                         segments, used_model, failed_chunks = transcribe(settings["gemini_key"], master_path, duration, settings["language"], rep, concise=settings["dub_on"], speech=speech)
                     used_engine = engine
@@ -2974,6 +3017,17 @@ def run_worker(job, item, settings, fonts_data):
                 item["warn"].append("ផ្នែកខ្លះនៃវីដេអូមិនអាចបកប្រែបាន។ សូមសាកម្តងទៀតពេលក្រោយ។")
             item["pct"] = 0.55
             segments = snap_segments(segments, speech, duration)
+            if settings.get("narrate_on"):
+                rep.write("📖 កំពុងកែសម្រួលជាភាសានិទានរឿង...")
+                narr_notes = []
+                try:
+                    segments = narrate_rewrite(segments, settings["groq_key"], settings["gemini_key"], narr_notes)
+                    item["warn"].extend(narr_notes)
+                except Exception:
+                    item["warn"].append("ម៉ូដនិទានរឿងមានបញ្ហា ប្រើអត្ថបទបកប្រែដើម។")
+            if settings.get("review_on"):
+                segments = wait_for_review(item, segments)
+                item["pct"] = 0.55
             captions, sync_mode = build_captions(segments, duration)
             if not captions:
                 raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
@@ -3092,6 +3146,87 @@ def run_worker(job, item, settings, fonts_data):
             pass
 
 
+NARR_SYSTEM = (
+    "You are a Cambodian storyteller who narrates films and dramas for Khmer YouTube/TikTok channels. "
+    "The numbered lines are consecutive Khmer dialogue lines of ONE story. Rewrite each line as lively, natural spoken "
+    "Khmer narration/dialogue that a native audience enjoys: smooth flow between lines, correct emotion, natural particles, "
+    "consistent pronouns. Keep EXACTLY the same meaning, names and facts; add nothing new; do not merge or drop lines; "
+    "each rewritten line must be no longer than the original line. Khmer script only. "
+    "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
+)
+
+
+def narrate_rewrite(segments, groq_key=None, gemini_key=None, notes=None):
+    """Polish translated lines into natural storytelling Khmer (same count, same timing)."""
+    out = [t for _, _, t in segments]
+    n = len(out)
+    if n == 0:
+        return segments
+    client = None
+    if gemini_key:
+        try:
+            client = genai.Client(api_key=gemini_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+            models = get_available_models(client)[:3]
+        except Exception:
+            client = None
+    done_lines = 0
+    for k in range(0, n, 8):
+        idxs = list(range(k, min(k + 8, n)))
+        batch = [out[i] for i in idxs]
+        story = " / ".join(out[max(0, k - 5):k])
+        res = None
+        if client:
+            rows = "\n".join(f"{j + 1}. {t} [max {max(8, len(t))} chars]" for j, t in enumerate(batch))
+            prompt = NARR_SYSTEM + "\n\n" + (("PREVIOUS LINES (context only):\n" + story + "\n\n") if story else "") + "LINES:\n" + rows
+            for model in models:
+                try:
+                    resp = client.models.generate_content(
+                        model=model, contents=prompt,
+                        config=types.GenerateContentConfig(temperature=0.5, response_mime_type="application/json"))
+                    raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", (getattr(resp, "text", "") or "").strip())
+                    data = json.loads(raw)
+                    items = data.get("translations") if isinstance(data, dict) else data
+                    if isinstance(items, list) and len(items) == len(batch):
+                        res = [clean_translation(x) for x in items]
+                        break
+                except Exception:
+                    continue
+        if res is None and groq_key:
+            try:
+                res = groq_translate_chunk(groq_key, batch, [max(8, len(t)) for t in batch], system=NARR_SYSTEM)
+            except Exception:
+                res = None
+        if res:
+            for i, r in zip(idxs, res):
+                if r and has_khmer(str(r)):
+                    out[i] = r
+                    done_lines += 1
+    if notes is not None:
+        notes.append(f"📖 ម៉ូដនិទានរឿង៖ កែឃ្លាឱ្យរលូន {done_lines}/{n} ឃ្លា")
+    return [(s_, e_, t_) for (s_, e_, _), t_ in zip(segments, out)]
+
+
+def wait_for_review(item, segments, timeout=1800):
+    """Pause the worker so the person can fix the Khmer lines, then continue."""
+    item["review_segments"] = list(segments)
+    item["review_final"] = None
+    item["review_event"] = threading.Event()
+    item["stage"] = "✏️ សូមពិនិត្យ/កែអត្ថបទខ្មែរ រួចចុច «បន្ត»"
+    bad = sum(1 for _, _, t_ in segments if str(t_).startswith("⚠️"))
+    if bad:
+        item["warn"].append(f"⚠️ មាន {bad} ឃ្លាដែល AI បកមិនបាន (ដាក់ស្លាក ⚠️)។ សូមវាយអត្ថបទខ្មែរជំនួស បើមិនកែ ឃ្លានោះនឹងត្រូវលុបចោល។")
+    item["pct"] = 0.5
+    item["state"] = "review"
+    item["review_event"].wait(timeout)
+    final = item.get("review_final")
+    item["state"] = "running"
+    item["review_segments"] = None
+    if not final:
+        return segments
+    cleaned = [(s_, e_, fix_khmer(t_.replace("⚠️", "").strip())) for s_, e_, t_ in final if t_ and has_khmer(t_)]
+    return cleaned or segments
+
+
 def build_zip(items):
     ok = [it for it in items if it["state"] == "done" and it["video"]]
     if len(ok) < 2:
@@ -3112,7 +3247,7 @@ def dl_button(label, data, file_name, mime, key, **kwargs):
     return st.download_button(label, data=data, file_name=file_name, mime=mime, key=key, **kwargs)
 
 
-def work_area(job, was_running):
+def work_area(job, was_running, reviewing=False):
     items = job.items
     total = len(items)
     done = sum(1 for it in items if it["state"] == "done")
@@ -3139,11 +3274,27 @@ def work_area(job, was_running):
                 st.error(it["error"] or "មិនបានសម្រេច។")
                 if DEBUG and it["raw_error"]:
                     st.text(it["raw_error"])
+            elif it["state"] == "review" and it.get("review_segments"):
+                st.info("✏️ ពិនិត្យអត្ថបទខ្មែរ។ កែឃ្លាដែលខុស ឬលុបអត្ថបទចោលដើម្បីកាត់ឃ្លានោះ រួចចុច «បន្ត»។")
+                with st.form(key=f"review_form_{job.id}_{i}"):
+                    for j, (s_, e_, t_) in enumerate(it["review_segments"]):
+                        st.text_area(f"{j + 1}. [{s_:.1f}s – {e_:.1f}s]", value=t_, key=f"rev_{job.id}_{i}_{j}", height=80)
+                    go = st.form_submit_button("✅ បន្តបង្កើតសំឡេង និងវីដេអូ", type="primary", use_container_width=True)
+                if go:
+                    it["review_final"] = [
+                        (s_, e_, str(st.session_state.get(f"rev_{job.id}_{i}_{j}", t_)))
+                        for j, (s_, e_, t_) in enumerate(it["review_segments"])
+                    ]
+                    it["state"] = "running"
+                    it["stage"] = "កំពុងបន្ត..."
+                    if it.get("review_event"):
+                        it["review_event"].set()
+                    st.rerun()
             else:
                 st.progress(max(0.0, min(1.0, it["pct"])), text=it["stage"])
             for w in it["warn"]:
                 st.warning(w)
-    if was_running and not job.running():
+    if (was_running and not job.running()) or (reviewing != job.reviewing()):
         st.rerun()
 
 
@@ -3274,6 +3425,16 @@ with tab_trans:
         sub_on = st.toggle("បង្កើតអក្សររត់ខ្មែរ (Subtitle)", value=True)
         dub_on = st.toggle("បង្កើតសំឡេងអានខ្មែរ (Dubbing)")
         srt_on = st.toggle("ទាញយកអក្សរជាឯកសារ (SRT)")
+        narrate_on = st.toggle(
+            "📖 ម៉ូដនិទានរឿង (កែអត្ថបទឱ្យរលូនដូចអ្នកនិទាន)",
+            value=False, key="narrate_pick",
+            help="AI កែសម្រួលអត្ថបទបកប្រែទាំងមូលជាភាសានិទានរឿង ឱ្យរលូនតគ្នា ដោយរក្សាអត្ថន័យ និងពេលវេលាដដែល។",
+        )
+        review_on = st.toggle(
+            "✏️ ពិនិត្យ និងកែអត្ថបទមុនបង្កើតសំឡេង",
+            value=True, key="review_pick",
+            help="កម្មវិធីនឹងឈប់រង់ចាំអ្នកកែអត្ថបទខ្មែរតាមបន្ទាត់ មុននឹងបង្កើតសំឡេង និងវីដេអូ។",
+        )
 
 # ============================ ផ្ទាំង ៣: សំឡេង ============================
 with tab_voice:
@@ -3374,6 +3535,7 @@ if run:
         "font_size": font_size, "outline_size": outline_size,
         "color": COLOR_OPTIONS[color_pick][0],
         "sub_on": sub_on, "srt_on": srt_on,
+        "narrate_on": narrate_on, "review_on": review_on,
         "style": {"align": POS_MAP[pos_pick], "bold": bold_, "italic": italic_, "box": BOX_OPTIONS[box_pick]},
     }
     old = st.session_state.get("job")
@@ -3405,8 +3567,9 @@ with tab_out:
         if not running and not job.zip_done:
             job.zip = build_zip(job.items)
             job.zip_done = True
-        refresh = REFRESH_SECONDS if running else None
-        st.fragment(run_every=refresh)(work_area)(job, running)
+        reviewing = job.reviewing()
+        refresh = REFRESH_SECONDS if (running and not reviewing) else None
+        st.fragment(run_every=refresh)(work_area)(job, running, reviewing)
         st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
         st.fragment(run_every=refresh)(download_area)(job)
         if not running:
