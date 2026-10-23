@@ -477,7 +477,7 @@ def get_secret(name, default=""):
 #  MAINTENANCE MODE — ដាក់ True = បិទកម្មវិធីសម្រាប់អ្នកប្រើ / False = បើកធម្មតា
 #  ម្ចាស់កម្មវិធីអាចចូលបាន ដោយបញ្ចូលលេខសម្ងាត់ OWNER_KEY
 # =====================================================================
-MAINTENANCE = True
+MAINTENANCE = False
 OWNER_KEY = str(get_secret("OWNER_KEY", "")).strip()
 
 if MAINTENANCE and not st.session_state.get("owner_ok"):
