@@ -479,7 +479,8 @@ DEBUG = True
 REQUEST_TIMEOUT_MS = 120000
 TRANSLATE_TIMEOUT_MS = 40000   # ការបកប្រែអត្ថបទ: មិនរង់ចាំលើសពី ៤០ វិនាទី
 MAX_CAPTION_CHARS = 26
-MAX_DOWNLOAD_MB = 1024
+MAX_DOWNLOAD_MB = 200
+MAX_UPLOAD_MB = 200   # ទំហំអតិបរមាសម្រាប់ Upload ពីឧបករណ៍
 MAX_VIDEOS = 5
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
@@ -3625,7 +3626,7 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             link_text = st.text_area("តំណវីដេអូ (មួយបន្ទាត់ ១ តំណ)", placeholder="https://...", height=90)
-        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង · តំណអតិបរមា {MAX_DOWNLOAD_MB}MB")
+        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង · អតិបរមា {MAX_UPLOAD_MB}MB")
         if uploaded_files:
             try:
                 st.video(uploaded_files[0])
@@ -3714,6 +3715,10 @@ with tab_text:
 items = []
 too_many = False
 if uploaded_files:
+    too_big = [f.name for f in uploaded_files if f.size > MAX_UPLOAD_MB * 1024 * 1024]
+    if too_big:
+        st.error(f"❌ ឯកសារធំជាង {MAX_UPLOAD_MB}MB៖ " + ", ".join(too_big))
+    uploaded_files = [f for f in uploaded_files if f.size <= MAX_UPLOAD_MB * 1024 * 1024]
     too_many = len(uploaded_files) > MAX_VIDEOS
     for f in uploaded_files[:MAX_VIDEOS]:
         items.append({"name": f.name, "file": f, "url": None})
