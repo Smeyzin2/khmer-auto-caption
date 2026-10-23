@@ -1675,7 +1675,9 @@ EN_SYSTEM = (
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
     client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
-    models = model_order(get_available_models(client)[:5], "gemini")
+    _av = get_available_models(client)
+    _av = [m for m in _av if "pro" in m.lower()] + [m for m in _av if "pro" not in m.lower()]
+    models = model_order(_av[:5], "gemini")
     rows = []
     for i, t in enumerate(texts):
         row = f"{i + 1}. {t}"
@@ -1804,6 +1806,44 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None):
     return result
 
 
+def make_synopsis(english, texts, gemini_key, groq_key):
+    """សង្ខេបរឿងទាំងមូល (អ្នកណានិយាយទៅអ្នកណា ប្រធានបទ អារម្មណ៍) ជាអង់គ្លេស ដើម្បីជួយបកប្រែឱ្យត្រូវបរិបទ។"""
+    body = " ".join((english[i] or str(texts[i])) for i in range(len(texts)))[:7000]
+    ask = ("Read this video transcript. In under 120 words of English, state: the topic, who the speakers are and how they relate "
+           "(gender, age, formal or casual), the mood, and any recurring names or terms. No translation.\n\n" + body)
+    try:
+        if gemini_key:
+            client = make_gemini_client(gemini_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
+            for model in model_order(get_available_models(client)[:5], "gemini")[:2]:
+                try:
+                    r = client.models.generate_content(model=model, contents=ask)
+                    t = (getattr(r, "text", "") or "").strip()
+                    if t:
+                        return t[:900]
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    if groq_key:
+        try:
+            for model in groq_chat_models(groq_key)[:3]:
+                try:
+                    payload = json.dumps({"model": model, "temperature": 0.1, "messages": [
+                        {"role": "user", "content": ask}]}).encode("utf-8")
+                    req = urllib.request.Request(GROQ_CHAT_URL, data=payload, method="POST", headers={
+                        "Authorization": f"Bearer {groq_first(groq_key)}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+                    with groq_urlopen(req, groq_key, timeout=40) as r:
+                        data = json.loads(r.read().decode("utf-8"))
+                    t = re.sub(r"<think>.*?</think>", "", data["choices"][0]["message"]["content"], flags=re.S).strip()
+                    if t:
+                        return t[:900]
+                except Exception:
+                    continue
+        except Exception:
+            pass
+    return ""
+
+
 def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None):
     n = len(texts)
     errors = []
@@ -1835,6 +1875,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         english[i] = r
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
+    synopsis = make_synopsis(english, texts, gemini_key, groq_key) if ((gemini_key or groq_key) and n > 2) else ""
     # ជំហាន ២: Gemini បកជាខ្មែរមុន (ល្អបំផុតសម្រាប់ខ្មែរ) ដោយមានបរិបទមុន/ក្រោយ
     missing = [i for i, o in enumerate(outs) if o is None]
     batches = [missing[k:k + 6] for k in range(0, len(missing), 6)]
@@ -1843,6 +1884,8 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             try:
                 prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
                 story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
+                if synopsis:
+                    story = "VIDEO SUMMARY: " + synopsis + " || " + (story or "")
                 nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 4))]
                 if nxt_ctx:
                     story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)
@@ -1872,6 +1915,8 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             try:
                 prev = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
                 story = " / ".join(str(x).strip() for x in prev if x)
+                if synopsis:
+                    story = "VIDEO SUMMARY: " + synopsis + " || " + story
                 lines_ = []
                 for i in idxs:
                     row = str(texts[i]).strip()
@@ -2312,7 +2357,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         # ប្រវែងគោល (soft hint): ~១០ តួអក្សរខ្មែរ/វិនាទី តាមពេលមាត់និយាយ ឱ្យស្របចង្វាក់ lip-sync
         # (prompt ហាមកាត់អត្ថន័យ ដូច្នេះនេះគ្រាន់តែជាការណែនាំ)
-        budgets = [max(12, int((e - s) * 10)) for s, e, _ in keep] if dub else None
+        budgets = None  # មិនកំណត់ប្រវែង៖ អត្ថន័យត្រឹមត្រូវមុនគេ
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
@@ -2631,6 +2676,18 @@ def split_by_speaker(segments, runs, default_voice):
     return out
 
 
+def dominant_voice(a, b, runs, default_voice):
+    """ជ្រើសសំឡេងតែមួយក្នុងមួយឃ្លា តាមអ្នកនិយាយដែលនិយាយយូរជាងគេ (កុំកាត់ប្រយោគ)។"""
+    tot = {"M": 0.0, "F": 0.0}
+    for rs, re_, g in runs:
+        ov = min(b, re_) - max(a, rs)
+        if ov > 0 and g in tot:
+            tot[g] += ov
+    if tot["M"] <= 0 and tot["F"] <= 0:
+        return default_voice
+    return VOICE_MALE if tot["M"] >= tot["F"] else VOICE_FEMALE
+
+
 def plan_dub_voices(segments, pcm, default_voice, duration, tracks=None):
     runs, info = gender_timeline(pcm, duration, default_voice, tracks=tracks)
     if runs is None:
@@ -2904,9 +2961,9 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
 def emotion_prosody(label, intensity, use_pitch=True):
     rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
     k = max(0.0, float(intensity))
-    rate = int(max(-12, min(12, rate * k)))
-    pitch = int(max(-12, min(12, pitch * k))) if use_pitch else 0
-    vol = int(max(-50, min(50, vol * k)))
+    rate = int(max(-5, min(5, rate * k * 0.5)))
+    pitch = int(max(-4, min(4, pitch * k * 0.4))) if use_pitch else 0
+    vol = int(max(-15, min(10, vol * k * 0.5)))
     if rate == 0 and pitch == 0 and vol == 0:
         return None
     return {"rate": f"{rate:+d}%", "pitch": f"{pitch:+d}Hz", "volume": f"{vol:+d}%"}
@@ -3028,7 +3085,7 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=170, max_gap=0.9, max_len=12.0):
+def merge_for_dub(segments, max_chars=260, max_gap=1.6, max_len=18.0):
     """បញ្ចូលតែបំណែកខ្លីៗដែលដាច់កណ្តាលប្រយោគ ដើម្បីអានរលូន ហើយនៅជិតម៉ោងសំឡេងដើម"""
     out = []
     for s, e, t in segments:
@@ -3177,7 +3234,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                     pass
             # ប្រយោគវែងពេកជាង ១.៤ ដង នៃចន្លោះមាត់ (លឿនជាងនេះស្តាប់មិនបាន)៖ បង្រួមបន្តិចរក្សាអត្ថន័យ
             # ហើយបង្កើតសំឡេងម្តងទៀត យកតែបើខ្លីជាងពិតប្រាកដ។
-            if (not clone_voice) and d_ > slot0 * 1.4 and len(t_) > 24:
+            if (not clone_voice) and d_ > slot0 * 1.8 and len(t_) > 40:
                 short_ = condense_for_slot(t_, slot0, client, model, groq_key)
                 if short_ != t_:
                     path3_ = os.path.join(folder, f"tts_{i}_s.mp3")
@@ -3250,7 +3307,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
-        speed = min(1.45, max(1.0, speed))
+        speed = min(1.3, max(1.0, speed))
         cursor = max(cursor, start + d / speed + 0.08)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -3501,12 +3558,10 @@ def run_worker(job, item, settings, fonts_data):
                                 ref_bands = band_levels(ref_pcm)
                             if settings["auto_gender"]:
                                 try:
-                                    planned, gender_lines, _info, runs_ = plan_dub_voices(
-                                        dub_segments, pcm, settings["voice"], duration, tracks=tracks)
-                                    if runs_ is not None and planned:
-                                        dub_segments = [(a_, b_, t_) for a_, b_, t_, v_ in planned]
-                                        seg_voices = [v_ for a_, b_, t_, v_ in planned]
-                                        voice_notes = voice_notes + gender_lines[:6]
+                                    runs_, _info = gender_timeline(pcm, duration, settings["voice"], tracks=tracks)
+                                    if runs_ is not None:
+                                        seg_voices = [dominant_voice(a_, b_, runs_, settings["voice"]) for a_, b_, _t in dub_segments]
+                                        voice_notes = voice_notes + [f"🗣 ប្រុស {sum(1 for v_ in seg_voices if v_ == VOICE_MALE)} / ស្រី {sum(1 for v_ in seg_voices if v_ == VOICE_FEMALE)} ឃ្លា"]
                                 except Exception:
                                     seg_voices = None
                                     runs_ = None
