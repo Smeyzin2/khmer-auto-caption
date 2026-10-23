@@ -33,13 +33,16 @@ st.set_page_config(
     layout="wide",
 )
 
-# ---- បិទមិនឱ្យរត់លើ Streamlit Cloud: អនុញ្ញាតតែម៉ាស៊ីនមេផ្ទាល់ខ្លួន (ប្រើ RAM ខ្លួនឯង) ----
-# បើចង់បើកលើ Cloud វិញ កំណត់ Environment Variable ALLOW_STREAMLIT_CLOUD=1
+# ---- Streamlit Cloud ----
+# លំនាំដើម: អនុញ្ញាតឱ្យរត់លើ Cloud (មិនចាំបាច់ដាក់ Secrets អ្វីទេ)
+# បើចង់បិទមិនឱ្យរត់លើ Cloud (ឱ្យរត់តែលើម៉ាស៊ីនមេខ្លួនឯង) កំណត់ BLOCK_STREAMLIT_CLOUD=1
 def _running_on_streamlit_cloud():
     return os.path.isdir("/mount/src") or os.environ.get("HOME", "") == "/home/appuser"
 
 
-if _running_on_streamlit_cloud() and os.environ.get("ALLOW_STREAMLIT_CLOUD") != "1":
+IS_STREAMLIT_CLOUD = _running_on_streamlit_cloud()
+
+if IS_STREAMLIT_CLOUD and os.environ.get("BLOCK_STREAMLIT_CLOUD") == "1":
     st.error("🚫 កម្មវិធីនេះមិនអនុញ្ញាតឱ្យរត់លើ Streamlit Cloud ទេ។ សូមប្រើម៉ាស៊ីនមេផ្ទាល់ខ្លួន។")
     st.stop()
 
@@ -512,9 +515,9 @@ def _env_int(name, default):
         return default
 
 
-# ម៉ាស៊ីនមេផ្ទាល់ខ្លួន: Upload អតិបរមា 2GB (ប្រើ RAM របស់ម៉ាស៊ីនខ្លួនឯង)
+# Streamlit Cloud (RAM តូច) = 200MB · ម៉ាស៊ីនមេផ្ទាល់ខ្លួន = 2GB (ប្រើ RAM របស់ម៉ាស៊ីនខ្លួនឯង)
 # អាចប្តូរបានតាម Environment Variable MAX_UPLOAD_MB
-MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 2048)  # ទំហំអតិបរមាសម្រាប់ Upload
+MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 200 if IS_STREAMLIT_CLOUD else 2048)  # ទំហំអតិបរមាសម្រាប់ Upload
 MAX_DOWNLOAD_MB = _env_int("MAX_DOWNLOAD_MB", MAX_UPLOAD_MB)
 MAX_VIDEOS = _env_int("MAX_VIDEOS", 5)
 MAX_ZIP_MB = 250
