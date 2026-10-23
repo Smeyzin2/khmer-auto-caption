@@ -1582,10 +1582,10 @@ TRANS_SYSTEM = (
     "(3) Keep the speaker's emotion: anger, sadness, fear, joy, sarcasm, tenderness must be audible in word choice "
     "(use natural particles such as ណា, ហើយ, ទេ, ហ្នឹង, នែ៎ where a native would) and keep ! ? … punctuation. "
     "(4) Translate idioms, slang and jokes by their intended meaning, never literally. "
-    "(5) Short, clear sentences a voice actor can say in one breath; no stiff foreign word order; no repeated words; "
+    "(5) Flowing, connected spoken sentences that sound like a real person talking (join clauses naturally, do not chop into tiny fragments); no stiff foreign word order; no repeated words; "
     "no word salad. Write numbers and units the way Khmer speakers say them. Transliterate foreign names naturally. "
     "(6) If a line is garbled or uncertain, keep the closest clear meaning, do not invent dialogue. "
-    "(7) When a [max N chars] limit is given, keep the full meaning and shorten only by removing filler; never output the tag. "
+    "(7) A [max N chars] tag is only a soft hint: ALWAYS keep the full meaning first, never cut or drop content to fit it, exceed it if needed; never output the tag. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
@@ -1731,7 +1731,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 lines_ = []
                 for i in idxs:
                     row = str(texts[i]).strip()
-                    if english[i]:
+                    if english[i] and "[unclear]" not in english[i]:
                         row += f" (English meaning: {english[i]})"
                     lines_.append(row)
                 sys_ = (
@@ -2103,7 +2103,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
     return out
 
 
-def merge_for_translate(segs, max_chars=160, max_gap=0.6, max_len=10.0):
+def merge_for_translate(segs, max_chars=300, max_gap=1.0, max_len=18.0):
     out = []
     for s, e, t in segs:
         if out:
@@ -2165,11 +2165,11 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             segs = retime_by_speech(segs, speech, duration)
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        keep = merge_for_translate(keep, max_chars=220, max_gap=0.9, max_len=14.0)
+        keep = merge_for_translate(keep, max_chars=300, max_gap=1.2, max_len=18.0)
         # បកប្រែតាមប្រវែងឃ្លាចិន៖ ឃ្លាខ្លីអាចពន្យល់ខ្មែរបន្ថែម,
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         budgets = [
-            max(18, min(150, int(45 + 22 / max(0.7, e - s))))
+            max(60, min(320, int(40 + 22 * (e - s))))
             for s, e, _ in keep
         ] if dub else None
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m))
@@ -2887,7 +2887,7 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=90, max_gap=0.5, max_len=9.0):
+def merge_for_dub(segments, max_chars=170, max_gap=0.9, max_len=15.0):
     """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
     out = []
     for s, e, t in segments:
@@ -3046,7 +3046,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
-        speed = min(1.35, max(1.0, speed))
+        speed = min(1.5, max(1.0, speed))
         cursor = max(cursor, start + d / speed + 0.08)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
