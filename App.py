@@ -1797,6 +1797,42 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         outs[i] = r
                 done += len(idxs)
                 _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
+    # បម្រុងទី១: Groq LLM បកជាខ្មែរ ដោយមានបរិបទសាច់រឿង (ល្អជាង Google Translate បកម្តងមួយឃ្លាៗ)
+    missing = [i for i, o in enumerate(outs) if o is None]
+    if missing and groq_key:
+        _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) 0/{len(missing)} ឃ្លា...")
+        groups = [missing[k:k + 10] for k in range(0, len(missing), 10)]
+        def _gkm(idxs):
+            try:
+                prev = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
+                story = " / ".join(str(x).strip() for x in prev if x)
+                lines_ = []
+                for i in idxs:
+                    row = str(texts[i]).strip()
+                    if english[i]:
+                        row += f" (English meaning: {english[i]})"
+                    lines_.append(row)
+                sys_ = (
+                    TRANS_SYSTEM
+                    + " Some lines include an English meaning in parentheses to help you understand; translate the true meaning "
+                    "into Khmer and never output the English text or any tags."
+                    + ((" STORY SO FAR (context only, do NOT translate): " + story) if story else "")
+                )
+                bud_ = [budgets[i] for i in idxs] if budgets else None
+                return idxs, groq_translate_chunk(groq_key, lines_, bud_, system=sys_), None
+            except Exception as e:
+                return idxs, None, e
+        done_ = 0
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for idxs, res, err in pool.map(_gkm, groups):
+                if err:
+                    errors.append(f"groq-km-ctx: {err}"[:200])
+                else:
+                    for i, r in zip(idxs, res):
+                        if r and has_khmer(str(r)):
+                            outs[i] = r
+                done_ += len(idxs)
+                _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) {done_}/{len(missing)} ឃ្លា...")
     # បម្រុង: Google Translate លើអត្ថបទអង់គ្លេស (ត្រឹមត្រូវជាងបកពីចិន/ថៃ/វៀតណាមផ្ទាល់)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing:
@@ -2182,7 +2218,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             segs = retime_by_speech(segs, speech, duration)
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        keep = merge_for_translate(keep)
+        keep = merge_for_translate(keep, max_chars=220, max_gap=0.9, max_len=14.0)
         # បកប្រែតាមប្រវែងឃ្លាចិន៖ ឃ្លាខ្លីអាចពន្យល់ខ្មែរបន្ថែម,
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         budgets = [
