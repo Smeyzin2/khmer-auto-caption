@@ -465,6 +465,7 @@ apply_theme()
 DEBUG = True
 
 REQUEST_TIMEOUT_MS = 120000
+TRANSLATE_TIMEOUT_MS = 40000   # ការបកប្រែអត្ថបទ: មិនរង់ចាំលើសពី ៤០ វិនាទី
 MAX_CAPTION_CHARS = 26
 MAX_DOWNLOAD_MB = 1024
 MAX_VIDEOS = 5
@@ -986,7 +987,19 @@ def model_good(provider, model):
         _MODEL_COOL.pop(model, None)
 
 
+_MODELS_CACHE = {"t": 0.0, "v": None}
+
+
 def get_available_models(client):
+    if _MODELS_CACHE["v"] and time.time() - _MODELS_CACHE["t"] < 600:
+        return list(_MODELS_CACHE["v"])
+    res = _get_available_models_uncached(client)
+    if res:
+        _MODELS_CACHE["v"], _MODELS_CACHE["t"] = list(res), time.time()
+    return res
+
+
+def _get_available_models_uncached(client):
     found = []
     try:
         for m in client.models.list():
@@ -1224,6 +1237,10 @@ class Reporter:
     def write(self, message):
         self.item["stage"] = message
         self.item["log"].append(message)
+        m = re.search(r"(\d+)/(\d+) ឃ្លា", str(message))
+        if m and int(m.group(2)) > 0:
+            frac = min(1.0, int(m.group(1)) / int(m.group(2)))
+            self.item["pct"] = max(self.item.get("pct", 0.0), 0.25 + 0.28 * frac)
     def progress(self, value):
         self.item["pct"] = 0.03 + 0.09 * max(0.0, min(1.0, value))
 
@@ -1511,13 +1528,13 @@ def _google_once(text):
     return "".join(part[0] for part in (data[0] or []) if part and part[0])
 
 
-def google_translate_request(text, retries=5):
+def google_translate_request(text, retries=3):
     for attempt in range(retries):
         try:
             return _google_once(text)
         except urllib.error.HTTPError as e:
             if e.code == 429 and attempt < retries - 1:
-                time.sleep(5 * (attempt + 1))
+                time.sleep(2 * (attempt + 1))
                 continue
             raise
 
@@ -1641,7 +1658,7 @@ EN_SYSTEM = (
 
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
-    client = make_gemini_client(api_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+    client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
     models = model_order(get_available_models(client)[:5], "gemini")
     rows = []
     for i, t in enumerate(texts):
@@ -1680,38 +1697,60 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
     raise RuntimeError(str(last)[:300])
 
 
-def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
+def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None):
     n = len(texts)
     errors = []
     outs = [None] * n
     english = [None] * n
     # បកជាបាច់តូច ដើម្បីកុំឱ្យ AI ខកឃ្លា ឬច្រឡំលំដាប់
     batches = [list(range(k, min(k + 8, n))) for k in range(0, n, 8)]
-    # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (AI ពូកែភាសាអង់គ្លេសជាងខ្មែរ)
-    if groq_key:
-        for idxs in batches:
+    def _say(msg):
+        if progress:
             try:
-                res = groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs], None, system=EN_SYSTEM, to_english=True)
-                for i, r in zip(idxs, res):
-                    english[i] = r
+                progress(msg)
+            except Exception:
+                pass
+
+    # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (ធ្វើស្របគ្នា ៣ បាច់ក្នុងពេលតែមួយ)
+    if groq_key:
+        def _en(idxs):
+            try:
+                return idxs, groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs], None, system=EN_SYSTEM, to_english=True), None
             except Exception as e:
-                errors.append(f"groq-en: {e}"[:200])
-            time.sleep(0.4)
-    # ជំហាន ២: ពីអង់គ្លេស/ដើម → ខ្មែរ ដោយ Gemini (បើមាន Key)
+                return idxs, None, e
+        done = 0
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            for idxs, res, err in pool.map(_en, batches):
+                if err:
+                    errors.append(f"groq-en: {err}"[:200])
+                else:
+                    for i, r in zip(idxs, res):
+                        english[i] = r
+                done += len(idxs)
+                _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
+    # ជំហាន ២: ពីអង់គ្លេស/ដើម → ខ្មែរ ដោយ Gemini (ស្របគ្នា ៣ បាច់)
     if gemini_key:
-        for idxs in batches:
+        def _km(idxs):
             try:
                 prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
                 story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
-                res = gemini_translate_khmer(
+                return idxs, gemini_translate_khmer(
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
                     story=story,
-                )
-                for i, r in zip(idxs, res):
-                    outs[i] = r
+                ), None
             except Exception as e:
-                errors.append(f"gemini: {e}"[:200])
+                return idxs, None, e
+        done = 0
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            for idxs, res, err in pool.map(_km, batches):
+                if err:
+                    errors.append(f"gemini: {err}"[:200])
+                else:
+                    for i, r in zip(idxs, res):
+                        outs[i] = r
+                done += len(idxs)
+                _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
     # បម្រុង: Google Translate លើអត្ថបទអង់គ្លេស (ត្រឹមត្រូវជាងបកពីចិន/ថៃ/វៀតណាមផ្ទាល់)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing:
@@ -1754,6 +1793,8 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
             time.sleep(0.5)
     # ជំហានចុងក្រោយ: បកម្តងមួយឃ្លាៗ (មិនអាចខុសចំនួនបន្ទាត់) ជាមួយ Gemini/Groq រួចទើប Google
     missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
+    if missing:
+        _say(f"កំពុងបកឃ្លាដែលនៅខ្វះ {len(missing)} ឃ្លា...")
     for i in missing:
         one = [str(texts[i]).strip()]
         bud = [budgets[i]] if budgets else None
@@ -1825,7 +1866,7 @@ def _translate_texts_old(texts, groq_key=None):
         batches.append(cur)
     fails = 0
     for batch in batches:
-        if fails >= 3:
+        if fails >= 2:
             break
         try:
             raw = google_translate_request("\n".join(t for _, t in batch))
@@ -1845,7 +1886,7 @@ def _translate_texts_old(texts, groq_key=None):
         except Exception as e:
             errors.append(f"google: {e}"[:200])
             fails += 1
-            time.sleep(8)
+            time.sleep(3)
         time.sleep(0.5)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
@@ -2102,7 +2143,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             max(18, min(150, int(45 + 22 / max(0.7, e - s))))
             for s, e, _ in keep
         ] if dub else None
-        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key)
+        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
             if out:
@@ -2577,7 +2618,7 @@ def groq_emotion_chunk(api_key, texts):
 
 
 def gemini_emotion_labels(api_key, texts):
-    client = make_gemini_client(api_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+    client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
     models = get_available_models(client)[:3]
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
     prompt = EMO_SYSTEM + "\n\n" + numbered
@@ -3321,7 +3362,7 @@ def narrate_rewrite(segments, groq_key=None, gemini_key=None, notes=None):
     client = None
     if gemini_key:
         try:
-            client = make_gemini_client(gemini_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+            client = make_gemini_client(gemini_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
             models = get_available_models(client)[:5]
         except Exception:
             client = None
