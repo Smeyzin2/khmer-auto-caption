@@ -1608,6 +1608,9 @@ TRANS_SYSTEM = (
     "(9) The output will be read aloud by a TTS voice: use plain natural Khmer, put ។ (or ? !) only at the end of a sentence, and avoid "
     "commas, brackets, quotes, dashes, ellipses, emojis and symbols so the speech flows smoothly without choppy pauses. "
     "(10) If an English meaning is given, use it only as a hint; the original line is the authority for facts, names and numbers. "
+    "(11) Translate MEANING, not words: never copy the source sentence structure or idioms literally. Use common everyday Khmer vocabulary "
+    "(avoid stiff Pali/Sanskrit-heavy or royal words unless the speaker is a king/monk), drop pronouns that Khmer speakers would omit, "
+    "and make sure every sentence is something a native Khmer person would really say and instantly understand. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
@@ -1708,6 +1711,97 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
             last = f"{model}: {e}"
             model_cool(model, last)
     raise RuntimeError(str(last)[:300])
+
+
+REFINE_SYSTEM = (
+    "You are a senior Khmer (Cambodian) dubbing editor and bilingual proofreader. Each numbered item has an ORIGINAL line, "
+    "sometimes an ENGLISH meaning, and a KHMER DRAFT. Check the KHMER DRAFT against the ORIGINAL: fix wrong or missing meaning, "
+    "mistranslated words, wrong pronouns/politeness, literal word-for-word phrasing, unnatural or ungrammatical Khmer, and any leftover "
+    "foreign words (except names). Rewrite into natural everyday SPOKEN Khmer that a native Phnom Penh speaker would say and instantly understand, "
+    "keeping exactly the same facts, names, numbers, emotion and tone. Do not add or remove information. If the draft is already correct and natural, "
+    "return it unchanged. Use the neighbouring items as story context (who speaks to whom). One complete sentence per item, same order, "
+    "Khmer script only, end with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
+    "Return JSON {\"translations\": [...]} with exactly one item per input."
+)
+
+
+def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None):
+    """ពិនិត្យការបកប្រែខ្មែរម្តងទៀតប្រៀបធៀបនឹងអត្ថបទដើម ហើយកែឱ្យត្រូវន័យ និងស្ទួនភាសាខ្មែរធម្មជាតិ។"""
+    n = len(drafts)
+    result = list(drafts)
+    groups = [list(range(k, min(k + 6, n))) for k in range(0, n, 6)]
+
+    def rows_for(idxs):
+        rows = []
+        for i in idxs:
+            row = f"ORIGINAL: {str(texts[i]).strip()}"
+            if englishes[i] and "[unclear]" not in englishes[i]:
+                row += f" | ENGLISH: {englishes[i]}"
+            row += f" | KHMER DRAFT: {drafts[i]}"
+            rows.append(row)
+        return rows
+
+    def story_for(idxs):
+        prev = [str(drafts[j]) for j in range(max(0, idxs[0] - 4), idxs[0]) if drafts[j]]
+        nxt = [str(drafts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 3)) if drafts[j]]
+        s = ""
+        if prev:
+            s += "PREVIOUS LINES (context only): " + " / ".join(prev) + "\n"
+        if nxt:
+            s += "NEXT LINES (context only): " + " / ".join(nxt) + "\n"
+        return s
+
+    def work(idxs):
+        rows = rows_for(idxs)
+        story = story_for(idxs)
+        if gemini_key:
+            try:
+                client = make_gemini_client(gemini_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
+                avail = get_available_models(client)
+                models = [m for m in avail if "pro" in m.lower()] + [m for m in avail if "pro" not in m.lower()]
+                models = model_order(models[:5], "gemini-refine")
+                numbered = "\n".join(f"{k + 1}. {r}" for k, r in enumerate(rows))
+                prompt = REFINE_SYSTEM + "\n\n" + story + "\nITEMS:\n" + numbered
+                for model in models:
+                    try:
+                        resp = client.models.generate_content(
+                            model=model, contents=prompt,
+                            config=types.GenerateContentConfig(temperature=0.15, response_mime_type="application/json"),
+                        )
+                        raw = (getattr(resp, "text", "") or "").strip()
+                        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+                        data = json.loads(raw)
+                        items = data.get("translations") if isinstance(data, dict) else data
+                        if isinstance(items, list) and len(items) == len(idxs):
+                            model_good("gemini-refine", model)
+                            return idxs, [clean_translation(x) for x in items]
+                        model_cool(model, "ចំនួនបន្ទាត់មិនត្រូវគ្នា")
+                    except Exception as e:
+                        model_cool(model, str(e))
+            except Exception:
+                pass
+        if groq_key:
+            try:
+                res = groq_translate_chunk(groq_key, rows, None, system=REFINE_SYSTEM + " " + story)
+                return idxs, res
+            except Exception:
+                pass
+        return idxs, None
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for idxs, res in pool.map(work, groups):
+            if res:
+                for i, r in zip(idxs, res):
+                    if r and has_khmer(str(r)) and khmer_dominant(str(r)):
+                        result[i] = r
+            done += len(idxs)
+            if progress:
+                try:
+                    progress(f"កំពុងកែសម្រួលអត្ថន័យខ្មែរ {done}/{n} ឃ្លា...")
+                except Exception:
+                    pass
+    return result
 
 
 def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None):
@@ -1872,6 +1966,12 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 time.sleep(5)
         if r and has_khmer(str(r)):
             outs[i] = r
+    # ជំហានកែសម្រួលចុងក្រោយ: ពិនិត្យអត្ថន័យខ្មែរប្រៀបនឹងអត្ថបទដើម
+    if (gemini_key or groq_key) and all(o and has_khmer(str(o)) for o in outs):
+        try:
+            outs = refine_khmer(texts, english, outs, gemini_key, groq_key, progress=progress)
+        except Exception as e:
+            errors.append(f"refine: {e}"[:200])
     # កុំទុកលទ្ធផលទទេ ឬអង់គ្លេសសុទ្ធឱ្យបន្តជាសំឡេង dubbing
     for i, o in enumerate(outs):
         if not o or not has_khmer(str(o)):
