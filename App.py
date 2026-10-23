@@ -757,6 +757,8 @@ def download_video(url, path, progress):
             if "text/html" in ctype:
                 raise UserError("តំណនេះមិនមែនជាវីដេអូផ្ទាល់ទេ។")
             total = int(response.headers.get("Content-Length") or 0)
+            if total > limit:
+                raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
             done = 0
             with open(path, "wb") as f:
                 while True:
@@ -3719,6 +3721,14 @@ if uploaded_files:
     if too_big:
         st.error(f"❌ ឯកសារធំជាង {MAX_UPLOAD_MB}MB៖ " + ", ".join(too_big))
     uploaded_files = [f for f in uploaded_files if f.size <= MAX_UPLOAD_MB * 1024 * 1024]
+    _kept, _sum = [], 0
+    for f in uploaded_files:
+        if _sum + f.size > MAX_UPLOAD_MB * 1024 * 1024:
+            st.error(f"❌ ទំហំសរុបលើស {MAX_UPLOAD_MB}MB។ រំលង៖ {f.name}")
+            continue
+        _kept.append(f)
+        _sum += f.size
+    uploaded_files = _kept
     too_many = len(uploaded_files) > MAX_VIDEOS
     for f in uploaded_files[:MAX_VIDEOS]:
         items.append({"name": f.name, "file": f, "url": None})
