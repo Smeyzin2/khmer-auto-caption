@@ -1894,7 +1894,12 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
         keep = merge_for_translate(keep)
-        budgets = [max(6, int(max(0.6, (e - s) + 0.2) * 8.5)) for s, e, _ in keep] if dub else None
+        # បកប្រែតាមប្រវែងឃ្លាចិន៖ ឃ្លាខ្លីអាចពន្យល់ខ្មែរបន្ថែម,
+        # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
+        budgets = [
+            max(10, min(110, int(34 + 18 / max(0.7, e - s))))
+            for s, e, _ in keep
+        ] if dub else None
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key)
         segs = []
         for (s, e, _), out in zip(keep, outs):
@@ -2758,9 +2763,16 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
-        # Keep the generated Khmer voice natural: never accelerate it.
-        # If needed, slow down a little instead of cutting or rushing words.
-        speed = min(1.0, max(0.88, d / slot))
+        # Adjust speaking pace by the source segment's available time:
+        # short Chinese segments -> allow Khmer to speak faster;
+        # long Chinese segments -> slow Khmer down.
+        source_span = max(0.1, e - s)
+        if source_span <= 2.0:
+            speed = min(1.18, max(1.04, d / slot))
+        elif source_span >= 5.0:
+            speed = min(0.96, max(0.82, d / slot))
+        else:
+            speed = min(1.08, max(0.92, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
