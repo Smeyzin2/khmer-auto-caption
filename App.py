@@ -461,6 +461,30 @@ def make_srt(captions):
 
 apply_theme()
 
+# =====================================================================
+#  MAINTENANCE MODE — ដាក់ True = បិទកម្មវិធីបណ្ដោះអាសន្ន / False = បើកវិញ
+# =====================================================================
+MAINTENANCE = True
+
+if MAINTENANCE:
+    render_header()
+    st.markdown(
+        """
+        <div style="max-width:560px;margin:40px auto;padding:36px 24px;text-align:center;
+                    background:rgba(17,24,66,.85);border:1px solid rgba(125,145,255,.22);
+                    border-radius:24px;box-shadow:0 6px 22px rgba(0,0,0,.25);">
+          <div style="font-size:64px;line-height:1;">🛠️</div>
+          <h2 style="margin:16px 0 8px;color:#fff;font-weight:800;">កំពុងជួសជុល</h2>
+          <p style="color:#9AA3D0;font-size:1.05rem;margin:0;">
+            កម្មវិធីបិទជាបណ្ដោះអាសន្នដើម្បីកែលម្អ។<br>
+            សូមអភ័យទោស និងសូមត្រឡប់មកវិញនៅពេលក្រោយ 🙏
+          </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.stop()
+
 # បង្ហាញព័ត៌មានលម្អិត (DEBUG) ជានិច្ច ដល់អ្នកប្រើទាំងអស់
 DEBUG = True
 
