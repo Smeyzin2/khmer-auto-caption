@@ -33,6 +33,16 @@ st.set_page_config(
     layout="wide",
 )
 
+# ---- បិទមិនឱ្យរត់លើ Streamlit Cloud: អនុញ្ញាតតែម៉ាស៊ីនមេផ្ទាល់ខ្លួន (ប្រើ RAM ខ្លួនឯង) ----
+# បើចង់បើកលើ Cloud វិញ កំណត់ Environment Variable ALLOW_STREAMLIT_CLOUD=1
+def _running_on_streamlit_cloud():
+    return os.path.isdir("/mount/src") or os.environ.get("HOME", "") == "/home/appuser"
+
+
+if _running_on_streamlit_cloud() and os.environ.get("ALLOW_STREAMLIT_CLOUD") != "1":
+    st.error("🚫 កម្មវិធីនេះមិនអនុញ្ញាតឱ្យរត់លើ Streamlit Cloud ទេ។ សូមប្រើម៉ាស៊ីនមេផ្ទាល់ខ្លួន។")
+    st.stop()
+
 # =====================================================================
 #  THEME (Khmer Video AI — dark)
 # =====================================================================
@@ -460,6 +470,22 @@ def make_srt(captions):
     return "\n".join(out)
 
 apply_theme()
+
+
+def server_ram_info():
+    """បង្ហាញ RAM របស់ម៉ាស៊ីនដែលកម្មវិធីកំពុងរត់ (អាន /proc/meminfo)។"""
+    try:
+        info = {}
+        with open("/proc/meminfo", encoding="utf-8") as f:
+            for line in f:
+                k, v = line.split(":", 1)
+                info[k] = int(v.strip().split()[0])  # kB
+        total = info["MemTotal"] / 1024 / 1024
+        free = info.get("MemAvailable", info.get("MemFree", 0)) / 1024 / 1024
+        host = os.uname().nodename
+        return f"🖥️ ម៉ាស៊ីន: {host} · RAM សរុប {total:.1f}GB · នៅសល់ {free:.1f}GB"
+    except Exception:
+        return ""
 
 
 def get_secret(name, default=""):
@@ -3640,6 +3666,9 @@ with tab_vid:
         else:
             link_text = st.text_area("តំណវីដេអូ (មួយបន្ទាត់ ១ តំណ)", placeholder="https://...", height=90)
         st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង · អតិបរមា {MAX_UPLOAD_MB}MB")
+        _ram_txt = server_ram_info()
+        if _ram_txt:
+            st.caption(_ram_txt)
         if uploaded_files:
             try:
                 st.video(uploaded_files[0])
