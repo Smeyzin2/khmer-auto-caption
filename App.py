@@ -1447,7 +1447,7 @@ def groq_request(api_key, audio_path, model, language):
 
 def groq_transcribe(api_key, audio_path, language, status):
     last = None
-    for model in model_order(GROQ_MODELS, "whisper"):
+    for model in model_order(GROQ_MODELS, None):  # whisper-large-v3 មុនជានិច្ច; turbo ជាបម្រុងពេល large-v3 រវល់
         for attempt in range(2):
             try:
                 res_ = groq_request(api_key, audio_path, model, language)
@@ -1681,30 +1681,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         english[i] = r
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
-    # ជំហាន ២: ពីអង់គ្លេស/ដើម → ខ្មែរ ដោយ Gemini (ស្របគ្នា ៣ បាច់)
-    if gemini_key:
-        def _km(idxs):
-            try:
-                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
-                story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
-                return idxs, gemini_translate_khmer(
-                    gemini_key, [str(texts[i]).strip() for i in idxs],
-                    [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
-                    story=story,
-                ), None
-            except Exception as e:
-                return idxs, None, e
-        done = 0
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            for idxs, res, err in pool.map(_km, batches):
-                if err:
-                    errors.append(f"gemini: {err}"[:200])
-                else:
-                    for i, r in zip(idxs, res):
-                        outs[i] = r
-                done += len(idxs)
-                _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
-    # បម្រុងទី១: Groq LLM បកជាខ្មែរ ដោយមានបរិបទសាច់រឿង (ល្អជាង Google Translate បកម្តងមួយឃ្លាៗ)
+    # ជំហាន ២: Groq LLM បកជាខ្មែរមុន ដោយមានបរិបទសាច់រឿង (ល្អជាង Google Translate បកម្តងមួយឃ្លាៗ)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
         _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) 0/{len(missing)} ឃ្លា...")
@@ -1740,6 +1717,31 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                             outs[i] = r
                 done_ += len(idxs)
                 _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) {done_}/{len(missing)} ឃ្លា...")
+    # បម្រុងទី២: Gemini បកជាខ្មែរ តែឃ្លាដែល Groq មិនអាចបកបាន (សន្សំកូតា Gemini)
+    missing = [i for i, o in enumerate(outs) if o is None]
+    batches = [missing[k:k + 8] for k in range(0, len(missing), 8)]
+    if gemini_key and missing:
+        def _km(idxs):
+            try:
+                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
+                story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
+                return idxs, gemini_translate_khmer(
+                    gemini_key, [str(texts[i]).strip() for i in idxs],
+                    [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
+                    story=story,
+                ), None
+            except Exception as e:
+                return idxs, None, e
+        done = 0
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            for idxs, res, err in pool.map(_km, batches):
+                if err:
+                    errors.append(f"gemini: {err}"[:200])
+                else:
+                    for i, r in zip(idxs, res):
+                        outs[i] = r
+                done += len(idxs)
+                _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
     # បម្រុង: Google Translate លើអត្ថបទអង់គ្លេស (ត្រឹមត្រូវជាងបកពីចិន/ថៃ/វៀតណាមផ្ទាល់)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing:
