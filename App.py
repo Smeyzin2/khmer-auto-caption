@@ -522,7 +522,7 @@ MAX_DURATION_MIN = 300
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
-MAX_CHUNK_WORKERS = 3
+MAX_CHUNK_WORKERS = 6
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
@@ -568,8 +568,8 @@ FONT_SOURCES = [
 
 QUALITY = {
     "⚡ លឿន 480p": (480, 28, "ultrafast"),
-    "✨ ល្អ 720p": (720, 24, "veryfast"),
-    "💎 ខ្ពស់ (ដើម)": (0, 20, "veryfast"),
+    "✨ ល្អ 720p": (720, 24, "ultrafast"),
+    "💎 ខ្ពស់ (ដើម)": (0, 20, "ultrafast"),
 }
 
 LANGUAGES = {
@@ -791,7 +791,7 @@ def download_video(url, path, progress):
             done = 0
             with open(path, "wb") as f:
                 while True:
-                    chunk = response.read(1024 * 256)
+                    chunk = response.read(1024 * 1024)
                     if not chunk:
                         break
                     f.write(chunk)
@@ -1701,7 +1701,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             except Exception as e:
                 return idxs, None, e
         done = 0
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             for idxs, res, err in pool.map(_en, batches):
                 if err:
                     errors.append(f"groq-en: {err}"[:200])
@@ -1724,7 +1724,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             except Exception as e:
                 return idxs, None, e
         done = 0
-        with ThreadPoolExecutor(max_workers=3) as pool:
+        with ThreadPoolExecutor(max_workers=5) as pool:
             for idxs, res, err in pool.map(_km, batches):
                 if err:
                     errors.append(f"gemini: {err}"[:200])
@@ -1759,7 +1759,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             except Exception as e:
                 return idxs, None, e
         done_ = 0
-        with ThreadPoolExecutor(max_workers=2) as pool:
+        with ThreadPoolExecutor(max_workers=4) as pool:
             for idxs, res, err in pool.map(_gkm, groups):
                 if err:
                     errors.append(f"groq-km-ctx: {err}"[:200])
@@ -2073,7 +2073,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
             counter["n"] += 1
             status.write(f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({counter['n']}/{len(todo)})")
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
         results = list(pool.map(one, todo))
     out = []
     got = 0
@@ -2995,7 +2995,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=10) as pool:
         results = list(pool.map(gen, range(n_seg)))
 
     voice_eq = {}
@@ -3086,7 +3086,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
 def build_video_filter(max_side, subs=True):
     parts = []
     if max_side and max_side > 0:
-        parts.append(f"scale=w='if(gt(iw,ih),-2,min({max_side},iw))':" f"h='if(gt(iw,ih),min({max_side},ih),-2)'")
+        parts.append(f"scale=w='if(gt(iw,ih),-2,min({max_side},iw))':" f"h='if(gt(iw,ih),min({max_side},ih),-2)':flags=fast_bilinear")
     if subs:
         parts.append("ass=filename=captions.ass:fontsdir=.")
     parts.append("format=yuv420p")
@@ -3102,10 +3102,16 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         args = ["-i", "input.mp4"]
         if dub:
             args += ["-i", "dub.wav"]
-        args += ["-vf", build_video_filter(max_side, False)]
+        fast_copy = not (max_side and max_side > 0)
+        if not fast_copy:
+            args += ["-vf", build_video_filter(max_side, False)]
         if dub:
             args += ["-map", "0:v:0", "-map", "1:a:0"]
-        args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"]
+        if fast_copy:
+            args += ["-c:v", "copy"]
+        else:
+            args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+        args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"]
         log = run_ffmpeg(args, cwd=folder)
         return output_path, "-", log, ["មិនដាក់អក្សរ"]
     conf_env = make_fontconfig_env(folder)
@@ -3201,6 +3207,15 @@ def run_worker(job, item, settings, fonts_data):
             if duration > MAX_DURATION_MIN * 60:
                 raise UserError(f"វីដេអូវែងពេក។ សូមប្រើវីដេអូខ្លីជាង {MAX_DURATION_MIN} នាទី។")
             speech = detect_speech(master_path, duration)
+            analysis_pool = None
+            analysis_future = None
+            if (settings["dub_on"] and duration <= 1800
+                    and (settings["auto_gender"] or settings["voice_match"] or settings["emotion"] or settings.get("timbre"))):
+                analysis_pool = ThreadPoolExecutor(max_workers=1)
+                def _analyze():
+                    pcm_ = load_pcm(master_path)
+                    return pcm_, pitch_track(pcm_)
+                analysis_future = analysis_pool.submit(_analyze)
             item["pct"] = 0.25
             rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
             order = (["free", "gemini"] if settings["engine"] == "free" else ["gemini", "free"])
@@ -3264,8 +3279,11 @@ def run_worker(job, item, settings, fonts_data):
                     if need_audio:
                         try:
                             rep.write("🔍 កំពុងវិភាគសំឡេងអ្នកនិយាយដើម...")
-                            pcm = load_pcm(master_path)
-                            tracks = pitch_track(pcm)
+                            if analysis_future is not None:
+                                pcm, tracks = analysis_future.result()
+                            else:
+                                pcm = load_pcm(master_path)
+                                tracks = pitch_track(pcm)
                             pitch_inf = {"times": tracks[0], "f0": tracks[1], "rms": tracks[2]}
                             if settings.get("timbre"):
                                 ref_pcm = pcm
@@ -3323,6 +3341,9 @@ def run_worker(job, item, settings, fonts_data):
                     dub_ok = False
                 if not dub_ok:
                     item["warn"].append("បង្កើតសំឡេងអានមិនបានទេ។ វីដេអូមានតែអក្សរ។")
+            if analysis_pool is not None:
+                analysis_pool.shutdown(wait=False)
+                analysis_future = None
             item["pct"] = 0.75
             rep.write("៤/៤ កំពុងរង់ចាំដាក់អក្សរចូលវីដេអូ...")
             with job.render_slots:
@@ -3810,7 +3831,7 @@ with tab_out:
         refresh = REFRESH_SECONDS if (running and not reviewing) else None
         st.fragment(run_every=refresh)(work_area)(job, running, reviewing)
         st.markdown('<div id="download-area"></div>', unsafe_allow_html=True)
-        st.fragment(run_every=refresh)(download_area)(job)
+        st.fragment(run_every=(6 if refresh else None))(download_area)(job)
         if not running:
             if st.button("🗑 លុបលទ្ធផលទាំងអស់"):
                 shutil.rmtree(job.folder, ignore_errors=True)
