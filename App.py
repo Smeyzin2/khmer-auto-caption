@@ -1719,7 +1719,35 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         english[i] = r
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
-    # ជំហាន ២: Groq LLM បកជាខ្មែរមុន ដោយមានបរិបទសាច់រឿង (ល្អជាង Google Translate បកម្តងមួយឃ្លាៗ)
+    # ជំហាន ២: Gemini បកជាខ្មែរមុន (ល្អបំផុតសម្រាប់ខ្មែរ) ដោយមានបរិបទមុន/ក្រោយ
+    missing = [i for i, o in enumerate(outs) if o is None]
+    batches = [missing[k:k + 6] for k in range(0, len(missing), 6)]
+    if gemini_key and missing:
+        def _km(idxs):
+            try:
+                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
+                story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
+                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 4))]
+                if nxt_ctx:
+                    story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)
+                return idxs, gemini_translate_khmer(
+                    gemini_key, [str(texts[i]).strip() for i in idxs],
+                    [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
+                    story=story,
+                ), None
+            except Exception as e:
+                return idxs, None, e
+        done = 0
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            for idxs, res, err in pool.map(_km, batches):
+                if err:
+                    errors.append(f"gemini: {err}"[:200])
+                else:
+                    for i, r in zip(idxs, res):
+                        outs[i] = r
+                done += len(idxs)
+                _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
+    # ជំហាន ២ខ: Groq បកឃ្លាដែល Gemini មិនបាន (បម្រុង)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
         _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) 0/{len(missing)} ឃ្លា...")
@@ -1755,31 +1783,6 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                             outs[i] = r
                 done_ += len(idxs)
                 _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) {done_}/{len(missing)} ឃ្លា...")
-    # បម្រុងទី២: Gemini បកជាខ្មែរ តែឃ្លាដែល Groq មិនអាចបកបាន (សន្សំកូតា Gemini)
-    missing = [i for i, o in enumerate(outs) if o is None]
-    batches = [missing[k:k + 8] for k in range(0, len(missing), 8)]
-    if gemini_key and missing:
-        def _km(idxs):
-            try:
-                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
-                story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
-                return idxs, gemini_translate_khmer(
-                    gemini_key, [str(texts[i]).strip() for i in idxs],
-                    [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
-                    story=story,
-                ), None
-            except Exception as e:
-                return idxs, None, e
-        done = 0
-        with ThreadPoolExecutor(max_workers=5) as pool:
-            for idxs, res, err in pool.map(_km, batches):
-                if err:
-                    errors.append(f"gemini: {err}"[:200])
-                else:
-                    for i, r in zip(idxs, res):
-                        outs[i] = r
-                done += len(idxs)
-                _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
     # បម្រុង: Google Translate លើអត្ថបទអង់គ្លេស (ត្រឹមត្រូវជាងបកពីចិន/ថៃ/វៀតណាមផ្ទាល់)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing:
@@ -2994,6 +2997,28 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
+            # ឃ្លាវែងជាងចន្លោះ: បង្កើតម្តងទៀតជាមួយល្បឿន TTS ដើម (ស្តាប់ធម្មជាតិជាង atempo)
+            if (not clone_voice) and d_ > slot0 * 1.06:
+                try:
+                    base_ = -4
+                    if pros[i]:
+                        try:
+                            base_ = int(str(pros[i]["rate"]).replace("%", "").replace("+", ""))
+                        except Exception:
+                            base_ = -4
+                    extra_ = int(min(40, (d_ / slot0 - 1.0) * 100 * 0.85))
+                    new_rate = max(-30, min(45, base_ + extra_))
+                    p2_ = {"rate": f"{new_rate:+d}%",
+                           "volume": (pros[i]["volume"] if pros[i] else "+0%"),
+                           "pitch": (pros[i]["pitch"] if pros[i] else "+0Hz")}
+                    path2_ = os.path.join(folder, f"tts_{i}_f.mp3")
+                    if tts_retry(t_, voices_[i], path2_, p2_, tries=2):
+                        d2_, _, _ = probe_media(path2_)
+                        if d2_ < d_:
+                            shutil.move(path2_, path_)
+                            d_ = d2_
+                except Exception:
+                    pass
             # Preserve the complete translated sentence. Do not automatically
             # ask an LLM to shorten it, since that can omit words or meaning.
             if clone_voice:
