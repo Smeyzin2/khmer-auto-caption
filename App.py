@@ -1601,7 +1601,7 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
     last = "មិនមានម៉ូដែល"
     for model in models[:8]:
         body = json.dumps({
-            "model": model, "temperature": 0.2,
+            "model": model, "temperature": 0.1,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system or TRANS_SYSTEM},
@@ -1671,7 +1671,7 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
         try:
             resp = client.models.generate_content(
                 model=model, contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.25, response_mime_type="application/json"),
+                config=types.GenerateContentConfig(temperature=0.1, response_mime_type="application/json"),
             )
             raw = (getattr(resp, "text", "") or "").strip()
             raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
@@ -2103,13 +2103,25 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
     return out
 
 
-def merge_for_translate(segs, max_chars=300, max_gap=1.0, max_len=18.0):
+def merge_for_translate(segs, max_chars=420, max_gap=1.6, max_len=26.0):
+    """បញ្ចូលបំណែក Whisper ដែលដាច់កណ្តាលប្រយោគ ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ
+    (បកទាំងប្រយោគ ត្រឹមត្រូវជាងបកបំណែកខ្លីៗ)។"""
+    strong_end = ".!?។…。！？"
     out = []
     for s, e, t in segs:
+        t = str(t).strip()
+        if not t:
+            continue
         if out:
             ps, pe, pt = out[-1]
-            ended = pt.rstrip()[-1:] in ".!?។…"
-            if (not ended) and s - pe <= max_gap and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
+            last = pt.rstrip()[-1:]
+            ended = last in strong_end
+            tiny_prev = len(pt.strip()) < 14           # បំណែកខ្លីពេក មិនអាចបកឱ្យត្រូវ
+            tiny_cur = len(t) < 8
+            starts_lower = t[:1].islower()              # ចាប់ផ្តើមអក្សរតូច = បន្តប្រយោគមុន
+            cont = (not ended) or tiny_prev or tiny_cur or starts_lower
+            gap_ok = (s - pe) <= (max_gap if not ended else 0.5)
+            if cont and gap_ok and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
                 out[-1] = (ps, max(pe, e), (pt + " " + t).strip())
                 continue
         out.append((s, e, t))
@@ -2165,13 +2177,10 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             segs = retime_by_speech(segs, speech, duration)
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        keep = merge_for_translate(keep, max_chars=300, max_gap=1.2, max_len=18.0)
+        keep = merge_for_translate(keep)
         # បកប្រែតាមប្រវែងឃ្លាចិន៖ ឃ្លាខ្លីអាចពន្យល់ខ្មែរបន្ថែម,
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
-        budgets = [
-            max(60, min(320, int(40 + 22 * (e - s))))
-            for s, e, _ in keep
-        ] if dub else None
+        budgets = None  # មិនកំណត់ប្រវែង៖ រក្សាអត្ថន័យពេញលេញជាមុន
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
@@ -2235,7 +2244,7 @@ VOICE_MALE = "km-KH-PisethNeural"
 VOICE_FEMALE = "km-KH-SreymomNeural"
 
 BIN = 0.1
-MIN_TURN = 0.8
+MIN_TURN = 2.0
 
 
 def load_pcm(path):
@@ -2478,7 +2487,7 @@ def split_by_speaker(segments, runs, default_voice):
         if not parts:
             out.append((s, e, text, default_voice))
             continue
-        parts = merge_short_runs(parts, 0.6)
+        parts = merge_short_runs(parts, 2.0)
         if len(parts) == 1:
             out.append((s, e, text, voice_of[parts[0][2]]))
             continue
@@ -2763,8 +2772,8 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
 def emotion_prosody(label, intensity, use_pitch=True):
     rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
     k = max(0.0, float(intensity))
-    rate = int(max(-30, min(30, rate * k)))
-    pitch = int(max(-30, min(30, pitch * k))) if use_pitch else 0
+    rate = int(max(-12, min(12, rate * k)))
+    pitch = int(max(-12, min(12, pitch * k))) if use_pitch else 0
     vol = int(max(-50, min(50, vol * k)))
     if rate == 0 and pitch == 0 and vol == 0:
         return None
@@ -2887,13 +2896,15 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=170, max_gap=0.9, max_len=15.0):
+def merge_for_dub(segments, max_chars=260, max_gap=1.5, max_len=24.0):
     """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
     out = []
     for s, e, t in segments:
         if out:
             ps, pe, pt = out[-1]
-            if s - pe <= max_gap and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
+            ended = pt.rstrip()[-1:] in "។.!?…"
+            short_prev = len(pt) < 24
+            if (not ended or short_prev) and s - pe <= max_gap and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
                 out[-1] = (ps, max(pe, e), fix_khmer(pt + " " + t))
                 continue
         out.append((s, e, t))
@@ -3080,7 +3091,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             chain = ("aresample=24000," f"asetrate={int(24000 * ratio)}," "aresample=24000," + atempo_chain(p["speed"] / ratio))
         if p.get("eq"):
             chain += "," + p["eq"]
-        filters.append(f"[{n}:a]{chain},adelay={delay}:all=1[a{n}]")
+        filters.append(f"[{n}:a]{chain},afade=t=in:d=0.03,adelay={delay}:all=1[a{n}]")
         n += 1
     if notes is not None:
         for v, (ratios, tgts) in stats.items():
