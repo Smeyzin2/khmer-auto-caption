@@ -462,15 +462,20 @@ def make_srt(captions):
 apply_theme()
 
 # =====================================================================
-#  MAINTENANCE MODE — ដាក់ True = បិទកម្មវិធីបណ្ដោះអាសន្ន / False = បើកវិញ
+#  MAINTENANCE MODE — ដាក់ True = បិទកម្មវិធីសម្រាប់អ្នកប្រើ / False = បើកវិញ
+#  ម្ចាស់កម្មវិធីអាចចូលបាន ដោយបញ្ចូលលេខសម្ងាត់ OWNER_KEY (ដាក់ក្នុង Streamlit Secrets)
 # =====================================================================
 MAINTENANCE = True
+try:
+    OWNER_KEY = str(st.secrets.get("OWNER_KEY", "")).strip()
+except Exception:
+    OWNER_KEY = ""
 
-if MAINTENANCE:
+if MAINTENANCE and not st.session_state.get("owner_ok"):
     render_header()
     st.markdown(
         """
-        <div style="max-width:560px;margin:40px auto;padding:36px 24px;text-align:center;
+        <div style="max-width:560px;margin:40px auto 16px;padding:36px 24px;text-align:center;
                     background:rgba(17,24,66,.85);border:1px solid rgba(125,145,255,.22);
                     border-radius:24px;box-shadow:0 6px 22px rgba(0,0,0,.25);">
           <div style="font-size:64px;line-height:1;">🛠️</div>
@@ -483,6 +488,14 @@ if MAINTENANCE:
         """,
         unsafe_allow_html=True,
     )
+    with st.expander("🔑 សម្រាប់ម្ចាស់កម្មវិធី"):
+        _pw = st.text_input("លេខសម្ងាត់ម្ចាស់", type="password", key="owner_pw")
+        if st.button("ចូល", key="owner_go", use_container_width=True):
+            if OWNER_KEY and _pw.strip() == OWNER_KEY:
+                st.session_state["owner_ok"] = True
+                st.rerun()
+            else:
+                st.error("លេខសម្ងាត់មិនត្រឹមត្រូវ ឬមិនទាន់កំណត់ OWNER_KEY។")
     st.stop()
 
 # បង្ហាញព័ត៌មានលម្អិត (DEBUG) ជានិច្ច ដល់អ្នកប្រើទាំងអស់
