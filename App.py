@@ -473,40 +473,6 @@ def get_secret(name, default=""):
         return default
 
 
-# =====================================================================
-#  MAINTENANCE MODE — ដាក់ True = បិទកម្មវិធីសម្រាប់អ្នកប្រើ / False = បើកធម្មតា
-#  ម្ចាស់កម្មវិធីអាចចូលបាន ដោយបញ្ចូលលេខសម្ងាត់ OWNER_KEY
-# =====================================================================
-MAINTENANCE = False
-OWNER_KEY = str(get_secret("OWNER_KEY", "")).strip()
-
-if MAINTENANCE and not st.session_state.get("owner_ok"):
-    render_header()
-    st.markdown(
-        """
-        <div style="max-width:560px;margin:40px auto 16px;padding:36px 24px;text-align:center;
-                    background:rgba(17,24,66,.85);border:1px solid rgba(125,145,255,.22);
-                    border-radius:24px;box-shadow:0 6px 22px rgba(0,0,0,.25);">
-          <div style="font-size:64px;line-height:1;">🛠️</div>
-          <h2 style="margin:16px 0 8px;color:#fff;font-weight:800;">កំពុងជួសជុល</h2>
-          <p style="color:#9AA3D0;font-size:1.05rem;margin:0;">
-            កម្មវិធីបិទជាបណ្ដោះអាសន្នដើម្បីកែលម្អ។<br>
-            សូមអភ័យទោស និងសូមត្រឡប់មកវិញនៅពេលក្រោយ 🙏
-          </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-    with st.expander("🔑 សម្រាប់ម្ចាស់កម្មវិធី"):
-        _pw = st.text_input("លេខសម្ងាត់ម្ចាស់", type="password", key="owner_pw")
-        if st.button("ចូល", key="owner_go", use_container_width=True):
-            if OWNER_KEY and _pw.strip() == OWNER_KEY:
-                st.session_state["owner_ok"] = True
-                st.rerun()
-            else:
-                st.error("លេខសម្ងាត់មិនត្រឹមត្រូវ ឬមិនទាន់កំណត់ OWNER_KEY។")
-    st.stop()
-
 # បង្ហាញព័ត៌មានលម្អិត (DEBUG) ជានិច្ច ដល់អ្នកប្រើទាំងអស់
 DEBUG = True
 
