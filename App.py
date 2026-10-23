@@ -618,6 +618,27 @@ def has_khmer(text):
     return bool(re.search(r"[\u1780-\u17FF]", text or ""))
 
 
+def khmer_dominant(text, min_ratio=0.6):
+    """អក្សរខ្មែរត្រូវមានច្រើនជាងអក្សរឡាតាំង (មិនអនុញ្ញាតឱ្យនៅសល់អង់គ្លេស/ចិនច្រើន)។"""
+    t = str(text or "")
+    kh = len(re.findall(r"[\u1780-\u17FF]", t))
+    lat = len(re.findall(r"[A-Za-z]", t))
+    if kh == 0:
+        return False
+    return kh / float(kh + lat) >= min_ratio
+
+
+def tts_clean(text):
+    """សម្អាតអត្ថបទមុនអាន ដើម្បីកុំឱ្យ TTS ផ្អាកដាច់ៗ ដោយសារសញ្ញាចម្លែកៗ។"""
+    t = fix_khmer(text)
+    t = re.sub(r"[\"\u201c\u201d\u2018\u2019'\u00ab\u00bb()\[\]{}<>*_#~`^|\\/]", " ", t)
+    t = re.sub(r"(\.{2,}|\u2026+|[-\u2013\u2014]+)", " ", t)
+    t = re.sub(r"[,;:\u060c]+", " ", t)
+    t = re.sub(r"([!?\u17D4])\1+", r"\1", t)
+    t = re.sub(r"\s+", " ", t).strip()
+    return t or fix_khmer(text)
+
+
 def khmer_ratio(segments):
     if not segments:
         return 0.0
@@ -1528,6 +1549,8 @@ def clean_translation(out):
     out = str(out or "")
     out = CJK_RE.sub("", out)
     out = fix_khmer(out)
+    if out and not khmer_dominant(out):
+        return None
     return out or None
 
 
@@ -1580,6 +1603,11 @@ TRANS_SYSTEM = (
     "no word salad. Write numbers and units the way Khmer speakers say them. Transliterate foreign names naturally. "
     "(6) If a line is garbled or uncertain, keep the closest clear meaning, do not invent dialogue. "
     "(7) A [max N chars] tag is only a soft hint: ALWAYS keep the full meaning first, never cut or drop content to fit it, exceed it if needed; never output the tag. "
+    "(8) Every numbered line is ONE complete spoken sentence unit: translate it into exactly one complete, grammatical Khmer "
+    "sentence; never merge lines, split lines, or move content between lines. Never leave source-language words untranslated except names. "
+    "(9) The output will be read aloud by a TTS voice: use plain natural Khmer, put ។ (or ? !) only at the end of a sentence, and avoid "
+    "commas, brackets, quotes, dashes, ellipses, emojis and symbols so the speech flows smoothly without choppy pauses. "
+    "(10) If an English meaning is given, use it only as a hint; the original line is the authority for facts, names and numbers. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
@@ -2100,7 +2128,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
     return out
 
 
-def merge_for_translate(segs, max_chars=420, max_gap=1.6, max_len=26.0):
+def merge_for_translate(segs, max_chars=240, max_gap=1.2, max_len=14.0):
     """បញ្ចូលបំណែក Whisper ដែលដាច់កណ្តាលប្រយោគ ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ
     (បកទាំងប្រយោគ ត្រឹមត្រូវជាងបកបំណែកខ្លីៗ)។"""
     strong_end = ".!?។…。！？"
@@ -2143,6 +2171,8 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             continue
         if (float(sg.get("no_speech_prob", 0) or 0) > 0.6 and float(sg.get("avg_logprob", 0) or 0) < -0.8):
             continue
+        if float(sg.get("compression_ratio", 0) or 0) > 2.4:
+            continue
         try:
             s = float(sg.get("start", 0))
             e = float(sg.get("end", 0))
@@ -2150,6 +2180,9 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             continue
         s = min(max(0.0, s), duration)
         e = min(max(e, s + 0.4), duration + 0.5)
+        if keep and keep[-1][2].strip().lower() == text.strip().lower():
+            keep[-1] = (keep[-1][0], max(keep[-1][1], e), keep[-1][2])
+            continue
         keep.append((s, e, text))
     if not keep:
         raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
@@ -2209,7 +2242,7 @@ def tts_segment(text, voice, path, prosody=None):
         kw = {"rate": "-4%"}
         if p:
             kw = {"rate": p["rate"], "volume": p["volume"], "pitch": p["pitch"]}
-        await edge_tts.Communicate(text, voice, **kw).save(path)
+        await edge_tts.Communicate(tts_clean(text), voice, **kw).save(path)
 
     try:
         asyncio.run(_go(prosody))
@@ -2893,15 +2926,20 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=260, max_gap=1.5, max_len=24.0):
-    """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
+def merge_for_dub(segments, max_chars=170, max_gap=0.9, max_len=12.0):
+    """បញ្ចូលតែបំណែកខ្លីៗដែលដាច់កណ្តាលប្រយោគ ដើម្បីអានរលូន ហើយនៅជិតម៉ោងសំឡេងដើម"""
     out = []
     for s, e, t in segments:
+        t = fix_khmer(t)
+        if not t:
+            continue
         if out:
             ps, pe, pt = out[-1]
             ended = pt.rstrip()[-1:] in "។.!?…"
-            short_prev = len(pt) < 24
-            if (not ended or short_prev) and s - pe <= max_gap and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
+            tiny_prev = len(pt) < 18
+            tiny_cur = len(t) < 10
+            if ((not ended) or tiny_prev or tiny_cur) and (s - pe) <= max_gap \
+                    and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
                 out[-1] = (ps, max(pe, e), fix_khmer(pt + " " + t))
                 continue
         out.append((s, e, t))
@@ -2992,7 +3030,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 return None
             d_, _, _ = probe_media(path_)
             # ឃ្លាវែងជាងចន្លោះ: បង្កើតម្តងទៀតជាមួយល្បឿន TTS ដើម (ស្តាប់ធម្មជាតិជាង atempo)
-            if (not clone_voice) and d_ > slot0 * 1.06:
+            slot_fill_ = max(0.6, min(next_s_ - 0.08, e_ + 0.3) - s_)
+            if (not clone_voice) and (d_ > slot0 * 1.04 or d_ < slot_fill_ * 0.8):
                 try:
                     base_ = -4
                     if pros[i]:
@@ -3000,15 +3039,20 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                             base_ = int(str(pros[i]["rate"]).replace("%", "").replace("+", ""))
                         except Exception:
                             base_ = -4
-                    extra_ = int(min(40, (d_ / slot0 - 1.0) * 100 * 0.85))
-                    new_rate = max(-30, min(45, base_ + extra_))
+                    if d_ > slot0 * 1.04:
+                        extra_ = int(min(50, (d_ / slot0 - 1.0) * 100))
+                    else:
+                        extra_ = -int(min(14, (1.0 - d_ / slot_fill_) * 60))
+                    new_rate = max(-20, min(50, base_ + extra_))
                     p2_ = {"rate": f"{new_rate:+d}%",
                            "volume": (pros[i]["volume"] if pros[i] else "+0%"),
                            "pitch": (pros[i]["pitch"] if pros[i] else "+0Hz")}
                     path2_ = os.path.join(folder, f"tts_{i}_f.mp3")
                     if tts_retry(t_, voices_[i], path2_, p2_, tries=2):
                         d2_, _, _ = probe_media(path2_)
-                        if d2_ < d_:
+                        faster_ = d_ > slot0 * 1.04 and d2_ < d_
+                        slower_ = d_ <= slot0 * 1.04 and d_ < d2_ <= slot0
+                        if faster_ or slower_:
                             shutil.move(path2_, path_)
                             d_ = d2_
                 except Exception:
@@ -3076,7 +3120,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
-        speed = min(1.5, max(1.0, speed))
+        speed = min(1.35, max(1.0, speed))
         cursor = max(cursor, start + d / speed + 0.08)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
