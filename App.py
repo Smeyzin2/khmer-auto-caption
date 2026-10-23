@@ -1,4 +1,4 @@
-
+ 
 import os
 import io
 import re
@@ -461,15 +461,24 @@ def make_srt(captions):
 
 apply_theme()
 
+
+def get_secret(name, default=""):
+    """អាន secret ពី Environment Variable (Hugging Face Spaces) ឬ Streamlit secrets។"""
+    val = os.environ.get(name)
+    if val:
+        return val
+    try:
+        return st.secrets.get(name, default)
+    except Exception:
+        return default
+
+
 # =====================================================================
-#  MAINTENANCE MODE — ដាក់ True = បិទកម្មវិធីសម្រាប់អ្នកប្រើ / False = បើកវិញ
-#  ម្ចាស់កម្មវិធីអាចចូលបាន ដោយបញ្ចូលលេខសម្ងាត់ OWNER_KEY (ដាក់ក្នុង Streamlit Secrets)
+#  MAINTENANCE MODE — ដាក់ True = បិទកម្មវិធីសម្រាប់អ្នកប្រើ / False = បើកធម្មតា
+#  ម្ចាស់កម្មវិធីអាចចូលបាន ដោយបញ្ចូលលេខសម្ងាត់ OWNER_KEY
 # =====================================================================
-MAINTENANCE = True
-try:
-    OWNER_KEY = str(st.secrets.get("OWNER_KEY", "")).strip()
-except Exception:
-    OWNER_KEY = ""
+MAINTENANCE = False
+OWNER_KEY = str(get_secret("OWNER_KEY", "")).strip()
 
 if MAINTENANCE and not st.session_state.get("owner_ok"):
     render_header()
@@ -508,7 +517,7 @@ MAX_DOWNLOAD_MB = 1024
 MAX_VIDEOS = 5
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
-MAX_RENDER_AT_ONCE = 3
+MAX_RENDER_AT_ONCE = 2
 MAX_DURATION_MIN = 300
 
 # Shared gallery: all users of the same running app instance can see saved videos.
@@ -2032,7 +2041,7 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech, status):
     return out
 
 
-GSPEECH_KEY = "AIzaSyBOti4mM-6x9WDnZIjIeyEU21OpBXqWBgw"
+GSPEECH_KEY = get_secret("GSPEECH_KEY", "")
 
 
 def google_speech_request(flac_bytes, lang="km-KH"):
@@ -3586,14 +3595,14 @@ def scroll_to_downloads():
 
 
 GEMINI_KEY = "\n".join(split_keys([
-    st.secrets.get("GEMINI_API_KEY", ""),
-    st.secrets.get("GEMINI_API_KEYS", ""),
+    get_secret("GEMINI_API_KEY", ""),
+    get_secret("GEMINI_API_KEYS", ""),
 ]))  # ទទួលបានច្រើន key (បំបែកដោយ , ឬបន្ទាត់ថ្មី ឬជា list)
 GROQ_KEY = "\n".join(split_keys([
-    st.secrets.get("GROQ_API_KEY", ""),
-    st.secrets.get("GROQ_API_KEYS", ""),
+    get_secret("GROQ_API_KEY", ""),
+    get_secret("GROQ_API_KEYS", ""),
 ]))
-ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
+ELEVEN_KEY = get_secret("ELEVENLABS_API_KEY", "")
 
 render_header()
 
