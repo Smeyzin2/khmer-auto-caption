@@ -2310,7 +2310,9 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         keep = merge_for_translate(keep)
         # បកប្រែតាមប្រវែងឃ្លាចិន៖ ឃ្លាខ្លីអាចពន្យល់ខ្មែរបន្ថែម,
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
-        budgets = None  # មិនកំណត់ប្រវែង៖ រក្សាអត្ថន័យពេញលេញជាមុន
+        # ប្រវែងគោល (soft hint): ~១០ តួអក្សរខ្មែរ/វិនាទី តាមពេលមាត់និយាយ ឱ្យស្របចង្វាក់ lip-sync
+        # (prompt ហាមកាត់អត្ថន័យ ដូច្នេះនេះគ្រាន់តែជាការណែនាំ)
+        budgets = [max(12, int((e - s) * 10)) for s, e, _ in keep] if dub else None
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
@@ -3098,6 +3100,22 @@ def shorten_groq(api_key, text, max_seconds):
     return text
 
 
+def condense_for_slot(text, slot, client, model, groq_key):
+    """បង្រួមប្រយោគខ្មែរឱ្យខ្លី (រក្សាអត្ថន័យ) ពេលវែងជាងមាត់និយាយច្រើនពេក។ បើមិនបានលទ្ធផលល្អ ត្រឡប់អត្ថបទដើម។"""
+    try:
+        if client is not None and model:
+            out = shorten_khmer(client, model, text, slot)
+            if out and out != text and has_khmer(out) and len(out) < len(text):
+                return out
+        if groq_key:
+            out = shorten_groq(groq_key, text, slot)
+            if out and out != text and has_khmer(out) and len(out) < len(text):
+                return out
+    except Exception:
+        pass
+    return text
+
+
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
              clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0, tight=True):
@@ -3157,8 +3175,18 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                             d_ = d2_
                 except Exception:
                     pass
-            # Preserve the complete translated sentence. Do not automatically
-            # ask an LLM to shorten it, since that can omit words or meaning.
+            # ប្រយោគវែងពេកជាង ១.៤ ដង នៃចន្លោះមាត់ (លឿនជាងនេះស្តាប់មិនបាន)៖ បង្រួមបន្តិចរក្សាអត្ថន័យ
+            # ហើយបង្កើតសំឡេងម្តងទៀត យកតែបើខ្លីជាងពិតប្រាកដ។
+            if (not clone_voice) and d_ > slot0 * 1.4 and len(t_) > 24:
+                short_ = condense_for_slot(t_, slot0, client, model, groq_key)
+                if short_ != t_:
+                    path3_ = os.path.join(folder, f"tts_{i}_s.mp3")
+                    if tts_retry(short_, voices_[i], path3_, pros[i], tries=2):
+                        d3_, _, _ = probe_media(path3_)
+                        if d3_ < d_ * 0.9:
+                            shutil.move(path3_, path_)
+                            d_ = d3_
+            # Preserve the complete translated sentence otherwise.
             if clone_voice:
                 try:
                     eleven_sts(eleven_key, clone_voice, path_)
@@ -3207,7 +3235,9 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             continue
         d, f0, _tb = res
         next_s = segments[i + 1][0] if i + 1 < n_seg else duration
-        start = max(s + offset, 0.0)
+        prev_end = segments[i - 1][1] if i > 0 else 0.0
+        lead = max(0.0, min(0.15, s - prev_end - 0.05))   # ចាប់ផ្តើមមុនបន្តិច តាមការបើកមាត់
+        start = max(s + offset - lead, 0.0)
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.04, e + (0.3 if tight else 1.2)) - start)
@@ -3220,7 +3250,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
-        speed = min(1.35, max(1.0, speed))
+        speed = min(1.45, max(1.0, speed))
         cursor = max(cursor, start + d / speed + 0.08)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -3469,6 +3499,17 @@ def run_worker(job, item, settings, fonts_data):
                                         f.write(settings["timbre_sample"])
                                     ref_pcm = load_pcm(sp)
                                 ref_bands = band_levels(ref_pcm)
+                            if settings["auto_gender"]:
+                                try:
+                                    planned, gender_lines, _info, runs_ = plan_dub_voices(
+                                        dub_segments, pcm, settings["voice"], duration, tracks=tracks)
+                                    if runs_ is not None and planned:
+                                        dub_segments = [(a_, b_, t_) for a_, b_, t_, v_ in planned]
+                                        seg_voices = [v_ for a_, b_, t_, v_ in planned]
+                                        voice_notes = voice_notes + gender_lines[:6]
+                                except Exception:
+                                    seg_voices = None
+                                    runs_ = None
                             if settings["voice_match"]:
                                 targets = compute_targets(dub_segments, seg_voices, pitch_inf, runs_)
                             pcm = None
@@ -3707,7 +3748,7 @@ sub_on = True
 dub_on = True
 emotion_on = True
 keep_bg = True
-auto_gender = False
+auto_gender = True
 srt_on = False
 narrate_on = False
 review_on = False
