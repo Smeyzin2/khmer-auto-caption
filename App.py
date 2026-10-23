@@ -479,9 +479,18 @@ DEBUG = True
 REQUEST_TIMEOUT_MS = 120000
 TRANSLATE_TIMEOUT_MS = 40000   # ការបកប្រែអត្ថបទ: មិនរង់ចាំលើសពី ៤០ វិនាទី
 MAX_CAPTION_CHARS = 26
-MAX_DOWNLOAD_MB = 200
-MAX_UPLOAD_MB = 200   # ទំហំអតិបរមាសម្រាប់ Upload ពីឧបករណ៍
-MAX_VIDEOS = 5
+def _env_int(name, default):
+    try:
+        return max(1, int(os.environ.get(name, default)))
+    except Exception:
+        return default
+
+
+# ម៉ាស៊ីនមេផ្ទាល់ខ្លួន: Upload អតិបរមា 2GB (ប្រើ RAM របស់ម៉ាស៊ីនខ្លួនឯង)
+# អាចប្តូរបានតាម Environment Variable MAX_UPLOAD_MB
+MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 2048)  # ទំហំអតិបរមាសម្រាប់ Upload
+MAX_DOWNLOAD_MB = _env_int("MAX_DOWNLOAD_MB", MAX_UPLOAD_MB)
+MAX_VIDEOS = _env_int("MAX_VIDEOS", 5)
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 2
