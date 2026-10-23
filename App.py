@@ -1917,7 +1917,9 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
 
 def tts_segment(text, voice, path, prosody=None):
     async def _go(p):
-        kw = {}
+        # Natural, slightly slower Khmer delivery by default.
+        # Emotion-specific prosody still takes precedence when supplied.
+        kw = {"rate": "-8%"}
         if p:
             kw = {"rate": p["rate"], "volume": p["volume"], "pitch": p["pitch"]}
         await edge_tts.Communicate(text, voice, **kw).save(path)
@@ -2756,8 +2758,9 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         if start >= duration - 0.3:
             break
         slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
-        # Natural dubbing speed; only speed up slightly if a line must fit.
-        speed = min(1.15, max(1.0, d / slot))
+        # Keep the generated Khmer voice natural: never accelerate it.
+        # If needed, slow down a little instead of cutting or rushing words.
+        speed = min(1.0, max(0.88, d / slot))
         cursor = start + d / speed + 0.08
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
@@ -3197,7 +3200,7 @@ busy = bool(current_job and current_job.running())
 
 voice_label = list(TTS_VOICES.keys())[0]
 keep_bg = False
-auto_gender = False
+auto_gender = True
 voice_match = False
 emotion = False
 clone_on = False
@@ -3263,7 +3266,7 @@ with tab_voice:
         voice_label = st.radio("ជ្រើសសំឡេងនិយាយ", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
         auto_gender = st.toggle(
             "🎭 ឱ្យ AI ប្តូរសំឡេងប្រុស/ស្រីតាមអ្នកនិយាយក្នុងវីដេអូ",
-            value=False,
+            value=True,
             help="បើបើក AI នឹងវិភាគសំឡេងដើម ហើយប្រើសំឡេងប្រុសសម្រាប់អ្នកនិយាយប្រុស និងសំឡេងស្រីសម្រាប់អ្នកនិយាយស្រី។ ត្រូវការសំឡេងដើមច្បាស់។",
             key="auto_gender_pick",
         )
