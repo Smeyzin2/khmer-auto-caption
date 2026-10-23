@@ -1415,16 +1415,21 @@ def groq_chat_models(api_key):
 
 
 TRANS_SYSTEM = (
-    "You are a professional Cambodian Khmer dubbing translator. Translate dialogue into everyday spoken Khmer, "
-    "as a native Cambodian would naturally say it aloud. Avoid literal translation, stiff written Khmer, "
-    "foreign word order, confusing pronouns, unnatural phrases, and word salad. The numbered lines are "
-    "consecutive lines from ONE video: read them together and use scene context and speaker relationships. "
-    "Preserve the actual meaning, names, facts, intent, and emotional tone; never add details or omit meaning. "
-    "Use short, clear, idiomatic Khmer sentences that a voice actor can speak smoothly. If the source is an "
-    "idiom or joke, convey its intended meaning naturally in Khmer rather than translating each word. "
-    "If source text appears garbled or uncertain, do not invent a confident meaning; retain the closest clear meaning. "
-    "When a [max N chars] limit is given, make the Khmer concise enough for the timing without changing the core meaning; "
-    "never output the tag. Output Khmer script only. Return JSON {\"translations\": [...]} with exactly one item per input, same order."
+    "You are an expert Cambodian Khmer dubbing translator and script editor. Translate the dialogue into natural, "
+    "everyday SPOKEN Khmer exactly as a native Phnom Penh speaker would say it in a film or drama, not written/news Khmer "
+    "and not word-for-word. The numbered lines are consecutive lines from ONE video: read ALL of them first to understand "
+    "the story, who is speaking to whom, relationships, mood and running jokes, then translate each line with that context. "
+    "Rules: (1) Keep the exact meaning, names, numbers and facts; never add or drop information. "
+    "(2) Choose pronouns and politeness that fit the relationship (friends: ឯង/អ្នក/ខ្ញុំ; elders: ទូលបង្គំ/លោក/អ្នកស្រី etc.) and keep them consistent across lines. "
+    "(3) Keep the speaker's emotion: anger, sadness, fear, joy, sarcasm, tenderness must be audible in word choice "
+    "(use natural particles such as ណា, ហើយ, ទេ, ហ្នឹង, នែ៎ where a native would) and keep ! ? … punctuation. "
+    "(4) Translate idioms, slang and jokes by their intended meaning, never literally. "
+    "(5) Short, clear sentences a voice actor can say in one breath; no stiff foreign word order; no repeated words; "
+    "no word salad. Write numbers and units the way Khmer speakers say them. Transliterate foreign names naturally. "
+    "(6) If a line is garbled or uncertain, keep the closest clear meaning, do not invent dialogue. "
+    "(7) When a [max N chars] limit is given, keep the full meaning and shorten only by removing filler; never output the tag. "
+    "Output Khmer script only (no English, no Chinese, no romanization). "
+    "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
 
 
@@ -1475,16 +1480,16 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
 EN_SYSTEM = (
     "You are a careful transcription-correction and meaning bridge for dubbing. The numbered lines are consecutive lines from ONE video; "
     "use surrounding context to resolve only obvious Whisper errors, speaker references, slang, and idioms. Render each line as clear, "
-    "faithful English that preserves every meaningful detail and tone. Do not translate beyond what the audio supports, add explanations, "
+    "faithful English that preserves every meaningful detail, emotion and tone (anger, sarcasm, sadness, affection). Do not translate beyond what the audio supports, add explanations, "
     "embellish, or guess at unclear words; mark genuinely unclear audio as [unclear]. "
     "mark genuinely unclear audio as [unclear] rather than making up dialogue. Keep exactly one output for each input line, same order. "
     "Return JSON {\"translations\": [...]} only."
 )
 
 
-def gemini_translate_khmer(api_key, texts, english=None, budgets=None):
+def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
     client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
-    models = get_available_models(client)[:3]
+    models = get_available_models(client)[:4]
     rows = []
     for i, t in enumerate(texts):
         row = f"{i + 1}. {t}"
@@ -1496,14 +1501,16 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None):
     prompt = (
         TRANS_SYSTEM
         + " Some items include an English meaning to help you understand; translate the true meaning into Khmer. "
-        "Never output the English text or the tags.\n\n" + "\n".join(rows)
+        "Never output the English text or the tags.\n\n"
+        + (("STORY SO FAR (for context only, do NOT translate this):\n" + story + "\n\n") if story else "")
+        + "LINES TO TRANSLATE:\n" + "\n".join(rows)
     )
     last = None
     for model in models:
         try:
             resp = client.models.generate_content(
                 model=model, contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.3, response_mime_type="application/json"),
+                config=types.GenerateContentConfig(temperature=0.25, response_mime_type="application/json"),
             )
             raw = (getattr(resp, "text", "") or "").strip()
             raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
@@ -1523,7 +1530,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
     outs = [None] * n
     english = [None] * n
     # បកជាបាច់តូច ដើម្បីកុំឱ្យ AI ខកឃ្លា ឬច្រឡំលំដាប់
-    batches = [list(range(k, min(k + 4, n))) for k in range(0, n, 4)]
+    batches = [list(range(k, min(k + 8, n))) for k in range(0, n, 8)]
     # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (AI ពូកែភាសាអង់គ្លេសជាងខ្មែរ)
     if groq_key:
         for idxs in batches:
@@ -1538,9 +1545,12 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None):
     if gemini_key:
         for idxs in batches:
             try:
+                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
+                story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
                 res = gemini_translate_khmer(
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
+                    story=story,
                 )
                 for i, r in zip(idxs, res):
                     outs[i] = r
@@ -1897,7 +1907,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         # បកប្រែតាមប្រវែងឃ្លាចិន៖ ឃ្លាខ្លីអាចពន្យល់ខ្មែរបន្ថែម,
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         budgets = [
-            max(10, min(110, int(34 + 18 / max(0.7, e - s))))
+            max(18, min(150, int(45 + 22 / max(0.7, e - s))))
             for s, e, _ in keep
         ] if dub else None
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key)
@@ -1924,7 +1934,7 @@ def tts_segment(text, voice, path, prosody=None):
     async def _go(p):
         # Natural, slightly slower Khmer delivery by default.
         # Emotion-specific prosody still takes precedence when supplied.
-        kw = {"rate": "-12%"}
+        kw = {"rate": "-4%"}
         if p:
             kw = {"rate": p["rate"], "volume": p["volume"], "pitch": p["pitch"]}
         await edge_tts.Communicate(text, voice, **kw).save(path)
@@ -2301,9 +2311,9 @@ EMO_HIGH = ("happy", "excited", "angry", "fear")
 EMO_LOW = ("sad", "whisper")
 
 EMO_PRESETS = {
-    "neutral": (0, 0, 0), "happy": (8, 12, 5), "excited": (15, 18, 15),
-    "angry": (12, 4, 30), "sad": (-12, -10, -15), "fear": (10, 20, -5),
-    "whisper": (-8, -4, -45),
+    "neutral": (0, 0, 0), "happy": (6, 10, 4), "excited": (10, 14, 10),
+    "angry": (8, 4, 20), "sad": (-10, -8, -12), "fear": (8, 14, -4),
+    "whisper": (-6, -3, -35),
 }
 
 EMO_NAMES = {
@@ -2607,7 +2617,7 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=80, max_gap=0.6, max_len=8.0):
+def merge_for_dub(segments, max_chars=90, max_gap=0.5, max_len=9.0):
     """បញ្ចូលឃ្លាខ្លីៗជាប់គ្នាជាប្រយោគវែង ដើម្បីឱ្យសំឡេងអានរលូន មិនកាត់ៗ"""
     out = []
     for s, e, t in segments:
@@ -2756,12 +2766,18 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         start = max(s + offset, 0.0)
         if start >= duration - 0.3:
             break
-        slot = max(0.6, min(next_s - 0.08, e + (0.3 if tight else 1.0)) - start)
+        slot = max(0.6, min(next_s - 0.04, e + (0.3 if tight else 1.2)) - start)
         # Fit the complete generated sentence into its available slot when
         # possible. atempo > 1 speeds up; < 1 slows down. Avoid extreme rates
         # that make Khmer hard to understand.
-        speed = min(1.0, max(0.92, d / slot))
-        cursor = max(cursor, start + d / speed + 0.03)
+        # Previous line still talking? Start right after it, never overlap.
+        if start < cursor:
+            start = cursor
+            slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
+        # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
+        speed = d / slot if d > slot else 1.0
+        speed = min(1.35, max(1.0, speed))
+        cursor = max(cursor, start + d / speed + 0.08)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
@@ -3270,6 +3286,12 @@ with tab_voice:
             help="បើបើក AI នឹងវិភាគសំឡេងដើម ហើយប្រើសំឡេងប្រុសសម្រាប់អ្នកនិយាយប្រុស និងសំឡេងស្រីសម្រាប់អ្នកនិយាយស្រី។ ត្រូវការសំឡេងដើមច្បាស់។",
             key="auto_gender_pick",
         )
+        emotion_on = st.toggle(
+            "🎭 ដាក់អារម្មណ៍ក្នុងសំឡេង (ខឹង ក្រៀមក្រំ សប្បាយ ភ័យ)",
+            value=True,
+            help="AI វិភាគអារម្មណ៍ពីអត្ថបទ និងសំឡេងដើម ហើយកែល្បឿន កម្រិតសំឡេង និងកម្ពស់សំឡេងឱ្យសមនឹងអារម្មណ៍។",
+            key="emotion_pick",
+        )
         keep_bg = st.toggle("រក្សាសំឡេងដើមក្នុងវីដេអូ (ពេលមាន Dubbing)")
         if not dub_on:
             st.caption("💡 បើក «បង្កើតសំឡេងអានខ្មែរ» នៅផ្ទាំង 🌐 បកប្រែ ដើម្បីប្រើការនិយាយ។")
@@ -3345,7 +3367,7 @@ if run:
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
         "keep_bg": keep_bg, "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
-        "voice_match": False, "emotion": False,
+        "voice_match": False, "emotion": emotion_on,
         "clone_sample": None,
         "eleven_key": ELEVEN_KEY,
         "timbre": False, "timbre_sample": None,
