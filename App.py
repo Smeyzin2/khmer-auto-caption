@@ -912,6 +912,80 @@ def make_gemini_client(api_key, http_options=None):
     return RotatingGemini(keys, http_options)
 
 
+_GROQ_COOL = {}
+GROQ_COOLDOWN = 60
+
+
+def groq_first(api_key):
+    keys = split_keys(api_key)
+    return keys[0] if keys else str(api_key or "")
+
+
+def groq_urlopen(request, api_key, timeout=60):
+    """urlopen សម្រាប់ Groq: ប្តូរ key ស្វ័យប្រវត្តិពេល 429/401/403 (ពេលមាន key ច្រើន)។"""
+    keys = split_keys(api_key)
+    if len(keys) <= 1:
+        return urllib.request.urlopen(request, timeout=timeout)
+    now = time.time()
+    with _GEM_LOCK:
+        ready = [k for k in keys if _GROQ_COOL.get(k, 0) <= now]
+        cooling = sorted([k for k in keys if _GROQ_COOL.get(k, 0) > now], key=lambda k: _GROQ_COOL[k])
+    order = ready + cooling
+    last = None
+    for n, key in enumerate(order):
+        request.headers["Authorization"] = f"Bearer {key}"
+        try:
+            return urllib.request.urlopen(request, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code in (429, 401, 403) and n < len(order) - 1:
+                with _GEM_LOCK:
+                    _GROQ_COOL[key] = time.time() + GROQ_COOLDOWN
+                continue
+            raise
+    raise last
+
+
+_MODEL_COOL = {}     # model -> ម៉ោងដែលអាចសាកម្តងទៀត
+_MODEL_GOOD = {}     # provider -> ម៉ូដែលដែលបានជោគជ័យចុងក្រោយ
+
+
+def model_cool(model, error_text):
+    """កត់ត្រាថ្នាក់ម៉ូដែលខូច/ពេញកូតា ដើម្បីប្តូរទៅម៉ូដែលផ្សេងដោយស្វ័យប្រវត្តិ។"""
+    low = str(error_text).lower()
+    if any(x in low for x in ("404", "not found", "decommission", "does not exist", "no longer", "deprecated", "model_not_found", "not supported")):
+        secs = 3600
+    elif any(x in low for x in ("per day", "daily", "tokens per day", "requests per day")):
+        secs = 1800
+    elif "429" in low or "quota" in low or "resource_exhausted" in low or "rate limit" in low:
+        secs = 90
+    elif any(x in low for x in ("500", "502", "503", "504", "overloaded", "unavailable", "timeout", "timed out", "high demand")):
+        secs = 30
+    else:
+        secs = 15
+    with _GEM_LOCK:
+        _MODEL_COOL[model] = time.time() + secs
+
+
+def model_order(models, provider=None):
+    """ម៉ូដែលល្អនៅមុខ ម៉ូដែលកំពុងសម្រាកនៅក្រោយ (មិនលុបចោលទាំងស្រុង)។"""
+    now = time.time()
+    models = list(models)
+    with _GEM_LOCK:
+        ready = [m for m in models if _MODEL_COOL.get(m, 0) <= now]
+        cooling = sorted([m for m in models if _MODEL_COOL.get(m, 0) > now], key=lambda m: _MODEL_COOL[m])
+        good = _MODEL_GOOD.get(provider)
+    if good in ready:
+        ready = [good] + [m for m in ready if m != good]
+    return ready + cooling
+
+
+def model_good(provider, model):
+    with _GEM_LOCK:
+        _MODEL_GOOD[provider] = model
+        _MODEL_COOL.pop(model, None)
+
+
 def get_available_models(client):
     found = []
     try:
@@ -1391,10 +1465,10 @@ def groq_request(api_key, audio_path, model, language):
     body = b"".join(parts)
     request = urllib.request.Request(
         GROQ_URL, data=body, method="POST",
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"},
+        headers={"Authorization": f"Bearer {groq_first(api_key)}", "Content-Type": f"multipart/form-data; boundary={boundary}", "User-Agent": "Mozilla/5.0"},
     )
     try:
-        with urllib.request.urlopen(request, timeout=180) as response:
+        with groq_urlopen(request, api_key, timeout=180) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", "ignore")[:500]
@@ -1403,10 +1477,12 @@ def groq_request(api_key, audio_path, model, language):
 
 def groq_transcribe(api_key, audio_path, language, status):
     last = None
-    for model in GROQ_MODELS:
+    for model in model_order(GROQ_MODELS, "whisper"):
         for attempt in range(2):
             try:
-                return groq_request(api_key, audio_path, model, language), model
+                res_ = groq_request(api_key, audio_path, model, language)
+                model_good("whisper", model)
+                return res_, model
             except RuntimeError as e:
                 last = e
                 text = str(e)
@@ -1414,6 +1490,7 @@ def groq_transcribe(api_key, audio_path, language, status):
                     status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
                     time.sleep(12)
                     continue
+                model_cool(model, text)
                 break
             except Exception as e:
                 last = e
@@ -1465,8 +1542,8 @@ def groq_chat_models(api_key):
         return _groq_chat_cache["models"]
     found = []
     try:
-        request = urllib.request.Request(GROQ_MODELS_URL, headers={"Authorization": f"Bearer {api_key}", "User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=20) as r:
+        request = urllib.request.Request(GROQ_MODELS_URL, headers={"Authorization": f"Bearer {groq_first(api_key)}", "User-Agent": "Mozilla/5.0"})
+        with groq_urlopen(request, api_key, timeout=20) as r:
             data = json.loads(r.read().decode("utf-8"))
         for m in data.get("data") or []:
             mid = str(m.get("id", ""))
@@ -1512,11 +1589,9 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
         for i, t in enumerate(texts)
     )
     models = groq_chat_models(api_key)
-    good = _groq_chat_cache["good"]
-    if good in models:
-        models = [good] + [m for m in models if m != good]
+    models = model_order(models, "groq")
     last = "មិនមានម៉ូដែល"
-    for model in models[:6]:
+    for model in models[:8]:
         body = json.dumps({
             "model": model, "temperature": 0.2,
             "response_format": {"type": "json_object"},
@@ -1526,27 +1601,32 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
             ],
         }).encode("utf-8")
         for attempt in range(2):
-            request = urllib.request.Request(GROQ_CHAT_URL, data=body, method="POST", headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+            request = urllib.request.Request(GROQ_CHAT_URL, data=body, method="POST", headers={"Authorization": f"Bearer {groq_first(api_key)}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
             try:
-                with urllib.request.urlopen(request, timeout=60) as r:
+                with groq_urlopen(request, api_key, timeout=60) as r:
                     data = json.loads(r.read().decode("utf-8"))
                 content = data["choices"][0]["message"]["content"]
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
                 items = json.loads(content).get("translations") or []
                 if len(items) == len(texts):
                     _groq_chat_cache["good"] = model
+                    model_good("groq", model)
                     return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
                 last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                model_cool(model, last)
                 break
             except urllib.error.HTTPError as e:
                 last = f"{model}: {http_detail(e)}"
                 if e.code == 429 and attempt == 0:
                     time.sleep(6)
                     continue
+                model_cool(model, last)
                 break
             except Exception as e:
                 last = f"{model}: {e}"
+                model_cool(model, last)
                 break
+    _groq_chat_cache["models"] = None  # បញ្ជីម៉ូដែលអាចហួសសម័យ ទាញថ្មីលើកក្រោយ
     raise RuntimeError(last[:300])
 
 
@@ -1562,7 +1642,7 @@ EN_SYSTEM = (
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
     client = make_gemini_client(api_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
-    models = get_available_models(client)[:4]
+    models = model_order(get_available_models(client)[:5], "gemini")
     rows = []
     for i, t in enumerate(texts):
         row = f"{i + 1}. {t}"
@@ -1590,10 +1670,13 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
             data = json.loads(raw)
             items = data.get("translations") if isinstance(data, dict) else data
             if isinstance(items, list) and len(items) == len(texts):
+                model_good("gemini", model)
                 return [clean_translation(x) for x in items]
             last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+            model_cool(model, last)
         except Exception as e:
             last = f"{model}: {e}"
+            model_cool(model, last)
     raise RuntimeError(str(last)[:300])
 
 
@@ -2468,10 +2551,10 @@ def groq_emotion_chunk(api_key, texts):
         for attempt in range(2):
             request = urllib.request.Request(
                 GROQ_CHAT_URL, data=body, method="POST",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                headers={"Authorization": f"Bearer {groq_first(api_key)}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
             )
             try:
-                with urllib.request.urlopen(request, timeout=60) as r:
+                with groq_urlopen(request, api_key, timeout=60) as r:
                     data = json.loads(r.read().decode("utf-8"))
                 content = data["choices"][0]["message"]["content"]
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
@@ -2781,9 +2864,9 @@ def shorten_groq(api_key, text, max_seconds):
             }).encode("utf-8")
             request = urllib.request.Request(
                 GROQ_CHAT_URL, data=body, method="POST",
-                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
+                headers={"Authorization": f"Bearer {groq_first(api_key)}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"},
             )
-            with urllib.request.urlopen(request, timeout=40) as r:
+            with groq_urlopen(request, api_key, timeout=40) as r:
                 data = json.loads(r.read().decode("utf-8"))
             content = data["choices"][0]["message"]["content"]
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.S)
@@ -3239,7 +3322,7 @@ def narrate_rewrite(segments, groq_key=None, gemini_key=None, notes=None):
     if gemini_key:
         try:
             client = make_gemini_client(gemini_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
-            models = get_available_models(client)[:3]
+            models = get_available_models(client)[:5]
         except Exception:
             client = None
     done_lines = 0
@@ -3251,7 +3334,7 @@ def narrate_rewrite(segments, groq_key=None, gemini_key=None, notes=None):
         if client:
             rows = "\n".join(f"{j + 1}. {t} [max {max(8, len(t))} chars]" for j, t in enumerate(batch))
             prompt = NARR_SYSTEM + "\n\n" + (("PREVIOUS LINES (context only):\n" + story + "\n\n") if story else "") + "LINES:\n" + rows
-            for model in models:
+            for model in model_order(models, "gemini"):
                 try:
                     resp = client.models.generate_content(
                         model=model, contents=prompt,
@@ -3261,8 +3344,10 @@ def narrate_rewrite(segments, groq_key=None, gemini_key=None, notes=None):
                     items = data.get("translations") if isinstance(data, dict) else data
                     if isinstance(items, list) and len(items) == len(batch):
                         res = [clean_translation(x) for x in items]
+                        model_good("gemini", model)
                         break
-                except Exception:
+                except Exception as e_:
+                    model_cool(model, e_)
                     continue
         if res is None and groq_key:
             try:
@@ -3426,7 +3511,10 @@ GEMINI_KEY = "\n".join(split_keys([
     st.secrets.get("GEMINI_API_KEY", ""),
     st.secrets.get("GEMINI_API_KEYS", ""),
 ]))  # ទទួលបានច្រើន key (បំបែកដោយ , ឬបន្ទាត់ថ្មី ឬជា list)
-GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
+GROQ_KEY = "\n".join(split_keys([
+    st.secrets.get("GROQ_API_KEY", ""),
+    st.secrets.get("GROQ_API_KEYS", ""),
+]))
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
 render_header()
