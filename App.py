@@ -839,6 +839,79 @@ def extract_audio(video_path, audio_path, master_path):
         raise UserError("មិនអាចដកសំឡេងពីវីដេអូនេះបានទេ។")
 
 
+# =====================================================================
+#  Gemini ច្រើន Key: ប្តូរស្វ័យប្រវត្តិពេល Key មួយអស់កូតា ឬមិនត្រឹមត្រូវ
+# =====================================================================
+_GEM_COOL = {}          # key -> ម៉ោងដែលអាចប្រើបានវិញ
+_GEM_LOCK = threading.Lock()
+GEM_COOLDOWN = 65       # វិនាទី
+
+
+def split_keys(value):
+    if isinstance(value, (list, tuple)):
+        value = "\n".join("\n".join(split_keys(v)) for v in value)
+    elif value is not None and not isinstance(value, str) and hasattr(value, "__iter__"):
+        value = "\n".join("\n".join(split_keys(v)) for v in value)
+    out = []
+    for k in re.split(r"[\s,;]+", str(value or "")):
+        k = k.strip().strip('"').strip("'")
+        if k and k not in out:
+            out.append(k)
+    return out
+
+
+def _gem_retryable(err):
+    low = str(err).lower()
+    return any(x in low for x in ("429", "resource_exhausted", "quota", "rate limit",
+                                  "api key not valid", "api_key_invalid", "permission_denied", "403"))
+
+
+class _RotModels:
+    def __init__(self, clients):
+        self.clients = clients  # [(key, client)]
+
+    def _order(self):
+        now = time.time()
+        with _GEM_LOCK:
+            ready = [kc for kc in self.clients if _GEM_COOL.get(kc[0], 0) <= now]
+            cooling = [kc for kc in self.clients if _GEM_COOL.get(kc[0], 0) > now]
+        cooling.sort(key=lambda kc: _GEM_COOL.get(kc[0], 0))
+        return ready + cooling
+
+    def _call(self, name, *args, **kwargs):
+        last = None
+        order = self._order()
+        for n, (key, client) in enumerate(order):
+            try:
+                return getattr(client.models, name)(*args, **kwargs)
+            except Exception as e:
+                last = e
+                if _gem_retryable(e) and n < len(order) - 1:
+                    with _GEM_LOCK:
+                        _GEM_COOL[key] = time.time() + GEM_COOLDOWN
+                    continue
+                raise
+        raise last
+
+    def generate_content(self, *args, **kwargs):
+        return self._call("generate_content", *args, **kwargs)
+
+    def list(self, *args, **kwargs):
+        return self._call("list", *args, **kwargs)
+
+
+class RotatingGemini:
+    def __init__(self, keys, http_options=None):
+        self.models = _RotModels([(k, genai.Client(api_key=k, http_options=http_options)) for k in keys])
+
+
+def make_gemini_client(api_key, http_options=None):
+    keys = split_keys(api_key)
+    if len(keys) <= 1:
+        return genai.Client(api_key=(keys[0] if keys else api_key), http_options=http_options)
+    return RotatingGemini(keys, http_options)
+
+
 def get_available_models(client):
     found = []
     try:
@@ -1243,7 +1316,7 @@ def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_lan
 
 
 def transcribe(api_key, audio_path, duration, source_language, status, concise=False, speech=None):
-    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+    client = make_gemini_client(api_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
     models = get_available_models(client)
     if not models:
         raise RuntimeError("API Key មើលមិនឃើញម៉ូដែលណាមួយទេ។ api key")
@@ -1488,7 +1561,7 @@ EN_SYSTEM = (
 
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
-    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+    client = make_gemini_client(api_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
     models = get_available_models(client)[:4]
     rows = []
     for i, t in enumerate(texts):
@@ -2421,7 +2494,7 @@ def groq_emotion_chunk(api_key, texts):
 
 
 def gemini_emotion_labels(api_key, texts):
-    client = genai.Client(api_key=api_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+    client = make_gemini_client(api_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
     models = get_available_models(client)[:3]
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
     prompt = EMO_SYSTEM + "\n\n" + numbered
@@ -3036,7 +3109,7 @@ def run_worker(job, item, settings, fonts_data):
                 item["pct"] = 0.6
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
-                    client = (genai.Client(api_key=settings["gemini_key"]) if used_engine == "gemini" else None)
+                    client = (make_gemini_client(settings["gemini_key"]) if used_engine == "gemini" else None)
                     dub_segments = merge_for_dub(segments)
                     seg_voices = None
                     targets = None
@@ -3165,7 +3238,7 @@ def narrate_rewrite(segments, groq_key=None, gemini_key=None, notes=None):
     client = None
     if gemini_key:
         try:
-            client = genai.Client(api_key=gemini_key, http_options=types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
+            client = make_gemini_client(gemini_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
             models = get_available_models(client)[:3]
         except Exception:
             client = None
@@ -3349,7 +3422,10 @@ def scroll_to_downloads():
     )
 
 
-GEMINI_KEY = st.secrets.get("GEMINI_API_KEY", "")
+GEMINI_KEY = "\n".join(split_keys([
+    st.secrets.get("GEMINI_API_KEY", ""),
+    st.secrets.get("GEMINI_API_KEYS", ""),
+]))  # ទទួលបានច្រើន key (បំបែកដោយ , ឬបន្ទាត់ថ្មី ឬជា list)
 GROQ_KEY = st.secrets.get("GROQ_API_KEY", "")
 ELEVEN_KEY = st.secrets.get("ELEVENLABS_API_KEY", "")
 
