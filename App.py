@@ -518,11 +518,13 @@ MAX_VIDEOS = 5
 MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 2
+MAX_VIDEOS_AT_ONCE = 2   # ធ្វើវីដេអូស្របគ្នាអតិបរមា ២ ដើម្បីកុំឲ្យអស់រ៉េមរហូតគាំងកម្មវិធី
+_PIPELINE_SLOTS = threading.Semaphore(MAX_VIDEOS_AT_ONCE)
 MAX_DURATION_MIN = 300
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
-MAX_CHUNK_WORKERS = 6
+MAX_CHUNK_WORKERS = 4
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
@@ -2995,7 +2997,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=10) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(gen, range(n_seg)))
 
     voice_eq = {}
@@ -3183,6 +3185,8 @@ def engine_name(engine):
 
 def run_worker(job, item, settings, fonts_data):
     rep = Reporter(item)
+    item["stage"] = "ក្នុងជួររង់ចាំ..."
+    _PIPELINE_SLOTS.acquire()
     item["t0"] = time.time()
     item["state"] = "running"
     try:
@@ -3209,7 +3213,7 @@ def run_worker(job, item, settings, fonts_data):
             speech = detect_speech(master_path, duration)
             analysis_pool = None
             analysis_future = None
-            if (settings["dub_on"] and duration <= 1800
+            if (settings["dub_on"] and duration <= 600
                     and (settings["auto_gender"] or settings["voice_match"] or settings["emotion"] or settings.get("timbre"))):
                 analysis_pool = ThreadPoolExecutor(max_workers=1)
                 def _analyze():
@@ -3385,6 +3389,7 @@ def run_worker(job, item, settings, fonts_data):
                 os.remove(item["path"])
         except Exception:
             pass
+        _PIPELINE_SLOTS.release()
         gc.collect()
 
 
