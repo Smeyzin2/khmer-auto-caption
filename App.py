@@ -3,7 +3,7 @@ import os
 import io
 import re
 import json
-import sqlite3
+import gc
 import time
 import uuid
 import shutil
@@ -519,72 +519,6 @@ MAX_ZIP_MB = 250
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 2
 MAX_DURATION_MIN = 300
-
-# Shared gallery: all users of the same running app instance can see saved videos.
-# For durable storage across app restarts/redeploys, set KAC_PUBLIC_STORAGE_DIR
-# to a persistent mounted directory (for example a volume).
-PUBLIC_STORAGE_DIR = os.environ.get(
-    "KAC_PUBLIC_STORAGE_DIR",
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "public_video_storage"),
-)
-PUBLIC_VIDEO_DIR = os.path.join(PUBLIC_STORAGE_DIR, "videos")
-PUBLIC_DB_PATH = os.path.join(PUBLIC_STORAGE_DIR, "gallery.sqlite3")
-_gallery_lock = threading.Lock()
-
-
-def init_public_gallery():
-    os.makedirs(PUBLIC_VIDEO_DIR, exist_ok=True)
-    with _gallery_lock:
-        with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as db:
-            db.execute("""
-                CREATE TABLE IF NOT EXISTS public_videos (
-                    id TEXT PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    filename TEXT NOT NULL,
-                    created_at REAL NOT NULL,
-                    size_bytes INTEGER NOT NULL
-                )
-            """)
-            db.commit()
-
-
-def save_to_public_gallery(name, video_bytes):
-    """Persist a finished video into the app-wide gallery."""
-    if not video_bytes:
-        return False
-    init_public_gallery()
-    video_id = uuid.uuid4().hex
-    filename = f"{video_id}_{safe_filename(name)}.mp4"
-    full_path = os.path.join(PUBLIC_VIDEO_DIR, filename)
-    try:
-        with open(full_path, "wb") as f:
-            f.write(video_bytes)
-        with _gallery_lock:
-            with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as db:
-                db.execute(
-                    "INSERT INTO public_videos (id, name, filename, created_at, size_bytes) VALUES (?, ?, ?, ?, ?)",
-                    (video_id, safe_filename(name), filename, time.time(), len(video_bytes)),
-                )
-                db.commit()
-        return True
-    except Exception:
-        try:
-            if os.path.exists(full_path):
-                os.remove(full_path)
-        except Exception:
-            pass
-        return False
-
-
-def read_public_gallery():
-    init_public_gallery()
-    with _gallery_lock:
-        with sqlite3.connect(PUBLIC_DB_PATH, timeout=30) as db:
-            rows = db.execute(
-                "SELECT id, name, filename, created_at, size_bytes FROM public_videos ORDER BY created_at DESC"
-            ).fetchall()
-    return rows
-
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
@@ -1283,6 +1217,8 @@ class Reporter:
     def write(self, message):
         self.item["stage"] = message
         self.item["log"].append(message)
+        if len(self.item["log"]) > 200:
+            del self.item["log"][:100]
         m = re.search(r"(\d+)/(\d+) ឃ្លា", str(message))
         if m and int(m.group(2)) > 0:
             frac = min(1.0, int(m.group(1)) / int(m.group(2)))
@@ -2298,8 +2234,12 @@ def load_pcm(path):
         [exe, "-i", path, "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
-    data = np.frombuffer(result.stdout, dtype=np.int16)
-    return data.astype(np.float32) / 32768.0
+    raw = result.stdout
+    result = None
+    data = np.frombuffer(raw, dtype=np.int16).astype(np.float32)
+    raw = None
+    data /= 32768.0
+    return data
 
 
 def pitch_track(samples, sr=16000):
@@ -3167,9 +3107,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
             args += ["-map", "0:v:0", "-map", "1:a:0"]
         args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"]
         log = run_ffmpeg(args, cwd=folder)
-        with open(output_path, "rb") as f:
-            data = f.read()
-        return data, "-", log, ["មិនដាក់អក្សរ"]
+        return output_path, "-", log, ["មិនដាក់អក្សរ"]
     conf_env = make_fontconfig_env(folder)
     plan = [(0, False), (0, True)]
     plan += [(i, True) for i in range(1, len(fonts))]
@@ -3204,16 +3142,14 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         dbg(status, f"Font {family} មិនត្រូវបានប្រើ កំពុងសាកវិធីផ្សេង...")
     if not have_output:
         raise RuntimeError("Render មិនបាន។\n" + "\n".join(attempts))
-    with open(output_path, "rb") as f:
-        data = f.read()
-    return data, best[0], best[1], attempts
+    return output_path, best[0], best[1], attempts
 
 
 def new_item(name, path=None, url=None):
     return {
         "name": name, "path": path, "url": url, "state": "queued",
         "stage": "ក្នុងជួររង់ចាំ...", "pct": 0.0, "warn": [], "log": [],
-        "video": None, "captions": [], "voice_lines": [], "error": None,
+        "video_path": None, "captions": [], "voice_lines": [], "error": None,
         "raw_error": "", "debug": {}, "t0": None, "elapsed": None,
         "srt": "", "srt_on": False,
         "review_segments": None, "review_final": None, "review_event": None,
@@ -3347,6 +3283,10 @@ def run_worker(job, item, settings, fonts_data):
                                 voice_notes = [voice_info.get("summary", "")] + lines
                             if settings["voice_match"]:
                                 targets = compute_targets(dub_segments, seg_voices, pitch_inf, runs_)
+                            pcm = None
+                            ref_pcm = None
+                            tracks = None
+                            gc.collect()
                         except Exception:
                             dub_segments = merge_for_dub(segments)
                             seg_voices = None
@@ -3388,8 +3328,11 @@ def run_worker(job, item, settings, fonts_data):
             with job.render_slots:
                 item["pct"] = 0.82
                 rep.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
-                video, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, style=settings["style"], subs=settings["sub_on"])
-            item["video"] = video
+                out_path, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, style=settings["style"], subs=settings["sub_on"])
+            final_path = os.path.join(job.folder, f"out_{uuid.uuid4().hex[:8]}.mp4")
+            shutil.move(out_path, final_path)
+            item["video_path"] = final_path
+            out_size = os.path.getsize(final_path)
             item["captions"] = [t for _, _, t in captions]
             item["srt"] = make_srt(captions)
             item["srt_on"] = settings["srt_on"]
@@ -3398,7 +3341,7 @@ def run_worker(job, item, settings, fonts_data):
                 "ការតម្រឹម": sync_mode, "ផ្នែកបរាជ័យ": failed_chunks,
                 "Font ដែលប្រើ": used_font, "Dubbing": dub_ok,
                 "អ្នកនិយាយ": (item["voice_lines"][0] if item["voice_lines"] else ""),
-                "ទំហំលទ្ធផល": f"{len(video) / (1024 * 1024):.1f}MB",
+                "ទំហំលទ្ធផល": f"{out_size / (1024 * 1024):.1f}MB",
                 "ការសាក Font": "\n".join(attempts),
                 "fontselect": "\n".join(line for line in ffmpeg_log.splitlines() if "fontselect" in line.lower())[:1500],
                 "ម៉ោងអក្សរ": "\n".join(f"[{s:.1f}-{e:.1f}] {t}" for s, e, t in captions),
@@ -3406,8 +3349,6 @@ def run_worker(job, item, settings, fonts_data):
             item["pct"] = 1.0
             item["stage"] = "រួចរាល់"
             item["elapsed"] = time.time() - item["t0"]
-            # Automatically add completed outputs to the shared gallery.
-            item["gallery_saved"] = save_to_public_gallery(item["name"], video)
             item["state"] = "done"
     except Exception as error:
         item["error"] = friendly_message(error)
@@ -3423,6 +3364,7 @@ def run_worker(job, item, settings, fonts_data):
                 os.remove(item["path"])
         except Exception:
             pass
+        gc.collect()
 
 
 NARR_SYSTEM = (
@@ -3508,18 +3450,19 @@ def wait_for_review(item, segments, timeout=1800):
     return cleaned or segments
 
 
-def build_zip(items):
-    ok = [it for it in items if it["state"] == "done" and it["video"]]
+def build_zip(items, folder):
+    ok = [it for it in items if it["state"] == "done" and it.get("video_path")]
     if len(ok) < 2:
         return None
-    total = sum(len(it["video"]) for it in ok)
+    total = sum(os.path.getsize(it["video_path"]) for it in ok if os.path.isfile(it["video_path"]))
     if total > MAX_ZIP_MB * 1024 * 1024:
         return None
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
+    zip_path = os.path.join(folder, "khmer_videos.zip")
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_STORED) as z:
         for i, it in enumerate(ok, start=1):
-            z.writestr(f"{i:02d}_{safe_filename(it['name'])}_khmer.mp4", it["video"])
-    return buf.getvalue()
+            if os.path.isfile(it["video_path"]):
+                z.write(it["video_path"], f"{i:02d}_{safe_filename(it['name'])}_khmer.mp4")
+    return zip_path
 
 
 def dl_button(label, data, file_name, mime, key, **kwargs):
@@ -3581,16 +3524,22 @@ def work_area(job, was_running, reviewing=False):
 
 def download_area(job):
     done = [(i, it) for i, it in enumerate(job.items, start=1) if it["state"] == "done"]
-    if job.zip:
-        dl_button("📦 ទាញយកទាំងអស់ (ZIP)", job.zip, "khmer_videos.zip", "application/zip", key=f"zip_{job.id}", use_container_width=True)
+    if job.zip and os.path.isfile(job.zip):
+        with open(job.zip, "rb") as zf:
+            dl_button("📦 ទាញយកទាំងអស់ (ZIP)", zf, "khmer_videos.zip", "application/zip", key=f"zip_{job.id}", use_container_width=True)
     if not done:
         st.info("វីដេអូណាដែលរួចរាល់ នឹងលេចឡើងនៅទីនេះភ្លាមៗ ហើយអាចទាញយកបានតែម្តង។")
         return
     for i, it in done:
         with st.container(border=True):
             st.markdown(f"**{i}. {it['name']}**")
-            st.video(it["video"])
-            dl_button("⬇️ ទាញយកវីដេអូនេះ", it["video"], f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
+            vp = it.get("video_path")
+            if vp and os.path.isfile(vp):
+                st.video(vp)
+                with open(vp, "rb") as vf:
+                    dl_button("⬇️ ទាញយកវីដេអូនេះ", vf, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
+            else:
+                st.caption("ឯកសារវីដេអូត្រូវបានលុបចេញពីម៉ាស៊ីនហើយ។")
             if it.get("srt_on") and it.get("srt"):
                 dl_button("📄 ទាញយក SRT", it["srt"].encode("utf-8"), f"{safe_filename(it['name'])}_khmer.srt", "text/plain", key=f"srt_{job.id}_{i}", use_container_width=True)
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
@@ -3667,8 +3616,8 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
 
-tab_vid, tab_trans, tab_voice, tab_text, tab_out, tab_gallery = st.tabs(
-    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក", "🎬 វីដេអូរួម"]
+tab_vid, tab_trans, tab_voice, tab_text, tab_out = st.tabs(
+    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក"]
 )
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
@@ -3828,6 +3777,9 @@ if run:
     old = st.session_state.get("job")
     if old:
         shutil.rmtree(old.folder, ignore_errors=True)
+        st.session_state.pop("job", None)
+        old = None
+        gc.collect()
     job_folder = tempfile.mkdtemp(prefix="kac_")
     job_items = []
     for idx, it in enumerate(items, start=1):
@@ -3852,7 +3804,7 @@ with tab_out:
     else:
         running = job.running()
         if not running and not job.zip_done:
-            job.zip = build_zip(job.items)
+            job.zip = build_zip(job.items, job.folder)
             job.zip_done = True
         reviewing = job.reviewing()
         refresh = REFRESH_SECONDS if (running and not reviewing) else None
@@ -3863,33 +3815,5 @@ with tab_out:
             if st.button("🗑 លុបលទ្ធផលទាំងអស់"):
                 shutil.rmtree(job.folder, ignore_errors=True)
                 st.session_state.pop("job", None)
+                gc.collect()
                 st.rerun()
-
-
-# ============================ ផ្ទាំង ៦: វីដេអូរួម ============================
-with tab_gallery:
-    st.markdown("### 🎬 វីដេអូរួម")
-    st.caption("វីដេអូដែលបង្កើតរួចនឹងត្រូវរក្សាទុកដោយស្វ័យប្រវត្តិ ហើយអ្នកប្រើអេបនេះអាចមើល/ទាញយកបាន។")
-    try:
-        gallery_rows = read_public_gallery()
-    except Exception as gallery_error:
-        gallery_rows = []
-        st.error("មិនអាចបើកវីដេអូរួមបានទេ។ សូមពិនិត្យ Storage របស់ម៉ាស៊ីនអេប។")
-    if not gallery_rows:
-        st.info("មិនទាន់មានវីដេអូក្នុងវីដេអូរួមទេ។ បង្កើតវីដេអូរួច វានឹងបង្ហាញនៅទីនេះដោយស្វ័យប្រវត្តិ។")
-    else:
-        st.caption(f"មានវីដេអូ {len(gallery_rows)}")
-        for gallery_id, gallery_name, gallery_filename, gallery_created, gallery_size in gallery_rows:
-            gallery_path = os.path.join(PUBLIC_VIDEO_DIR, gallery_filename)
-            if not os.path.isfile(gallery_path):
-                continue
-            with st.container(border=True):
-                st.markdown(f"**{gallery_name}**")
-                st.caption(time.strftime("%Y-%m-%d %H:%M", time.localtime(gallery_created)) + f" · {gallery_size / (1024 * 1024):.1f} MB")
-                try:
-                    st.video(gallery_path)
-                except Exception:
-                    st.caption("មើលវីដេអូនេះក្នុងកម្មវិធីមិនបាន ប៉ុន្តែអាចទាញយកបាន។")
-                with open(gallery_path, "rb") as gallery_file:
-                    gallery_data = gallery_file.read()
-                dl_button("⬇️ ទាញយកវីដេអូ", gallery_data, gallery_filename, "video/mp4", key=f"gallery_dl_{gallery_id}", use_container_width=True)
