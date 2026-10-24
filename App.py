@@ -9,6 +9,7 @@ import uuid
 import shutil
 import asyncio
 import zipfile
+import base64
 import tempfile
 import threading
 import statistics
@@ -3990,7 +3991,7 @@ def work_area(job, was_running, reviewing=False):
 
 
 def render_ios_download_help():
-    """បង្ហាញជំហាន Save to Files សម្រាប់ iPhone/iPad ដោយមិនប៉ះពាល់ទំហំវីដេអូ។"""
+    """បង្ហាញជំហានរក្សាទុកសម្រាប់ iPhone/iPad (បង្ហាញតែលើ iOS)។"""
     components.html(
         """
         <div id="ios-download-help" style="display:none; padding:12px 14px;
@@ -3998,9 +3999,9 @@ def render_ios_download_help():
              background:#111842; font:15px -apple-system,BlinkMacSystemFont,sans-serif;
              line-height:1.6;">
           📱 <b>សម្រាប់ iPhone/iPad:</b><br>
-          1. ចុចប៊ូទាញយកវីដេអូខាងក្រោម។<br>
-          2. បើវីដេអូបើកជាមុន សូមចុចប៊ូ <b>Share</b> (រូបការ៉េមានព្រួញឡើង)។<br>
-          3. ជ្រើស <b>Save to Files</b> → ជ្រើសទីតាំង → ចុច <b>Save</b>។
+          1. ចុចប៊ូ <b>📲 រក្សាទុកក្នុង iPhone</b> ខាងក្រោមវីដេអូ (រង់ចាំរហូតប៊ូតុងបើក)។<br>
+          2. ពេលម៉ឺនុយ Share លោតឡើង ជ្រើស <b>Save Video</b> (ចូល Photos) ឬ <b>Save to Files</b>។<br>
+          ⚠️ សូមបើកក្នុង <b>Safari</b> (កុំបើកក្នុង Facebook/Telegram/Messenger ព្រោះមិនអាចរក្សាទុកបាន)។
         </div>
         <script>
         (() => {
@@ -4011,8 +4012,65 @@ def render_ios_download_help():
         })();
         </script>
         """,
-        height=155,
+        height=170,
     )
+
+
+SHARE_MAX_MB = 120   # ទំហំវីដេអូអតិបរមាសម្រាប់ប៊ូរក្សាទុកក្នុង iPhone (ផ្ញើតាម Share Sheet)
+
+
+def render_share_button(video_path, file_name):
+    """ប៊ូរក្សាទុកវីដេអូក្នុង iPhone/Android តាម Share Sheet (Save Video / Save to Files)។
+    ទាញទិន្នន័យទុកជាមុន ដើម្បីឱ្យការចុចហៅ share បានភ្លាមៗ (iOS ត្រូវការការចុចផ្ទាល់ពីអ្នកប្រើ)។"""
+    try:
+        with open(video_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("ascii")
+    except Exception:
+        st.caption("មិនអាចត្រៀមវីដេអូសម្រាប់ប៊ូរក្សាទុកបានទេ។ សូមប្រើប៊ូទាញយកធម្មតា។")
+        return
+    html = """
+    <button id="sv" disabled style="width:100%;padding:15px;border:none;border-radius:14px;
+      font:700 17px -apple-system,BlinkMacSystemFont,sans-serif;color:#fff;cursor:pointer;
+      background:linear-gradient(90deg,#B13CFF,#3C6BFF);opacity:.6">⏳ កំពុងត្រៀមវីដេអូ...</button>
+    <div id="msg" style="margin-top:6px;color:#9AA3D0;font:13px -apple-system,sans-serif"></div>
+    <script>
+    (() => {
+      const NAME = "__NAME__";
+      const btn = document.getElementById("sv");
+      const msg = document.getElementById("msg");
+      let file = null, url = null;
+      fetch("data:video/mp4;base64,__B64__").then(r => r.blob()).then(b => {
+        file = new File([b], NAME, {type: "video/mp4"});
+        url = URL.createObjectURL(b);
+        btn.disabled = false; btn.style.opacity = 1;
+        btn.textContent = "📲 រក្សាទុកក្នុង iPhone";
+      }).catch(() => { btn.textContent = "❌ ត្រៀមមិនបាន"; });
+      const fallback = () => {
+        const a = document.createElement("a");
+        a.href = url; a.download = NAME; document.body.appendChild(a); a.click(); a.remove();
+        msg.textContent = "បើមិនទាញយក សូមប្រើប៊ូទាញយកធម្មតាខាងលើ ឬបើកក្នុង Safari។";
+      };
+      btn.addEventListener("click", () => {
+        if (!file) return;
+        const navs = [];
+        try { if (window.parent && window.parent.navigator) navs.push(window.parent.navigator); } catch (e) {}
+        navs.push(navigator);
+        let nav = null;
+        for (const n of navs) {
+          try { if (n.share && n.canShare && n.canShare({files: [file]})) { nav = n; break; } } catch (e) {}
+        }
+        if (!nav) { fallback(); return; }
+        nav.share({files: [file], title: NAME}).then(() => {
+          msg.textContent = "✅ រួចរាល់";
+        }).catch(err => {
+          if (err && err.name === "AbortError") { msg.textContent = "បានបោះបង់។"; }
+          else { fallback(); }
+        });
+      });
+    })();
+    </script>
+    """.replace("__NAME__", file_name.replace('"', "")).replace("__B64__", b64)
+    components.html(html, height=95)
 
 
 def download_area(job):
@@ -4030,8 +4088,14 @@ def download_area(job):
             vp = it.get("video_path")
             if vp and os.path.isfile(vp):
                 st.video(vp)
+                fname = f"{safe_filename(it['name'])}_khmer.mp4"
+                size_mb = os.path.getsize(vp) / (1024 * 1024)
+                if size_mb <= SHARE_MAX_MB:
+                    render_share_button(vp, fname)
+                else:
+                    st.caption(f"វីដេអូធំ {size_mb:.0f}MB ប៊ូរក្សាទុកក្នុង iPhone មិនអាចប្រើបាន។ សូមប្រើប៊ូទាញយកខាងក្រោម។")
                 with open(vp, "rb") as vf:
-                    dl_button("⬇️ ទាញយកវីដេអូនេះ (iPhone: Save to Files)", vf, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
+                    dl_button("⬇️ ទាញយកវីដេអូនេះ (ឯកសារ .mp4)", vf, fname, "video/mp4", key=f"dl_{job.id}_{i}", use_container_width=True)
             else:
                 st.caption("ឯកសារវីដេអូត្រូវបានលុបចេញពីម៉ាស៊ីនហើយ។")
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
