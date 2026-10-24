@@ -820,12 +820,172 @@ def is_social_link(url):
     return any(host == h or host.endswith("." + h) for h in SOCIAL_HOSTS)
 
 
+SSSTIK_BASE = "https://ssstik.io"
+_SS_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
+_SS_HEADERS = {"User-Agent": _SS_UA, "Accept-Language": "en-US,en;q=0.9"}
+
+
+def _ss_decode_link(u):
+    if "ssscdn.io" not in u:
+        return u
+    try:
+        parts = u.split("/")
+        decoded = base64.b64decode("/".join(parts[5:])).decode("utf-8")
+        if decoded.startswith("http"):
+            return decoded
+    except Exception:
+        pass
+    return u
+
+
+def _ss_parse(page):
+    import html as _html
+    video_links = []
+    for attrs in re.findall(r'<a\b([^>]*?)>', page, flags=re.I):
+        cm = re.search(r'class=["\']([^"\']*)["\']', attrs, flags=re.I)
+        hm = re.search(r'href=["\']([^"\']+)["\']', attrs, flags=re.I)
+        if not hm:
+            continue
+        href = _html.unescape(hm.group(1))
+        if not href.startswith("http"):
+            continue
+        css = cm.group(1) if cm else ""
+        if "without_watermark" in css or "download_link" in css or "dl-button" in css:
+            href = _ss_decode_link(href)
+            if href not in video_links:
+                video_links.append(href)
+    if not video_links:
+        for href in re.findall(r'href=["\'](https?://[^"\']+)["\']', page, flags=re.I):
+            href = _html.unescape(href)
+            low = href.lower()
+            if ".mp4" in low or "ssscdn" in low or "tikcdn" in low:
+                href = _ss_decode_link(href)
+                if href not in video_links:
+                    video_links.append(href)
+    return video_links
+
+
+def _ssstik_links(url):
+    import requests
+    sess = requests.Session()
+    sess.headers.update(_SS_HEADERS)
+    try:
+        r = sess.get(SSSTIK_BASE + "/en", headers={**_SS_HEADERS, "Referer": SSSTIK_BASE + "/"}, timeout=30)
+        r.raise_for_status()
+        page = r.text
+        m = (re.search(r"s_tt\s*=\s*['\"]([^'\"]+)['\"]", page)
+             or re.search(r"tt\s*:\s*['\"]([^'\"]+)['\"]", page))
+        if not m:
+            raise RuntimeError("SSSTik token not found")
+        token = m.group(1)
+        fm = re.search(r"s_furl\s*=\s*['\"]([^'\"]+)['\"]", page)
+        endpoint = fm.group(1) if fm else "abc"
+        headers = {
+            **_SS_HEADERS,
+            "Origin": SSSTIK_BASE,
+            "Referer": SSSTIK_BASE + "/en",
+            "HX-Current-URL": SSSTIK_BASE + "/en",
+            "HX-Request": "true",
+            "HX-Target": "target",
+            "HX-Trigger": "_gcaptcha_pt",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        r = sess.post(f"{SSSTIK_BASE}/{endpoint}?url=dl",
+                      data={"id": url, "locale": "en", "tt": token}, headers=headers, timeout=60)
+        r.raise_for_status()
+        links = _ss_parse(r.text)
+        if not links:
+            raise RuntimeError("SSSTik returned no video link")
+        return links
+    finally:
+        sess.close()
+
+
+def _download_with_ssstik(url, path, progress):
+    import requests
+    limit = MAX_DOWNLOAD_MB * 1024 * 1024
+    last = None
+    for vurl in _ssstik_links(url):
+        try:
+            with requests.get(vurl, headers={"User-Agent": _SS_UA, "Referer": SSSTIK_BASE + "/"},
+                              stream=True, timeout=120) as r:
+                r.raise_for_status()
+                ct = (r.headers.get("Content-Type") or "").lower()
+                if "text/html" in ct or "json" in ct or ct.startswith("audio"):
+                    raise RuntimeError("not a video file")
+                total = int(r.headers.get("Content-Length") or 0)
+                if total > limit:
+                    raise RuntimeError(f"video larger than {MAX_DOWNLOAD_MB}MB")
+                done = 0
+                with open(path, "wb") as f:
+                    for chunk in r.iter_content(chunk_size=256 * 1024):
+                        if not chunk:
+                            continue
+                        f.write(chunk)
+                        done += len(chunk)
+                        if done > limit:
+                            raise RuntimeError(f"video larger than {MAX_DOWNLOAD_MB}MB")
+                        if total:
+                            progress.progress(min(1.0, done / total))
+            if os.path.getsize(path) < 1000:
+                raise RuntimeError("empty video file")
+            progress.progress(1.0)
+            return
+        except Exception as e:
+            last = e
+            try:
+                os.remove(path)
+            except Exception:
+                pass
+    raise last or RuntimeError("no downloadable link")
+
+
 def download_social_video(url, path, progress):
-    """ទាញវីដេអូពីតំណ TikTok/Douyin ដោយប្រើ yt-dlp (មិនបង្ហាញតំណដល់អ្នកប្រើ)។"""
+    """ទាញវីដេអូ TikTok៖ SSSTik មុន រួច yt-dlp រួច tikwm (មិនបង្ហាញតំណដល់អ្នកប្រើ)។"""
+    reasons = []
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except Exception:
+        host = ""
+    if host == "tiktok.com" or host.endswith(".tiktok.com"):
+        try:
+            _download_with_ssstik(url, path, progress)
+            return
+        except Exception as e:
+            reasons.append("ssstik: " + (str(e) or type(e).__name__))
+    try:
+        _download_with_ytdlp(url, path, progress)
+        return
+    except Exception as e:
+        reasons.append("yt-dlp: " + (str(e) or type(e).__name__))
+    try:
+        _download_with_tikwm(url, path, progress)
+        return
+    except Exception as e:
+        reasons.append("tikwm: " + (str(e) or type(e).__name__))
+    raise UserError(" | ".join(reasons))
+
+
+def _download_with_tikwm(url, path, progress):
+    api = "https://www.tikwm.com/api/?" + urllib.parse.urlencode({"url": url, "hd": 1})
+    req = urllib.request.Request(api, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read().decode("utf-8", "ignore"))
+    d = (data or {}).get("data") or {}
+    play = d.get("hdplay") or d.get("play")
+    if not play:
+        raise RuntimeError("no video in response: " + str((data or {}).get("msg", ""))[:80])
+    if play.startswith("/"):
+        play = "https://www.tikwm.com" + play
+    download_video(play, path, progress)
+
+
+def _download_with_ytdlp(url, path, progress):
     try:
         import yt_dlp
     except Exception:
-        raise UserError("ម៉ាស៊ីនទាញវីដេអូពីតំណមិនទាន់ដំឡើង។")
+        raise UserError("yt-dlp មិនទាន់ដំឡើង")
     limit = MAX_DOWNLOAD_MB * 1024 * 1024
     base = os.path.splitext(path)[0]
 
@@ -850,11 +1010,8 @@ def download_social_video(url, path, progress):
         "retries": 3,
         "progress_hooks": [hook],
     }
-    try:
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-    except Exception:
-        raise UserError("ទាញយកវីដេអូពីតំណមិនបានទេ។ សូមពិនិត្យតំណ ឬសាកម្តងទៀត។")
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
     found = None
     folder = os.path.dirname(base)
     prefix = os.path.basename(base) + "."
@@ -4157,9 +4314,10 @@ def fetch_link_preview(url):
     try:
         download_video(url, path, _NoProgress())
         ent = {"path": path, "ok": True}
-    except Exception:
+    except Exception as e:
         shutil.rmtree(folder, ignore_errors=True)
-        ent = {"path": None, "ok": False}
+        _err = re.sub(r"https?://\S+", "[link]", str(e) or type(e).__name__)
+        ent = {"path": None, "ok": False, "err": _err[:600]}
     cache[url] = ent
     return ent
 
@@ -4486,6 +4644,9 @@ with tab_vid:
                     del _bytes
                 else:
                     st.error("រកតំណមិនឃើញ។ ព្យាយាមម្តងទៀត។")
+                    if _ent.get("err"):
+                        with st.expander("ព័ត៌មានបច្ចេកទេស"):
+                            st.code(_ent["err"])
                     if st.button("🔄 ព្យាយាមម្តងទៀត", key=f"retry_link_{_n}", use_container_width=True):
                         st.session_state.get("link_cache", {}).pop(_u, None)
                         st.rerun()
