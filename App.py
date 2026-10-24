@@ -531,8 +531,8 @@ GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
 GROQ_CHAT_PREFERRED = [
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
+    "llama-3.3-70b-versatile",
     "meta-llama/llama-4-scout-17b-16e-instruct",
     "openai/gpt-oss-20b",
     "qwen/qwen3-32b",
@@ -1636,13 +1636,15 @@ TRANS_SYSTEM = (
 )
 
 
-def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False):
+def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
     )
     models = groq_chat_models(api_key)
     models = model_order(models, "groq")
+    if rotate and len(models) > 1:
+        models = models[1:] + models[:1]   # ឱ្យម៉ូដែលផ្សេងពីអ្នកបកដំបូង មកពិនិត្យ
     last = "មិនមានម៉ូដែល"
     for model in models[:8]:
         body = json.dumps({
@@ -1804,7 +1806,7 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None):
                 pass
         if groq_key:
             try:
-                res = groq_translate_chunk(groq_key, rows, None, system=REFINE_SYSTEM + " " + story)
+                res = groq_translate_chunk(groq_key, rows, None, system=REFINE_SYSTEM + " " + story, rotate=True)
                 return idxs, res
             except Exception:
                 pass
@@ -1902,7 +1904,7 @@ def llm_lines(rows, system, gemini_key=None, groq_key=None, khmer=True):
             pass
     if groq_key:
         try:
-            return groq_translate_chunk(groq_key, rows, None, system=system, to_english=(not khmer))
+            return groq_translate_chunk(groq_key, rows, None, system=system, to_english=(not khmer), rotate=True)
         except Exception:
             pass
     return None
@@ -2027,7 +2029,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
         _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) 0/{len(missing)} ឃ្លា...")
-        groups = [missing[k:k + 10] for k in range(0, len(missing), 10)]
+        groups = [missing[k:k + 8] for k in range(0, len(missing), 8)]
         def _gkm(idxs):
             try:
                 prev = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
@@ -4014,7 +4016,7 @@ def collect_api_keys(prefix):
                 break
     return "\n".join(split_keys(values))
 
-GEMINI_KEY = collect_api_keys("GEMINI_API_KEY")
+GEMINI_KEY = ""   # បានបិទ Gemini ចោលទាំងស្រុង ប្រើតែ Groq
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 ELEVEN_KEY = get_secret("ELEVENLABS_API_KEY", "")
 
