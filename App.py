@@ -809,8 +809,70 @@ def normalize_link(url):
     return url
 
 
+SOCIAL_HOSTS = ("tiktok.com", "douyin.com", "iesdouyin.com")
+
+
+def is_social_link(url):
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except Exception:
+        return False
+    return any(host == h or host.endswith("." + h) for h in SOCIAL_HOSTS)
+
+
+def download_social_video(url, path, progress):
+    """ទាញវីដេអូពីតំណ TikTok/Douyin ដោយប្រើ yt-dlp (មិនបង្ហាញតំណដល់អ្នកប្រើ)។"""
+    try:
+        import yt_dlp
+    except Exception:
+        raise UserError("ម៉ាស៊ីនទាញវីដេអូពីតំណមិនទាន់ដំឡើង។")
+    limit = MAX_DOWNLOAD_MB * 1024 * 1024
+    base = os.path.splitext(path)[0]
+
+    def hook(d):
+        try:
+            if d.get("status") == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                if total:
+                    progress.progress(min(1.0, (d.get("downloaded_bytes") or 0) / total))
+        except Exception:
+            pass
+
+    opts = {
+        "outtmpl": base + ".%(ext)s",
+        "format": "best[ext=mp4]/best",
+        "max_filesize": limit,
+        "quiet": True,
+        "no_warnings": True,
+        "noprogress": True,
+        "noplaylist": True,
+        "socket_timeout": 30,
+        "retries": 3,
+        "progress_hooks": [hook],
+    }
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+    except Exception:
+        raise UserError("ទាញយកវីដេអូពីតំណមិនបានទេ។ សូមពិនិត្យតំណ ឬសាកម្តងទៀត។")
+    found = None
+    folder = os.path.dirname(base)
+    prefix = os.path.basename(base) + "."
+    for fn in os.listdir(folder):
+        if fn.startswith(prefix):
+            found = os.path.join(folder, fn)
+            break
+    if not found or os.path.getsize(found) < 1000:
+        raise UserError(f"ទាញយកវីដេអូមិនបាន ឬវីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
+    if found != path:
+        os.replace(found, path)
+    progress.progress(1.0)
+
+
 def download_video(url, path, progress):
     url = normalize_link(url)
+    if is_social_link(url):
+        return download_social_video(url, path, progress)
     limit = MAX_DOWNLOAD_MB * 1024 * 1024
     try:
         request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
@@ -4355,7 +4417,7 @@ with tab_vid:
                 "បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"],
                 accept_multiple_files=True) or []
         else:
-            link_text = st.text_area("តំណវីដេអូ (មួយបន្ទាត់ ១ តំណ)", placeholder="https://...", height=90)
+            link_text = st.text_area("តំណវីដេអូ TikTok (មួយបន្ទាត់ ១ តំណ)", placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ", height=90)
         st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
         _ram_txt = server_ram_info()
         if _ram_txt:
@@ -4550,8 +4612,7 @@ else:
     lines = [ln.strip() for ln in link_text.splitlines() if ln.strip().lower().startswith(("http://", "https://"))]
     too_many = len(lines) > MAX_VIDEOS
     for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
-        tail = urllib.parse.urlparse(url).path.rsplit("/", 1)[-1]
-        items.append({"name": tail or f"តំណទី {i}", "file": None, "url": url})
+        items.append({"name": f"វីដេអូទី {i}", "file": None, "url": url})
 
 # ============================ ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) ============================
 run = False
