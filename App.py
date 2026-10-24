@@ -600,7 +600,7 @@ def friendly_message(error):
         return str(error)
     low = str(error).lower()
     if "429" in low or "resource_exhausted" in low or "quota" in low:
-        return "មានអ្នកប្រើច្រើនពេក។ សូមរង់ចាំមួយភ្លែត។"
+        return "មានអ្នកប្រើច្រើនពេក ឬ API អស់កូតា។ សូមរង់ចាំមួយភ្លែត ឬដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ»។"
     if any(x in low for x in ("503", "unavailable", "high demand", "overloaded", "timeout", "timed out")):
         return "ប្រព័ន្ធ AI កំពុងរវល់។ សូមសាកម្តងទៀត។"
     if "api key" in low or "api_key" in low or "permission" in low:
@@ -3642,19 +3642,130 @@ def build_video_filter(max_side, subs=True):
     return ",".join(parts)
 
 
+
+# =====================================================================
+#  Logo + Blur (បិទបាំង) លើវីដេអូ
+# =====================================================================
+def out_dims(w, h, max_side):
+    """ទំហំវីដេអូលទ្ធផល ក្រោយ scale (ដូចក្នុង build_video_filter)។"""
+    if not max_side or max_side <= 0:
+        return w, h
+
+    def ev(x):
+        return max(2, int(round(x / 2.0)) * 2)
+
+    if w > h:
+        h2 = min(max_side, h)
+        return ev(w * h2 / float(h)), h2
+    w2 = min(max_side, w)
+    return w2, ev(h * w2 / float(w))
+
+
+def prepare_fx(folder, fx, vid_w, vid_h, max_side):
+    """រៀបចំ logo.png (ទំហំ/ពណ៌/ភាពថ្លា) និងបញ្ជី blur សម្រាប់ ffmpeg។"""
+    if not fx:
+        return None
+    spec = {"blurs": [], "logo": None}
+    for b in fx.get("blurs") or []:
+        w = max(0.02, min(1.0, float(b["w"])))
+        h = max(0.02, min(1.0, float(b["h"])))
+        x = max(0.0, min(1.0 - w, float(b["x"])))
+        y = max(0.0, min(1.0 - h, float(b["y"])))
+        spec["blurs"].append({"x": x, "y": y, "w": w, "h": h,
+                              "sigma": max(2, int(b.get("sigma", 25))),
+                              "t0": b.get("t0"), "t1": b.get("t1")})
+    if fx.get("logo_bytes"):
+        try:
+            from PIL import Image
+            out_w, _out_h = out_dims(vid_w, vid_h, max_side)
+            im = Image.open(io.BytesIO(fx["logo_bytes"])).convert("RGBA")
+            tw = max(8, int(out_w * float(fx.get("logo_size", 15)) / 100.0))
+            th = max(8, int(im.height * tw / float(im.width)))
+            im = im.resize((tw, th), Image.LANCZOS)
+            r, g, b_, a = im.split()
+            if fx.get("logo_color"):
+                solid = Image.new("RGBA", im.size, fx["logo_color"])
+                r, g, b_, _ = solid.split()
+            op = max(0.05, min(1.0, float(fx.get("logo_opacity", 1.0))))
+            a = a.point(lambda v: int(v * op))
+            Image.merge("RGBA", (r, g, b_, a)).save(os.path.join(folder, "logo.png"))
+            spec["logo"] = {"x": max(0.0, min(1.0, float(fx.get("logo_x", 0.9)))),
+                            "y": max(0.0, min(1.0, float(fx.get("logo_y", 0.1))))}
+        except Exception:
+            spec["logo"] = None
+    if not spec["blurs"] and not spec["logo"]:
+        return None
+    return spec
+
+
+def video_filter_args(max_side, subs, dub, spec, vid_w=None, vid_h=None):
+    """ត្រឡប់ (input បន្ថែម, ជម្រើស filter+map) សម្រាប់ ffmpeg។"""
+    if not spec:
+        a = ["-vf", build_video_filter(max_side, subs)]
+        if dub:
+            a += ["-map", "0:v:0", "-map", "1:a:0"]
+        return [], a
+    nodes = []
+    cur = "[0:v]"
+    cnt = [0]
+
+    def nxt():
+        cnt[0] += 1
+        return f"[v{cnt[0]}]"
+
+    if max_side and max_side > 0:
+        out = nxt()
+        nodes.append(
+            f"{cur}scale=w='if(gt(iw,ih),-2,min({max_side},iw))':"
+            f"h='if(gt(iw,ih),min({max_side},ih),-2)':flags=fast_bilinear{out}")
+        cur = out
+    for i, b in enumerate(spec["blurs"]):
+        out = nxt()
+        nodes.append(f"{cur}split=2[ba{i}][bb{i}]")
+        nodes.append(
+            f"[bb{i}]crop=w='trunc(iw*{b['w']:.4f}/2)*2':h='trunc(ih*{b['h']:.4f}/2)*2':"
+            f"x='trunc(iw*{b['x']:.4f}/2)*2':y='trunc(ih*{b['y']:.4f}/2)*2',"
+            f"gblur=sigma={b['sigma']}:steps=2[bc{i}]")
+        en = ""
+        if b.get("t0") is not None and b.get("t1") is not None:
+            en = f":enable='between(t,{float(b['t0']):.2f},{float(b['t1']):.2f})'"
+        nodes.append(
+            f"[ba{i}][bc{i}]overlay=x='trunc(W*{b['x']:.4f}/2)*2':y='trunc(H*{b['y']:.4f}/2)*2'{en}{out}")
+        cur = out
+    extra_in = []
+    if spec.get("logo"):
+        lg = spec["logo"]
+        idx = 2 if dub else 1
+        extra_in = ["-i", "logo.png"]
+        out = nxt()
+        nodes.append(
+            f"{cur}[{idx}:v]overlay=x='max(0,min(W-w,W*{lg['x']:.4f}-w/2))':"
+            f"y='max(0,min(H-h,H*{lg['y']:.4f}-h/2))'{out}")
+        cur = out
+    if subs:
+        out = nxt()
+        nodes.append(f"{cur}ass=filename=captions.ass:fontsdir=.{out}")
+        cur = out
+    nodes.append(f"{cur}format=yuv420p[vout]")
+    maps = ["-map", "[vout]"] + (["-map", "1:a:0"] if dub else ["-map", "0:a:0?"])
+    return extra_in, ["-filter_complex", ";".join(nodes)] + maps
+
+
 def render_with_fonts(folder, fonts, captions, font_size, outline_size,
-                      color, vid_w, vid_h, quality, status, dub=False, style=None, subs=True):
+                      color, vid_w, vid_h, quality, status, dub=False, style=None, subs=True, fx=None):
     ass_path = os.path.join(folder, "captions.ass")
     output_path = os.path.join(folder, "output.mp4")
     max_side, crf, preset = quality
+    fx_spec = prepare_fx(folder, fx, vid_w, vid_h, max_side)
     if not subs:
         args = ["-i", "input.mp4"]
         if dub:
             args += ["-i", "dub.wav"]
-        fast_copy = not (max_side and max_side > 0)
+        fast_copy = not (max_side and max_side > 0) and not fx_spec
         if not fast_copy:
-            args += ["-vf", build_video_filter(max_side, False)]
-        if dub:
+            extra_in, vf_args = video_filter_args(max_side, False, dub, fx_spec, vid_w, vid_h)
+            args += extra_in + vf_args
+        elif dub:
             args += ["-map", "0:v:0", "-map", "1:a:0"]
         if fast_copy:
             args += ["-c:v", "copy"]
@@ -3678,9 +3789,8 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         args = ["-i", "input.mp4"]
         if dub:
             args += ["-i", "dub.wav"]
-        args += ["-vf", build_video_filter(max_side)]
-        if dub:
-            args += ["-map", "0:v:0", "-map", "1:a:0"]
+        extra_in, vf_args = video_filter_args(max_side, True, dub, fx_spec, vid_w, vid_h)
+        args += extra_in + vf_args
         args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
                  "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1],
                  "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "output.mp4"]
@@ -3903,7 +4013,7 @@ def run_worker(job, item, settings, fonts_data):
             with job.render_slots:
                 item["pct"] = 0.82
                 rep.write("៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ...")
-                out_path, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, style=settings["style"], subs=settings["sub_on"])
+                out_path, used_font, ffmpeg_log, attempts = render_with_fonts(folder, fonts, captions, settings["font_size"], settings["outline_size"], settings["color"], vid_w, vid_h, settings["quality"], rep, dub=dub_ok, style=settings["style"], subs=settings["sub_on"], fx=settings.get("fx"))
             final_path = os.path.join(job.folder, f"out_{uuid.uuid4().hex[:8]}.mp4")
             shutil.move(out_path, final_path)
             item["video_path"] = final_path
@@ -3993,6 +4103,7 @@ def work_area(job, was_running, reviewing=False):
                 st.success("✅ រួចរាល់ — ទាញយកបាននៅផ្នែកខាងក្រោម ⬇️")
             elif it["state"] == "error":
                 st.error(it["error"] or "មិនបានសម្រេច។")
+                st.info("💡 បើបញ្ហាដោយសារ API អស់កូតា សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» រួចសាកម្តងទៀត។")
                 if DEBUG and it["raw_error"]:
                     st.text(it["raw_error"])
             else:
@@ -4102,15 +4213,99 @@ def collect_api_keys(prefix):
                 break
     return "\n".join(split_keys(values))
 
-GEMINI_KEY = ""   # បានបិទ Gemini ចោលទាំងស្រុង ប្រើតែ Groq
+
+# =====================================================================
+#  API Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ពេល API របស់កម្មវិធីអស់)
+#  Key រក្សាទុកតែក្នុង session របស់អ្នកប្រើប៉ុណ្ណោះ (មិនសរសេរចូលឯកសារ)
+#  វាបាត់ដោយស្វ័យប្រវត្តិពេលបិទទំព័រ ឬចុច «ឈប់ប្រើ»
+# =====================================================================
+def validate_groq_key(key):
+    """ពិនិត្យ Groq key ថាប្រើបានឬអត់។ ត្រឡប់ (True/False, សារ)។"""
+    key = str(key or "").strip()
+    if not key or len(key) < 20 or any(c.isspace() for c in key):
+        return False, "Key មិនត្រឹមត្រូវ (ត្រូវចាប់ផ្តើមដោយ gsk_ ហើយគ្មានដកឃ្លា)។"
+    try:
+        req = urllib.request.Request(GROQ_MODELS_URL, headers={"Authorization": f"Bearer {key}", "User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            r.read()
+        return True, "Key ប្រើបាន ✅"
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            return True, "Key ត្រឹមត្រូវ (ប៉ុន្តែកំពុងអស់កូតាបណ្តោះអាសន្ន) ✅"
+        if e.code in (401, 403):
+            return False, "Key មិនត្រឹមត្រូវ ឬត្រូវបានបិទ។"
+        return False, f"ពិនិត្យ Key មិនបាន (HTTP {e.code})។"
+    except Exception:
+        return False, "ពិនិត្យ Key មិនបាន (បញ្ហាបណ្តាញ)។ សូមសាកម្តងទៀត។"
+
+
+def validate_gemini_key(key):
+    """ពិនិត្យ Gemini key ថាប្រើបានឬអត់។ ត្រឡប់ (True/False, សារ)។"""
+    key = str(key or "").strip()
+    if not key or len(key) < 20 or any(c.isspace() for c in key):
+        return False, "Key មិនត្រឹមត្រូវ (ត្រូវចាប់ផ្តើមដោយ AIza ហើយគ្មានដកឃ្លា)។"
+    try:
+        url = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1&key=" + urllib.parse.quote(key)
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"}), timeout=20) as r:
+            r.read()
+        return True, "Key ប្រើបាន ✅"
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            return True, "Key ត្រឹមត្រូវ (ប៉ុន្តែកំពុងអស់កូតាបណ្តោះអាសន្ន) ✅"
+        if e.code in (400, 401, 403):
+            return False, "Key មិនត្រឹមត្រូវ ឬត្រូវបានបិទ។"
+        return False, f"ពិនិត្យ Key មិនបាន (HTTP {e.code})។"
+    except Exception:
+        return False, "ពិនិត្យ Key មិនបាន (បញ្ហាបណ្តាញ)។ សូមសាកម្តងទៀត។"
+
+
+def effective_groq_key():
+    """Key របស់អ្នកប្រើ (បើមាន) មុន ហើយ key របស់កម្មវិធីជាបម្រុង។"""
+    mine = st.session_state.get("user_groq_key", "")
+    return "\n".join(split_keys([mine, GROQ_KEY])) if mine else GROQ_KEY
+
+
+def effective_gemini_key():
+    mine = st.session_state.get("user_gemini_key", "")
+    return "\n".join(split_keys([mine, GEMINI_KEY])) if mine else GEMINI_KEY
+
+
+def user_key_box():
+    """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួន (Groq ឬ Gemini)។ រក្សាតែក្នុង session។"""
+    if st.session_state.pop("_clear_key_input", False):
+        st.session_state.pop("user_key_input", None)
+    with st.container(border=True):
+        st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន**")
+        st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ អ្នកអាចដាក់ Groq (console.groq.com/keys) ឬ Gemini (aistudio.google.com/apikey) Key របស់អ្នកផ្ទាល់ ដើម្បីបន្តប្រើបាន។")
+        for name, sk in (("Groq", "user_groq_key"), ("Gemini", "user_gemini_key")):
+            mine = st.session_state.get(sk, "")
+            if mine:
+                st.success(f"✅ កំពុងប្រើ {name} Key របស់អ្នក (…{mine[-4:]})")
+                if st.button(f"🗑 ឈប់ប្រើ {name} Key", key=f"remove_{sk}"):
+                    st.session_state.pop(sk, None)
+                    st.rerun()
+        provider = st.radio("ប្រភេទ Key", ["Groq", "Gemini"], horizontal=True, key="user_key_provider")
+        typed = st.text_input(f"{provider} API Key", type="password",
+                              placeholder="gsk_..." if provider == "Groq" else "AIza...", key="user_key_input")
+        st.caption("🔒 Key ប្រើតែក្នុងទំព័រនេះ មិនត្រូវបានរក្សាទុកទេ ហើយបាត់ពេលអ្នកបិទទំព័រ ឬឈប់ប្រើ។")
+        if st.button("✅ ពិនិត្យ និងប្រើ Key នេះ", key="user_key_save", use_container_width=True):
+            ok, msg = (validate_groq_key if provider == "Groq" else validate_gemini_key)(typed)
+            if ok:
+                st.session_state["user_groq_key" if provider == "Groq" else "user_gemini_key"] = typed.strip()
+                st.session_state["_clear_key_input"] = True
+                st.rerun()
+            else:
+                st.error(msg)
+
+
+GEMINI_KEY = collect_api_keys("GEMINI_API_KEY")   # ដាក់ GEMINI_API_KEY ក្នុង Secrets (អាចដាក់ច្រើន)
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 ELEVEN_KEY = get_secret("ELEVENLABS_API_KEY", "")
 
 render_header()
 
-if not GEMINI_KEY and not GROQ_KEY:
-    st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
-    st.stop()
+if not GEMINI_KEY and not GROQ_KEY and not st.session_state.get("user_groq_key") and not st.session_state.get("user_gemini_key"):
+    st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
 
 ENGINE_FREE = "⭐ គម្រោង VIP"
 ENGINE_GEMINI = "✨ Gemini (ទាញអត្ថបទ)"
@@ -4140,8 +4335,8 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
 
-tab_vid, tab_trans, tab_voice, tab_text, tab_out = st.tabs(
-    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "⬇️ ទាញយក"]
+tab_vid, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
 )
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
@@ -4174,12 +4369,11 @@ with tab_vid:
 with tab_trans:
     with st.container(border=True):
         engine_options = []
-        if GROQ_KEY:
-            engine_options.append(ENGINE_FREE)
-        if GEMINI_KEY:
+        engine_options.append(ENGINE_FREE)
+        if effective_gemini_key():
             engine_options.append(ENGINE_GEMINI)   # Gemini = ម៉ាស៊ីនបម្រុង
         engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0)
-        if GROQ_KEY and GEMINI_KEY:
+        if effective_groq_key() and effective_gemini_key():
             st.caption("🔁 បើម៉ាស៊ីនទីមួយមានបញ្ហា ឬអស់កូតា កម្មវិធីប្តូរទៅ Gemini បម្រុងដោយស្វ័យប្រវត្តិ។")
         lc1, lc2 = st.columns(2)
         with lc1:
@@ -4188,6 +4382,7 @@ with tab_trans:
             st.selectbox("បកប្រែទៅ", ["🇰🇭 ខ្មែរ"], disabled=True, key="target_lang")
     with st.container(border=True):
         st.caption("✅ អក្សររត់ខ្មែរ និងសំឡេងអានខ្មែរ ត្រូវបានបើកដោយស្វ័យប្រវត្តិ។")
+    user_key_box()
 
 # ============================ ផ្ទាំង ៣: សំឡេង ============================
 with tab_voice:
@@ -4219,6 +4414,117 @@ with tab_text:
     with prev_slot:
         render_preview(font_size, COLOR_OPTIONS[color_pick][1], POS_MAP[pos_pick],
                        bold_, italic_, BOX_OPTIONS[box_pick])
+
+
+# ============================ ផ្ទាំង Logo + Blur ============================
+BLUR_COLORS = ["#FF2D2D", "#FFE600", "#00E640", "#2F6BFF"]
+
+
+def logo_preview_data(raw):
+    """រូបតូចសម្រាប់ preview (មិនប៉ះឯកសារដើម)។"""
+    try:
+        from PIL import Image
+        im = Image.open(io.BytesIO(raw)).convert("RGBA")
+        iw, ih = im.size
+        im.thumbnail((300, 300))
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii"), iw, ih
+    except Exception:
+        return None, 1, 1
+
+
+def render_fx_preview(aspect, logo, lx, ly, lsize, lop, tint, blurs):
+    if aspect == "9:16":
+        box = "height:260px;aspect-ratio:9/16;margin:6px auto;"
+    elif aspect == "1:1":
+        box = "height:240px;aspect-ratio:1/1;margin:6px auto;"
+    else:
+        box = "width:100%;aspect-ratio:16/9;margin:6px 0;"
+    html = [f'<div style="position:relative;overflow:hidden;border-radius:14px;border:1px solid rgba(125,145,255,.22);'
+            f'background:linear-gradient(160deg,#3A2C6E 0%,#1B2A5E 60%,#0E1636 100%);{box}">']
+    for i, b in enumerate(blurs, start=1):
+        c = BLUR_COLORS[(i - 1) % len(BLUR_COLORS)]
+        html.append(
+            f'<div style="position:absolute;left:{b["x"] * 100:.1f}%;top:{b["y"] * 100:.1f}%;width:{b["w"] * 100:.1f}%;height:{b["h"] * 100:.1f}%;'
+            f'border:2px dashed {c};background:rgba(255,255,255,.14);backdrop-filter:blur(4px);display:flex;'
+            f'align-items:center;justify-content:center;color:{c};font-weight:800;">{i}</div>')
+    if logo and logo[0]:
+        uri, iw, ih = logo
+        pos = f"position:absolute;left:{lx}%;top:{ly}%;transform:translate(-50%,-50%);width:{lsize}%;opacity:{lop};"
+        if tint:
+            html.append(f'<div style="{pos}aspect-ratio:{iw}/{ih};background:{tint};'
+                        f'-webkit-mask:url({uri}) center/contain no-repeat;mask:url({uri}) center/contain no-repeat;"></div>')
+        else:
+            html.append(f'<img src="{uri}" style="{pos}height:auto;">')
+    html.append("</div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+
+
+fx_settings = None
+with tab_fx:
+    prev_fx = st.container()
+    with st.container(border=True):
+        st.markdown("**🖼 Logo**")
+        logo_file = st.file_uploader("Upload logo (PNG ផ្ទៃថ្លាល្អបំផុត)", type=["png", "jpg", "jpeg", "webp"], key="logo_up")
+        logo_x, logo_y, logo_size, logo_op, logo_tint = 90, 10, 15, 100, None
+        if logo_file is not None:
+            g1, g2 = st.columns(2)
+            with g1:
+                logo_x = st.slider("ទីតាំងឆ្វេង↔ស្តាំ (%)", 0, 100, 90, key="logo_x")
+            with g2:
+                logo_y = st.slider("ទីតាំងលើ↕ក្រោម (%)", 0, 100, 10, key="logo_y")
+            g3, g4 = st.columns(2)
+            with g3:
+                logo_size = st.slider("ទំហំ (% នៃទទឹងវីដេអូ)", 3, 80, 15, key="logo_size")
+            with g4:
+                logo_op = st.slider("ភាពច្បាស់ (%)", 10, 100, 100, key="logo_op")
+            if st.checkbox("🎨 ប្តូរពណ៌ Logo (ល្អសម្រាប់ logo ពណ៌តែមួយ)", key="logo_tint_on"):
+                logo_tint = st.color_picker("ពណ៌ Logo", "#FFFFFF", key="logo_tint_col")
+    with st.container(border=True):
+        st.markdown("**🌫 Blur បិទបាំង**")
+        n_blur = st.slider("ចំនួនកន្លែងត្រូវ Blur", 0, 4, 0, key="n_blur")
+        blur_list = []
+        for i in range(n_blur):
+            c = BLUR_COLORS[i % len(BLUR_COLORS)]
+            with st.expander(f"កន្លែងទី {i + 1}", expanded=(n_blur <= 2)):
+                d = [(35, 80, 30, 12), (5, 5, 25, 12), (65, 5, 30, 12), (35, 40, 30, 20)][i]
+                b1, b2 = st.columns(2)
+                with b1:
+                    bx = st.slider("ឆ្វេង (%)", 0, 95, d[0], key=f"bx{i}")
+                with b2:
+                    by = st.slider("ពីលើ (%)", 0, 95, d[1], key=f"by{i}")
+                b3, b4 = st.columns(2)
+                with b3:
+                    bw = st.slider("ទទឹង (%)", 3, 100, d[2], key=f"bw{i}")
+                with b4:
+                    bh = st.slider("កម្ពស់ (%)", 3, 100, d[3], key=f"bh{i}")
+                bs = st.slider("កម្លាំង Blur", 5, 60, 25, key=f"bs{i}")
+                t0 = t1 = None
+                if not st.checkbox("Blur ពេញមួយវីដេអូ", value=True, key=f"ball{i}"):
+                    t1c, t2c = st.columns(2)
+                    with t1c:
+                        t0 = st.number_input("ចាប់ពី (វិនាទី)", min_value=0.0, value=0.0, step=0.5, key=f"bt0{i}")
+                    with t2c:
+                        t1 = st.number_input("ដល់ (វិនាទី)", min_value=0.5, value=5.0, step=0.5, key=f"bt1{i}")
+                bw = min(bw, 100 - bx)
+                bh = min(bh, 100 - by)
+                blur_list.append({"x": bx / 100.0, "y": by / 100.0, "w": bw / 100.0, "h": bh / 100.0,
+                                  "sigma": bs, "t0": t0, "t1": t1})
+    if logo_file is not None or blur_list:
+        fx_settings = {
+            "blurs": blur_list,
+            "logo_bytes": logo_file.getvalue() if logo_file is not None else None,
+            "logo_x": logo_x / 100.0, "logo_y": logo_y / 100.0,
+            "logo_size": logo_size, "logo_opacity": logo_op / 100.0,
+            "logo_color": logo_tint,
+        }
+    with prev_fx:
+        aspect = st.radio("ទម្រង់មើលជាមុន", ["16:9", "9:16", "1:1"], horizontal=True, key="fx_aspect")
+        render_fx_preview(aspect, logo_preview_data(logo_file.getvalue()) if logo_file is not None else None,
+                          logo_x, logo_y, logo_size, logo_op / 100.0, logo_tint, blur_list)
+        if logo_file is None and not blur_list:
+            st.caption("Upload logo ឬបន្ថែមកន្លែង Blur ដើម្បីមើលជាមុន។ បើមិនប្រើ វីដេអូមិនមានការផ្លាស់ប្តូរទេ។")
 
 # ============================ បញ្ជីវីដេអូ ============================
 items = []
@@ -4271,7 +4577,7 @@ if run:
     fonts_data = sorted(fonts_data, key=lambda f: 0 if f[2] == font_name else 1)
     settings = {
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
-        "gemini_key": GEMINI_KEY, "groq_key": GROQ_KEY,
+        "gemini_key": effective_gemini_key(), "groq_key": effective_groq_key(), "fx": fx_settings,
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
