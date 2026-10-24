@@ -4388,6 +4388,70 @@ def make_mobile_copy(src, dst):
 PREVIEW_MAX_MB = 60   # វីដេអូធំជាងនេះ មិនបង្ហាញ preview
 
 
+PUBLISH_LINKS = (
+    ("▶️ YouTube", "https://www.youtube.com/upload"),
+    ("📘 Reels", "https://www.facebook.com/reels/create"),
+    ("🎵 TikTok", "https://www.tiktok.com/tiktokstudio/upload"),
+)
+
+
+SHARE_MAX_MB = 30
+
+
+def share_button(path, fname):
+    """ចែករំលែកវីដេអូផ្ទាល់ទៅកម្មវិធី YouTube/Facebook/TikTok ក្នុងទូរស័ព្ទ (មិនបាច់ទាញយក)។"""
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        return False
+    if size > SHARE_MAX_MB * 1024 * 1024:
+        return False
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    components.html(
+        """
+<button id="b" style="width:100%;padding:14px;font-size:17px;font-weight:700;color:#fff;border:0;
+border-radius:14px;background:linear-gradient(90deg,#B13CFF,#3C6BFF);cursor:pointer;
+font-family:system-ui,sans-serif;">📤 បង្ហោះផ្ទាល់ (YouTube · Facebook · TikTok)</button>
+<div id="m" style="color:#ffb4b4;font-size:14px;margin-top:6px;font-family:system-ui,sans-serif;"></div>
+<script>
+const B64 = "%s";
+const NAME = %s;
+document.getElementById("b").onclick = async () => {
+  const m = document.getElementById("m");
+  m.textContent = "";
+  try {
+    const bin = atob(B64);
+    const arr = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    const file = new File([arr], NAME, {type: "video/mp4"});
+    if (navigator.canShare && navigator.canShare({files: [file]})) {
+      await navigator.share({files: [file]});
+    } else {
+      m.textContent = "ឧបករណ៍ ឬកម្មវិធីរុករកនេះមិនគាំទ្រការបង្ហោះផ្ទាល់ទេ។";
+    }
+  } catch (e) {
+    if (e && e.name !== "AbortError") m.textContent = "មិនអាចបង្ហោះផ្ទាល់បានទេ។";
+  }
+};
+</script>
+""" % (b64, json.dumps(fname)),
+        height=84,
+    )
+    return True
+
+
+def publish_buttons(key_prefix):
+    st.caption("📤 ឬបើកទំព័របង្ហោះរបស់វេទិកា")
+    cols = st.columns(len(PUBLISH_LINKS))
+    for col, (label, url) in zip(cols, PUBLISH_LINKS):
+        with col:
+            if hasattr(st, "link_button"):
+                st.link_button(label, url, use_container_width=True)
+            else:
+                st.markdown(f"[{label}]({url})")
+
+
 def download_area(job):
     done = [(i, it) for i, it in enumerate(job.items, start=1) if it["state"] == "done"]
     if not done:
@@ -4410,6 +4474,8 @@ def download_area(job):
                 with open(vp, "rb") as vf:
                     dl_button("⬇️ ទាញយកវីដេអូ", vf, fname, "video/mp4",
                               key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
+                share_button(vp, fname)
+                publish_buttons(f"pub_{job.id}_{i}")
                 if size_mb <= PREVIEW_MAX_MB:
                     with st.expander("▶️ មើលវីដេអូ"):
                         st.video(vp)
