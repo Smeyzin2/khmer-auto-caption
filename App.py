@@ -4019,7 +4019,7 @@ def render_ios_download_help():
         })();
         </script>
         """,
-        height=170,
+        height=260,
     )
 
 
@@ -4106,7 +4106,7 @@ def download_area(job):
     render_ios_download_help()
     for i, it in done:
         with st.container(border=True):
-            st.markdown(f"**{i}. {it['name']}**")
+            st.markdown(f"**{i}. {os.path.splitext(it['name'])[0]}.mp4**")
             vp = it.get("video_path")
             if vp and os.path.isfile(vp):
                 fname = f"{safe_filename(it['name'])}_khmer.mp4"
@@ -4117,10 +4117,6 @@ def download_area(job):
                     vp, fname = small, fname.replace("_khmer.mp4", "_khmer_mobile.mp4")
                     size_mb = os.path.getsize(vp) / (1024 * 1024)
                     st.caption(f"📱 កំណែតូចសម្រាប់ទូរស័ព្ទ {size_mb:.0f}MB")
-                if size_mb <= PREVIEW_MAX_MB:
-                    st.video(vp)
-                else:
-                    st.caption(f"វីដេអូធំ {size_mb:.0f}MB មិនបង្ហាញ preview ទេ។")
                 if size_mb <= SHARE_MAX_MB:
                     render_share_button(vp, fname)
                 else:
@@ -4135,6 +4131,11 @@ def download_area(job):
                         st.rerun()
                 with open(vp, "rb") as vf:
                     dl_button("⬇️ ទាញយកវីដេអូនេះ (ឯកសារ .mp4)", vf, fname, "video/mp4", key=f"dl_{job.id}_{i}_{'s' if small else 'f'}", use_container_width=True)
+                if size_mb <= PREVIEW_MAX_MB:
+                    with st.expander("▶️ មើលវីដេអូ (Preview)"):
+                        st.video(vp)
+                else:
+                    st.caption(f"វីដេអូធំ {size_mb:.0f}MB មិនបង្ហាញ preview ទេ។")
             else:
                 st.caption("ឯកសារវីដេអូត្រូវបានលុបចេញពីម៉ាស៊ីនហើយ។")
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
