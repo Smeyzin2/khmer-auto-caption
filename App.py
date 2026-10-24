@@ -28,7 +28,7 @@ from google import genai
 from google.genai import types
 
 st.set_page_config(
-    page_title="Khmer Auto Caption",
+    page_title="បកប្រែវីដេអូមកនិយាយខ្មែរ",
     page_icon="🎬",
     layout="wide",
 )
@@ -396,10 +396,10 @@ def render_header():
         <div class="kvai-head">
           <div class="kvai-logo">🎬</div>
           <div class="kvai-title">
-            <h1>Khmer Video <span>AI</span></h1>
+            <h1>បកប្រែវីដេអូ<span>មកនិយាយខ្មែរ</span></h1>
             <p>បកប្រែវីដេអូ និងបង្កើតអក្សរ/សំឡេងខ្មែរ ដោយ AI</p>
           </div>
-          <div class="kvai-badge">👑 Free AI</div>
+          <div class="kvai-badge">👑 គម្រោង VIP</div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -1340,6 +1340,23 @@ def build_prompt(clip_duration, source_language, concise=False):
     )
 
 
+def build_prompt_original(clip_duration, source_language):
+    lang = (f"The speech or singing is in {source_language}. " if source_language
+            else "First detect the spoken or sung language. ")
+    return (
+        lang + "Transcribe it faithfully, word for word, in its ORIGINAL language and original script "
+        "with correct spelling and punctuation. Do NOT translate, summarize or paraphrase. "
+        "If a word is unclear, choose the most likely word from the context. "
+        "Split into natural sentence-level segments, each about 2 to 6 seconds long. "
+        "Timestamps are in seconds, measured from the very beginning "
+        f"of THIS audio clip (0 to {clip_duration:.1f}). "
+        "Each segment must start exactly when its first word is heard and end exactly when its last word ends. "
+        "Return ONLY a JSON array. Each item must be an object: "
+        '{"start": <seconds as number>, "end": <seconds as number>, "text": "<original-language transcript>"}. '
+        "If there is no speech or singing, return an empty array []."
+    )
+
+
 def plan_chunks(duration, speech):
     if duration <= CHUNK_MAX:
         return [(0.0, duration)]
@@ -1364,8 +1381,8 @@ def is_empty_json(raw):
     return bool(re.fullmatch(r"\s*(```(?:json)?)?\s*\[\s*\]\s*(```)?\s*", raw or ""))
 
 
-def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_language, concise, status):
-    prompt = build_prompt(clip_duration, source_language, concise)
+def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_language, concise, status, original_only=False):
+    prompt = build_prompt_original(clip_duration, source_language) if original_only else build_prompt(clip_duration, source_language, concise)
     configs = [
         types.GenerateContentConfig(temperature=0, response_mime_type="application/json"),
         types.GenerateContentConfig(
@@ -1393,7 +1410,7 @@ def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_lan
             if segments:
                 ratio = khmer_ratio(segments)
                 dbg(status, f"[{model}] khmer ratio = {ratio:.2f}")
-                if ratio >= 0.6:
+                if original_only or ratio >= 0.6:
                     return segments, model, errors
                 kept = [s for s in segments if has_khmer(s[2])]
                 if kept and (weak is None or len(kept) > len(weak[0])):
@@ -1403,7 +1420,7 @@ def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_lan
             if is_empty_json(raw):
                 return [], model, []
             plain = fix_khmer(re.sub(r"[\[\]{}\"]", " ", raw))
-            if plain and has_khmer(plain):
+            if plain and (has_khmer(plain) or original_only):
                 return plain_to_segments(plain, clip_duration), model, errors
             errors.append(f"{model}: មិនមានអត្ថបទ")
             break
@@ -1412,7 +1429,7 @@ def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_lan
     return [], None, errors
 
 
-def transcribe(api_key, audio_path, duration, source_language, status, concise=False, speech=None):
+def transcribe(api_key, audio_path, duration, source_language, status, concise=False, speech=None, original_only=False):
     client = make_gemini_client(api_key, types.HttpOptions(timeout=REQUEST_TIMEOUT_MS))
     models = get_available_models(client)
     if not models:
@@ -1431,7 +1448,7 @@ def transcribe(api_key, audio_path, duration, source_language, status, concise=F
             data = f.read()
         if len(data) > 15 * 1024 * 1024:
             raise UserError("សំឡេងធំពេក។")
-        segs, model, errors = transcribe_clip(client, models, data, "audio/flac", end - start, source_language, concise, status)
+        segs, model, errors = transcribe_clip(client, models, data, "audio/flac", end - start, source_language, concise, status, original_only=original_only)
         done_counter["n"] += 1
         if total > 1:
             status.write(f"៣/៤ កំពុងស្តាប់ និងបកប្រែ... ({done_counter['n']}/{total})")
@@ -2380,6 +2397,34 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
     segs.sort(key=lambda x: x[0])
     return segs, f"Groq {model} + Translate", failed
+
+
+def transcribe_gemini_text(gemini_key, groq_key, audio_path, duration, source_language, status, speech=None, keep_failed=False):
+    """Gemini ទាញអត្ថបទដើមពីសំឡេងតែប៉ុណ្ណោះ (មិនបកប្រែ)។ ការបកជាខ្មែរធ្វើដោយ Groq/Google។"""
+    if source_language == "Khmer":
+        return transcribe(gemini_key, audio_path, duration, source_language, status, concise=False, speech=speech)
+    raw, model, failed = transcribe(gemini_key, audio_path, duration, source_language, status, speech=speech, original_only=True)
+    if khmer_ratio(raw) >= 0.6:
+        return raw, f"Gemini {model}", failed
+    status.write("៣/៤ Gemini ទាញអត្ថបទរួច កំពុងបកប្រែជាភាសាខ្មែរ...")
+    keep = merge_for_translate([(a, b, t) for a, b, t in raw if str(t).strip()])
+    outs, errs = translate_texts([t for _, _, t in keep], groq_key, None, None, progress=lambda m: status.write("៣/៤ " + m))
+    segs = []
+    for (a, b, orig), out in zip(keep, outs):
+        if out:
+            segs.append((a, b, out))
+        elif keep_failed:
+            segs.append((a, b, "⚠️ " + str(orig)))
+            failed += 1
+        else:
+            failed += 1
+    if not keep_failed and (failed > 0 or len(segs) != len(keep)):
+        reason = " | ".join(errs[:3]) or "មិនបានអត្ថបទខ្មែរសម្រាប់ឃ្លាខ្លះ"
+        raise RuntimeError(f"ការបកប្រែមិនគ្រប់ឃ្លា (ទាញបាន {len(keep)} បកបាន {len(segs)}) មូលហេតុ: {reason}")
+    if not segs:
+        raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
+    segs.sort(key=lambda x: x[0])
+    return segs, f"Gemini {model} (ទាញអត្ថបទ) + Translate", failed
 
 
 def tts_segment(text, voice, path, prosody=None):
@@ -3450,7 +3495,7 @@ class Job:
 
 
 def engine_name(engine):
-    return "ឥតគិតថ្លៃ (Groq)" if engine == "free" else "Gemini"
+    return "គម្រោង VIP" if engine == "free" else "Gemini"
 
 
 def run_worker(job, item, settings, fonts_data):
@@ -3504,7 +3549,7 @@ def run_worker(job, item, settings, fonts_data):
                     if engine == "free":
                         segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"], keep_failed=False)
                     else:
-                        segments, used_model, failed_chunks = transcribe(settings["gemini_key"], master_path, duration, settings["language"], rep, concise=settings["dub_on"], speech=speech)
+                        segments, used_model, failed_chunks = transcribe_gemini_text(settings["gemini_key"], settings["groq_key"], master_path, duration, settings["language"], rep, speech=speech)
                     used_engine = engine
                     break
                 except UserError:
@@ -3791,8 +3836,8 @@ if not GEMINI_KEY and not GROQ_KEY:
     st.error("កម្មវិធីមិនទាន់រួចរាល់ទេ។ សូមទាក់ទងម្ចាស់កម្មវិធី។")
     st.stop()
 
-ENGINE_FREE = "🆓 ឥតគិតថ្លៃ (Groq + Google Translate)"
-ENGINE_GEMINI = "✨ Gemini (ធម្មជាតិជាង តែមានកូតា)"
+ENGINE_FREE = "⭐ គម្រោង VIP"
+ENGINE_GEMINI = "✨ Gemini (ទាញអត្ថបទ)"
 
 current_job = st.session_state.get("job")
 busy = bool(current_job and current_job.running())
@@ -3853,10 +3898,10 @@ with tab_vid:
 with tab_trans:
     with st.container(border=True):
         engine_options = []
+        if GEMINI_KEY:
+            engine_options.append(ENGINE_GEMINI)   # Gemini ស្តាប់ និងទាញអត្ថបទពីវីដេអូជាមុន
         if GROQ_KEY:
             engine_options.append(ENGINE_FREE)
-        if GEMINI_KEY:
-            engine_options.append(ENGINE_GEMINI)
         engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0)
         lc1, lc2 = st.columns(2)
         with lc1:
