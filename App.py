@@ -1631,6 +1631,9 @@ TRANS_SYSTEM = (
     "(avoid stiff Pali/Sanskrit-heavy or royal words unless the speaker is a king/monk), drop pronouns that Khmer speakers would omit, "
     "and make sure every sentence is something a native Khmer person would really say and instantly understand. "
     "(12) Double-check every line against the original before answering: a wrong meaning, a missed negation (not, never, មិន, គ្មាន), swapped subject and object, or a wrong number is the worst mistake. "
+    "(13) Match the DELIVERY of the original: a short sharp exclamation, shout or one-word reply stays short and punchy in Khmer; a slow, soft, sad or "
+    "thoughtful line becomes a calm, flowing Khmer sentence with natural softening particles; a fast angry or excited burst uses clipped, energetic words. "
+    "Keep each speaker's pronouns, politeness level and vocabulary consistent across all lines of the video. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
@@ -1644,7 +1647,8 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
     models = groq_chat_models(api_key)
     models = model_order(models, "groq")
     if rotate and len(models) > 1:
-        models = models[1:] + models[:1]   # ឱ្យម៉ូដែលផ្សេងពីអ្នកបកដំបូង មកពិនិត្យ
+        _shift = (int(rotate) if not isinstance(rotate, bool) else 1) % len(models)
+        models = models[_shift:] + models[:_shift]   # ឱ្យម៉ូដែលផ្សេងពីអ្នកបកដំបូង មកពិនិត្យ
     last = "មិនមានម៉ូដែល"
     for model in models[:8]:
         body = json.dumps({
@@ -1749,7 +1753,7 @@ REFINE_SYSTEM = (
 )
 
 
-def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None):
+def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, shift=1):
     """ពិនិត្យការបកប្រែខ្មែរម្តងទៀតប្រៀបធៀបនឹងអត្ថបទដើម ហើយកែឱ្យត្រូវន័យ និងស្ទួនភាសាខ្មែរធម្មជាតិ។"""
     n = len(drafts)
     result = list(drafts)
@@ -1806,7 +1810,7 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None):
                 pass
         if groq_key:
             try:
-                res = groq_translate_chunk(groq_key, rows, None, system=REFINE_SYSTEM + " " + story, rotate=True)
+                res = groq_translate_chunk(groq_key, rows, None, system=REFINE_SYSTEM + " " + story, rotate=shift)
                 return idxs, res
             except Exception:
                 pass
@@ -2148,16 +2152,18 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 if r and has_khmer(str(r)):
                     outs[i] = r
     # ជំហានកែសម្រួលចុងក្រោយ: ពិនិត្យអត្ថន័យខ្មែរប្រៀបនឹងអត្ថបទដើម
-    weak = [i for i in range(n) if i not in gem_ok]
-    if weak and (groq_key or gemini_key) and all(o and has_khmer(str(o)) for o in outs):
-        try:
-            sub = refine_khmer([texts[i] for i in weak], [english[i] for i in weak], [outs[i] for i in weak],
-                               gemini_key, groq_key, progress=progress)
-            for i, r in zip(weak, sub):
-                if r:
-                    outs[i] = r
-        except Exception as e:
-            errors.append(f"refine: {e}"[:200])
+    # ពិនិត្យ ២ ជុំ ដោយម៉ូដែលផ្សេងគ្នា លើគ្រប់ឃ្លា (ជុំទី២ ពិនិត្យអត្ថន័យ និងភាពស៊ីសង្វាក់ម្តងទៀត)
+    allidx = list(range(n))
+    if allidx and (groq_key or gemini_key) and all(o and has_khmer(str(o)) for o in outs):
+        for _pass, _shift in enumerate((1, 2)):
+            try:
+                sub = refine_khmer([texts[i] for i in allidx], [english[i] for i in allidx], [outs[i] for i in allidx],
+                                   gemini_key, groq_key, progress=progress, shift=_shift)
+                for i, r in zip(allidx, sub):
+                    if r:
+                        outs[i] = r
+            except Exception as e:
+                errors.append(f"refine{_pass + 1}: {e}"[:200])
     # តម្រឹមប្រវែងឃ្លាខ្មែរឱ្យសមនឹងពេលមាត់តួអង្គនិយាយ (lip-sync)
     if budgets and all(o and has_khmer(str(o)) for o in outs):
         try:
@@ -3148,8 +3154,8 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
 def emotion_prosody(label, intensity, use_pitch=True):
     rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
     k = max(0.0, float(intensity))
-    rate = int(max(-5, min(5, rate * k * 0.5)))
-    pitch = int(max(-4, min(4, pitch * k * 0.4))) if use_pitch else 0
+    rate = int(max(-10, min(10, rate * k * 0.8)))
+    pitch = int(max(-6, min(6, pitch * k * 0.5))) if use_pitch else 0
     vol = int(max(-15, min(10, vol * k * 0.5)))
     if rate == 0 and pitch == 0 and vol == 0:
         return None
@@ -3400,7 +3406,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 return max(0.0, x - hi_ * 1.03) + max(0.0, lo_ - x)
 
             def _fit_rate(text_, d_cur, p_cur):
-                for _k in range(2):
+                for _k in range(3):
                     if _miss(d_cur) <= 0:
                         break
                     try:
@@ -3410,7 +3416,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                             base_ = -4
                         goal_ = hi_ * 0.97 if d_cur > hi_ * 1.03 else min(hi_, mouth_ * 0.95)
                         mult_ = (1.0 + base_ / 100.0) * (d_cur / max(0.3, goal_))
-                        new_rate = int(round(max(-20, min(55, (mult_ - 1.0) * 100))))
+                        new_rate = int(round(max(-30, min(60, (mult_ - 1.0) * 100))))
                         if new_rate == base_:
                             break
                         p2_ = {"rate": f"{new_rate:+d}%",
@@ -3507,7 +3513,11 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
-        speed = min(1.3, max(1.0, speed))
+        speed = min(1.4, max(1.0, speed))
+        # តួអង្គនិយាយយឺត/បន្ថយសំឡេង៖ បើសំឡេង AI ខ្លីជាងពេលមាត់ ច្រើន ធ្វើឱ្យយឺតបន្តិច (មិនឱ្យសំឡេងចប់មុនមាត់)
+        mouth = max(0.5, e - s)
+        if d < mouth * 0.82 and speed == 1.0:
+            speed = max(0.85, d / (mouth * 0.92))
         cursor = max(cursor, start + d / speed + 0.08)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
