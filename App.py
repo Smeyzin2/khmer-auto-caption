@@ -569,10 +569,14 @@ FONT_SOURCES = [
 ]
 
 QUALITY = {
-    "⚡ លឿន 480p": (480, 28, "ultrafast"),
-    "✨ ល្អ 720p": (720, 24, "ultrafast"),
-    "💎 ខ្ពស់ (ដើម)": (0, 20, "ultrafast"),
+    "⚡ លឿន 480p": (480, 30, "veryfast"),
+    "✨ ល្អ 720p": (720, 28, "veryfast"),
+    "💎 ខ្ពស់ (ដើម)": (0, 25, "veryfast"),
 }
+
+# កំណត់ bitrate អតិបរមា ដើម្បីកុំឱ្យឯកសារធំពេក (ទាញយកលើទូរស័ព្ទបានលឿន)
+RATE_CAP = {480: ("1200k", "2400k"), 720: ("2500k", "5000k"), 0: ("6000k", "12000k")}
+
 
 LANGUAGES = {
     "🌐 ស្វ័យប្រវត្តិ (ភាសាអ្វីក៏បាន)": None,
@@ -3655,7 +3659,8 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         if fast_copy:
             args += ["-c:v", "copy"]
         else:
-            args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf)]
+            args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+                     "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1]]
         args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"]
         log = run_ffmpeg(args, cwd=folder)
         return output_path, "-", log, ["មិនដាក់អក្សរ"]
@@ -3676,7 +3681,9 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         args += ["-vf", build_video_filter(max_side)]
         if dub:
             args += ["-map", "0:v:0", "-map", "1:a:0"]
-        args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf), "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"]
+        args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+                 "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1],
+                 "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "output.mp4"]
         try:
             log = run_ffmpeg(args, cwd=folder, verbose=True, env=conf_env if use_conf else None)
         except RuntimeError:
@@ -4073,6 +4080,21 @@ def render_share_button(video_path, file_name):
     components.html(html, height=95)
 
 
+def make_mobile_copy(src, dst):
+    """បង្កើតវីដេអូតូច (720p, bitrate ទាប) សម្រាប់ទាញយក/រក្សាទុកលើទូរស័ព្ទ។"""
+    run_ffmpeg([
+        "-i", src,
+        "-vf", "scale=w='if(gt(iw,ih),min(1280,iw),-2)':h='if(gt(iw,ih),-2,min(1280,ih))',format=yuv420p",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "30",
+        "-maxrate", "1500k", "-bufsize", "3000k",
+        "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", dst,
+    ])
+    return dst
+
+
+PREVIEW_MAX_MB = 60   # វីដេអូធំជាងនេះ មិនបង្ហាញ preview (បង្កើតកំហុសផ្ទុកលើទូរស័ព្ទ)
+
+
 def download_area(job):
     done = [(i, it) for i, it in enumerate(job.items, start=1) if it["state"] == "done"]
     if job.zip and os.path.isfile(job.zip):
@@ -4087,15 +4109,32 @@ def download_area(job):
             st.markdown(f"**{i}. {it['name']}**")
             vp = it.get("video_path")
             if vp and os.path.isfile(vp):
-                st.video(vp)
                 fname = f"{safe_filename(it['name'])}_khmer.mp4"
                 size_mb = os.path.getsize(vp) / (1024 * 1024)
+                # បើមានវីដេអូតូចសម្រាប់ទូរស័ព្ទ ប្រើវាជំនួស
+                small = it.get("small_path")
+                if small and os.path.isfile(small):
+                    vp, fname = small, fname.replace("_khmer.mp4", "_khmer_mobile.mp4")
+                    size_mb = os.path.getsize(vp) / (1024 * 1024)
+                    st.caption(f"📱 កំណែតូចសម្រាប់ទូរស័ព្ទ {size_mb:.0f}MB")
+                if size_mb <= PREVIEW_MAX_MB:
+                    st.video(vp)
+                else:
+                    st.caption(f"វីដេអូធំ {size_mb:.0f}MB មិនបង្ហាញ preview ទេ។")
                 if size_mb <= SHARE_MAX_MB:
                     render_share_button(vp, fname)
                 else:
-                    st.caption(f"វីដេអូធំ {size_mb:.0f}MB ប៊ូរក្សាទុកក្នុង iPhone មិនអាចប្រើបាន។ សូមប្រើប៊ូទាញយកខាងក្រោម។")
+                    st.warning(f"វីដេអូធំ {size_mb:.0f}MB ទាញយកលើទូរស័ព្ទយឺត ឬដាច់។ សូមចុចប៊ូខាងក្រោមបង្កើតកំណែតូច ហើយទាញយកវា។")
+                if not (small and os.path.isfile(small)) and size_mb > 40:
+                    if st.button("📉 បង្កើតកំណែតូចសម្រាប់ទូរស័ព្ទ", key=f"small_{job.id}_{i}", use_container_width=True):
+                        with st.spinner("កំពុងបង្រួមវីដេអូ... (អាចចំណាយពេលពីរបីនាទី)"):
+                            try:
+                                it["small_path"] = make_mobile_copy(it["video_path"], os.path.join(job.folder, f"mobile_{uuid.uuid4().hex[:8]}.mp4"))
+                            except Exception as e:
+                                st.error("បង្រួមវីដេអូមិនបាន។ " + str(e)[:200])
+                        st.rerun()
                 with open(vp, "rb") as vf:
-                    dl_button("⬇️ ទាញយកវីដេអូនេះ (ឯកសារ .mp4)", vf, fname, "video/mp4", key=f"dl_{job.id}_{i}", use_container_width=True)
+                    dl_button("⬇️ ទាញយកវីដេអូនេះ (ឯកសារ .mp4)", vf, fname, "video/mp4", key=f"dl_{job.id}_{i}_{'s' if small else 'f'}", use_container_width=True)
             else:
                 st.caption("ឯកសារវីដេអូត្រូវបានលុបចេញពីម៉ាស៊ីនហើយ។")
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
