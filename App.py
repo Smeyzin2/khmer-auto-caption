@@ -56,6 +56,7 @@ for _k, _v in {
     "theme.backgroundColor": "#0A0F2E",
     "theme.secondaryBackgroundColor": "#111842",
     "theme.textColor": "#E8ECFF",
+    "server.maxUploadSize": 100,
 }.items():
     try:
         st._config.set_option(_k, _v)
@@ -269,6 +270,9 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 }
 [data-testid="stFileUploaderDropzone"]:hover { border-color: var(--p1); background: rgba(40,30,110,.45); }
 [data-testid="stFileUploaderDropzone"] * { color: var(--ink) !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] small,
+[data-testid="stFileUploaderDropzoneInstructions"] span + span,
+[data-testid="stFileUploaderDropzoneInstructions"] div > span:nth-of-type(2) { display: none !important; }
 [data-testid="stFileUploaderDropzone"] button {
   background: linear-gradient(135deg, var(--p1), var(--p2)) !important; color: #fff !important;
   border-radius: var(--r-sm) !important; border: none !important;
@@ -512,7 +516,7 @@ def _env_int(name, default):
 
 # Streamlit Cloud (RAM តូច) = 200MB · ម៉ាស៊ីនមេផ្ទាល់ខ្លួន = 2GB (ប្រើ RAM របស់ម៉ាស៊ីនខ្លួនឯង)
 # អាចប្តូរបានតាម Environment Variable MAX_UPLOAD_MB
-MAX_UPLOAD_MB = _env_int("MAX_UPLOAD_MB", 200 if IS_STREAMLIT_CLOUD else 2048)  # ទំហំអតិបរមាសម្រាប់ Upload
+MAX_UPLOAD_MB = 100  # ទំហំអតិបរមាសម្រាប់ Upload (ថេរ ១០០MB)
 MAX_DOWNLOAD_MB = _env_int("MAX_DOWNLOAD_MB", MAX_UPLOAD_MB)
 MAX_VIDEOS = _env_int("MAX_VIDEOS", 5)
 MAX_ZIP_MB = 250
@@ -4352,7 +4356,7 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             link_text = st.text_area("តំណវីដេអូ (មួយបន្ទាត់ ១ តំណ)", placeholder="https://...", height=90)
-        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង · អតិបរមា {MAX_UPLOAD_MB}MB")
+        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
         _ram_txt = server_ram_info()
         if _ram_txt:
             st.caption(_ram_txt)
@@ -4530,14 +4534,11 @@ with tab_fx:
 items = []
 too_many = False
 if uploaded_files:
-    too_big = [f.name for f in uploaded_files if f.size > MAX_UPLOAD_MB * 1024 * 1024]
-    if too_big:
-        st.error(f"❌ ឯកសារធំជាង {MAX_UPLOAD_MB}MB៖ " + ", ".join(too_big))
+    # ឯកសារលើស ១០០MB មិនអនុញ្ញាតទេ (មិនបង្ហាញអក្សរ — គ្រាន់តែមិនទទួល)
     uploaded_files = [f for f in uploaded_files if f.size <= MAX_UPLOAD_MB * 1024 * 1024]
     _kept, _sum = [], 0
     for f in uploaded_files:
         if _sum + f.size > MAX_UPLOAD_MB * 1024 * 1024:
-            st.error(f"❌ ទំហំសរុបលើស {MAX_UPLOAD_MB}MB។ រំលង៖ {f.name}")
             continue
         _kept.append(f)
         _sum += f.size
