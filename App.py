@@ -3754,6 +3754,32 @@ def work_area(job, was_running, reviewing=False):
         st.rerun()
 
 
+def render_ios_download_help():
+    """បង្ហាញជំហាន Save to Files សម្រាប់ iPhone/iPad ដោយមិនប៉ះពាល់ទំហំវីដេអូ។"""
+    components.html(
+        """
+        <div id="ios-download-help" style="display:none; padding:12px 14px;
+             border:1px solid #3C6BFF; border-radius:12px; color:#E8ECFF;
+             background:#111842; font:15px -apple-system,BlinkMacSystemFont,sans-serif;
+             line-height:1.6;">
+          📱 <b>សម្រាប់ iPhone/iPad:</b><br>
+          1. ចុចប៊ូទាញយកវីដេអូខាងក្រោម។<br>
+          2. បើវីដេអូបើកជាមុន សូមចុចប៊ូ <b>Share</b> (រូបការ៉េមានព្រួញឡើង)។<br>
+          3. ជ្រើស <b>Save to Files</b> → ជ្រើសទីតាំង → ចុច <b>Save</b>។
+        </div>
+        <script>
+        (() => {
+          const ua = navigator.userAgent || "";
+          const ios = /iPad|iPhone|iPod/.test(ua) ||
+                    (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+          if (ios) document.getElementById("ios-download-help").style.display = "block";
+        })();
+        </script>
+        """,
+        height=155,
+    )
+
+
 def download_area(job):
     done = [(i, it) for i, it in enumerate(job.items, start=1) if it["state"] == "done"]
     if job.zip and os.path.isfile(job.zip):
@@ -3762,6 +3788,7 @@ def download_area(job):
     if not done:
         st.info("វីដេអូណាដែលរួចរាល់ នឹងលេចឡើងនៅទីនេះភ្លាមៗ ហើយអាចទាញយកបានតែម្តង។")
         return
+    render_ios_download_help()
     for i, it in done:
         with st.container(border=True):
             st.markdown(f"**{i}. {it['name']}**")
@@ -3769,7 +3796,7 @@ def download_area(job):
             if vp and os.path.isfile(vp):
                 st.video(vp)
                 with open(vp, "rb") as vf:
-                    dl_button("⬇️ ទាញយកវីដេអូនេះ", vf, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
+                    dl_button("⬇️ ទាញយកវីដេអូនេះ (iPhone: Save to Files)", vf, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
             else:
                 st.caption("ឯកសារវីដេអូត្រូវបានលុបចេញពីម៉ាស៊ីនហើយ។")
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
@@ -3783,7 +3810,7 @@ def download_area(job):
                 with st.expander("🛠 DEBUG"):
                     for key, value in it["debug"].items():
                         st.text(f"{key}: {value}")
-                    st.text("\n".join(it["log"][-30:]))
+                    st.text("\\n".join(it["log"][-30:]))
 
 
 def scroll_to_downloads():
