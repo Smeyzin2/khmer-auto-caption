@@ -1619,7 +1619,9 @@ TRANS_SYSTEM = (
     "(5) Flowing, connected spoken sentences that sound like a real person talking (join clauses naturally, do not chop into tiny fragments); no stiff foreign word order; no repeated words; "
     "no word salad. Write numbers and units the way Khmer speakers say them. Transliterate foreign names naturally. "
     "(6) If a line is garbled or uncertain, keep the closest clear meaning, do not invent dialogue. "
-    "(7) A [max N chars] tag is only a soft hint: ALWAYS keep the full meaning first, never cut or drop content to fit it, exceed it if needed; never output the tag. "
+    "(7) A [max N chars] tag is the SPEAKING-TIME budget of the on-screen speaker's mouth (Khmer TTS speaks about 12 characters per second). "
+    "Make the dubbed line end when the mouth stops: choose the shortest natural everyday wording, drop filler words, repeated words and pronouns a native would omit, "
+    "and keep the same rhythm as the original. NEVER drop a fact, name, number, negation or the emotional point just to fit; if the meaning truly cannot fit, keep the meaning and exceed the budget slightly. Never output the tag. "
     "(8) Every numbered line is ONE complete spoken sentence unit: translate it into exactly one complete, grammatical Khmer "
     "sentence; never merge lines, split lines, or move content between lines. Never leave source-language words untranslated except names. "
     "(9) The output will be read aloud by a TTS voice: use plain natural Khmer, put ។ (or ? !) only at the end of a sentence, and avoid "
@@ -1628,6 +1630,7 @@ TRANS_SYSTEM = (
     "(11) Translate MEANING, not words: never copy the source sentence structure or idioms literally. Use common everyday Khmer vocabulary "
     "(avoid stiff Pali/Sanskrit-heavy or royal words unless the speaker is a king/monk), drop pronouns that Khmer speakers would omit, "
     "and make sure every sentence is something a native Khmer person would really say and instantly understand. "
+    "(12) Double-check every line against the original before answering: a wrong meaning, a missed negation (not, never, មិន, គ្មាន), swapped subject and object, or a wrong number is the worst mistake. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
@@ -1861,6 +1864,91 @@ def make_synopsis(english, texts, gemini_key, groq_key):
     return ""
 
 
+def gemini_lines(api_key, system, rows, temperature=0.15, khmer=True):
+    """ផ្ញើបន្ទាត់ទៅ Gemini ហើយទទួលបញ្ជី JSON ត្រឡប់វិញ (ចំនួនស្មើគ្នា)។"""
+    client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
+    avail = get_available_models(client)
+    avail = [m for m in avail if "pro" in m.lower()] + [m for m in avail if "pro" not in m.lower()]
+    models = model_order(avail[:5], "gemini")
+    prompt = system + "\n\nITEMS:\n" + "\n".join(f"{k + 1}. {r}" for k, r in enumerate(rows))
+    last = None
+    for model in models:
+        try:
+            resp = client.models.generate_content(
+                model=model, contents=prompt,
+                config=types.GenerateContentConfig(temperature=temperature, response_mime_type="application/json"),
+            )
+            raw = (getattr(resp, "text", "") or "").strip()
+            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
+            data = json.loads(raw)
+            items = data.get("translations") if isinstance(data, dict) else data
+            if isinstance(items, list) and len(items) == len(rows):
+                model_good("gemini", model)
+                return [(clean_translation(x) if khmer else (str(x).strip() or None)) for x in items]
+            last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+            model_cool(model, last)
+        except Exception as e:
+            last = f"{model}: {e}"
+            model_cool(model, last)
+    raise RuntimeError(str(last)[:300])
+
+
+def llm_lines(rows, system, gemini_key=None, groq_key=None, khmer=True):
+    """សាក Gemini មុន បើមិនបានសាក Groq (ឬបញ្ច្រាស់ពេលមានតែមួយ)។ ត្រឡប់ None បើទាំងពីរបរាជ័យ។"""
+    if gemini_key:
+        try:
+            return gemini_lines(gemini_key, system, rows, khmer=khmer)
+        except Exception:
+            pass
+    if groq_key:
+        try:
+            return groq_translate_chunk(groq_key, rows, None, system=system, to_english=(not khmer))
+        except Exception:
+            pass
+    return None
+
+
+FIT_SYSTEM = (
+    "You are a Khmer dubbing editor doing lip-sync timing. Each numbered item has an ORIGINAL line, the current KHMER line and a MAX number "
+    "of characters (the time the speaker's mouth is moving). Rewrite the KHMER line so it is at most MAX characters and still sounds like natural "
+    "everyday spoken Khmer: use shorter common words, drop filler words, repeated words and pronouns a native would omit. "
+    "Keep every fact, name, number, negation and the emotion. Do not add anything new. If the KHMER line already fits, return it unchanged. "
+    "Khmer script only, one sentence per item ending with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses or symbols. "
+    "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
+)
+
+
+def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
+    """បង្រួមឃ្លាខ្មែរដែលវែងជាងពេលមាត់និយាយ ដោយរក្សាអត្ថន័យ (ឱ្យសំឡេងចប់ត្រូវមាត់)។"""
+    n = len(outs)
+    result = list(outs)
+    over = [i for i in range(n)
+            if budgets[i] and len(str(outs[i])) > budgets[i] * 1.25 and len(str(outs[i])) > 24]
+    if not over:
+        return result
+    groups = [over[k:k + 6] for k in range(0, len(over), 6)]
+
+    def work(idxs):
+        rows = [f"ORIGINAL: {str(texts[i]).strip()} | KHMER: {outs[i]} | MAX: {budgets[i]}" for i in idxs]
+        return idxs, llm_lines(rows, FIT_SYSTEM, gemini_key, groq_key)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for idxs, res in pool.map(work, groups):
+            if res:
+                for i, r in zip(idxs, res):
+                    if (r and has_khmer(str(r)) and khmer_dominant(str(r))
+                            and len(r) < len(str(outs[i])) and len(r) >= 0.4 * len(str(outs[i]))):
+                        result[i] = r
+            done += len(idxs)
+            if progress:
+                try:
+                    progress(f"កំពុងតម្រឹមប្រវែងឃ្លាឱ្យត្រូវមាត់ {done}/{len(over)} ឃ្លា...")
+                except Exception:
+                    pass
+    return result
+
+
 def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None):
     n = len(texts)
     errors = []
@@ -1878,9 +1966,15 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (ធ្វើស្របគ្នា ៣ បាច់ក្នុងពេលតែមួយ)
     if groq_key:
         def _en(idxs):
+            rows_ = [str(texts[i]).strip() for i in idxs]
             try:
-                return idxs, groq_translate_chunk(groq_key, [str(texts[i]).strip() for i in idxs], None, system=EN_SYSTEM, to_english=True), None
+                return idxs, groq_translate_chunk(groq_key, rows_, None, system=EN_SYSTEM, to_english=True), None
             except Exception as e:
+                # Groq ពេញកូតា/មានបញ្ហា → Gemini ជួយបម្រុង
+                if gemini_key:
+                    res_ = llm_lines(rows_, EN_SYSTEM, gemini_key, None, khmer=False)
+                    if res_:
+                        return idxs, res_, None
                 return idxs, None, e
         done = 0
         with ThreadPoolExecutor(max_workers=5) as pool:
@@ -1892,7 +1986,12 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         english[i] = r
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
-    synopsis = make_synopsis(english, texts, None, groq_key) if (groq_key and n > 2) else ""
+    synopsis = ""
+    if n > 2:
+        if groq_key:
+            synopsis = make_synopsis(english, texts, None, groq_key)
+        if not synopsis and gemini_key:
+            synopsis = make_synopsis(english, texts, gemini_key, None)
     # ជំហាន ២: Gemini បកជាខ្មែរមុន (ល្អបំផុតសម្រាប់ខ្មែរ) ដោយមានបរិបទមុន/ក្រោយ
     missing = [i for i, o in enumerate(outs) if o is None]
     batches = [missing[k:k + 6] for k in range(0, len(missing), 6)]
@@ -1923,6 +2022,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         outs[i] = r
                 done += len(idxs)
                 _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
+    gem_ok = {i for i, o in enumerate(outs) if o is not None}
     # ជំហាន ២ខ: Groq បកឃ្លាដែល Gemini មិនបាន (បម្រុង)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
@@ -2029,11 +2129,22 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         if r and has_khmer(str(r)):
             outs[i] = r
     # ជំហានកែសម្រួលចុងក្រោយ: ពិនិត្យអត្ថន័យខ្មែរប្រៀបនឹងអត្ថបទដើម
-    if groq_key and not gemini_key and all(o and has_khmer(str(o)) for o in outs):
+    weak = [i for i in range(n) if i not in gem_ok]
+    if weak and (groq_key or gemini_key) and all(o and has_khmer(str(o)) for o in outs):
         try:
-            outs = refine_khmer(texts, english, outs, None, groq_key, progress=progress)
+            sub = refine_khmer([texts[i] for i in weak], [english[i] for i in weak], [outs[i] for i in weak],
+                               gemini_key, groq_key, progress=progress)
+            for i, r in zip(weak, sub):
+                if r:
+                    outs[i] = r
         except Exception as e:
             errors.append(f"refine: {e}"[:200])
+    # តម្រឹមប្រវែងឃ្លាខ្មែរឱ្យសមនឹងពេលមាត់តួអង្គនិយាយ (lip-sync)
+    if budgets and all(o and has_khmer(str(o)) for o in outs):
+        try:
+            outs = fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=progress)
+        except Exception as e:
+            errors.append(f"fit: {e}"[:200])
     # កុំទុកលទ្ធផលទទេ ឬអង់គ្លេសសុទ្ធឱ្យបន្តជាសំឡេង dubbing
     for i, o in enumerate(outs):
         if not o or not has_khmer(str(o)):
@@ -2290,7 +2401,19 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
     return out
 
 
-def merge_for_translate(segs, max_chars=240, max_gap=1.2, max_len=14.0):
+KHMER_CPS = 12.0   # តួអក្សរខ្មែរដែលសំឡេង AI អានបានក្នុង ១ វិនាទី (ប្រហែល)
+
+
+def lip_budgets(segs):
+    """ប្រវែងអក្សរខ្មែរអតិបរមា តាមពេលដែលតួអង្គបើកមាត់និយាយ (ដើម្បីឱ្យសំឡេងចប់ត្រូវមាត់)។"""
+    out = []
+    for s_, e_, _t in segs:
+        dur = max(0.0, float(e_) - float(s_))
+        out.append(max(10, int(dur * KHMER_CPS)))
+    return out
+
+
+def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0):
     """បញ្ចូលបំណែក Whisper ដែលដាច់កណ្តាលប្រយោគ ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ
     (បកទាំងប្រយោគ ត្រឹមត្រូវជាងបកបំណែកខ្លីៗ)។"""
     strong_end = ".!?។…。！？"
@@ -2374,7 +2497,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         # ប្រវែងគោល (soft hint): ~១០ តួអក្សរខ្មែរ/វិនាទី តាមពេលមាត់និយាយ ឱ្យស្របចង្វាក់ lip-sync
         # (prompt ហាមកាត់អត្ថន័យ ដូច្នេះនេះគ្រាន់តែជាការណែនាំ)
-        budgets = None  # មិនកំណត់ប្រវែង៖ អត្ថន័យត្រឹមត្រូវមុនគេ
+        budgets = lip_budgets(keep)  # ប្រវែងអក្សរតាមពេលមាត់និយាយ ឱ្យសំឡេងចប់ត្រូវមាត់
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
@@ -2408,7 +2531,7 @@ def transcribe_gemini_text(gemini_key, groq_key, audio_path, duration, source_la
         return raw, f"Gemini {model}", failed
     status.write("៣/៤ Gemini ទាញអត្ថបទរួច កំពុងបកប្រែជាភាសាខ្មែរ...")
     keep = merge_for_translate([(a, b, t) for a, b, t in raw if str(t).strip()])
-    outs, errs = translate_texts([t for _, _, t in keep], groq_key, None, None, progress=lambda m: status.write("៣/៤ " + m))
+    outs, errs = translate_texts([t for _, _, t in keep], groq_key, lip_budgets(keep), gemini_key, progress=lambda m: status.write("៣/៤ " + m))
     segs = []
     for (a, b, orig), out in zip(keep, outs):
         if out:
@@ -3243,51 +3366,64 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     def gen(i):
         s_, e_, t_ = segments[i]
         next_s_ = segments[i + 1][0] if i + 1 < n_seg else duration
-        slot0 = max(0.6, min(next_s_ - 0.08, e_ + (0.3 if tight else 1.0)) - s_)
+        slot0 = max(0.6, min(next_s_ - 0.08, e_ + (0.4 if tight else 1.0)) - s_)
         path_ = os.path.join(folder, f"tts_{i}.mp3")
         try:
             if not tts_retry(t_, voices_[i], path_, pros[i]):
                 return None
             d_, _, _ = probe_media(path_)
-            # ឃ្លាវែងជាងចន្លោះ: បង្កើតម្តងទៀតជាមួយល្បឿន TTS ដើម (ស្តាប់ធម្មជាតិជាង atempo)
-            slot_fill_ = max(0.6, min(next_s_ - 0.08, e_ + 0.3) - s_)
-            if (not clone_voice) and (d_ > slot0 * 1.04 or d_ < slot_fill_ * 0.8):
-                try:
-                    base_ = -4
-                    if pros[i]:
+            # តម្រឹមល្បឿនអាន ឱ្យចប់ត្រូវពេលមាត់តួអង្គ (មិនលឿនពេក មិនយឺតពេក)
+            mouth_ = max(0.5, e_ - s_)
+            lo_ = min(mouth_ * 0.88, slot0)
+            hi_ = slot0
+
+            def _miss(x):
+                return max(0.0, x - hi_ * 1.03) + max(0.0, lo_ - x)
+
+            def _fit_rate(text_, d_cur, p_cur):
+                for _k in range(2):
+                    if _miss(d_cur) <= 0:
+                        break
+                    try:
                         try:
-                            base_ = int(str(pros[i]["rate"]).replace("%", "").replace("+", ""))
+                            base_ = int(str((p_cur or {}).get("rate", "-4%")).replace("%", "").replace("+", ""))
                         except Exception:
                             base_ = -4
-                    if d_ > slot0 * 1.04:
-                        extra_ = int(min(50, (d_ / slot0 - 1.0) * 100))
-                    else:
-                        extra_ = -int(min(14, (1.0 - d_ / slot_fill_) * 60))
-                    new_rate = max(-20, min(50, base_ + extra_))
-                    p2_ = {"rate": f"{new_rate:+d}%",
-                           "volume": (pros[i]["volume"] if pros[i] else "+0%"),
-                           "pitch": (pros[i]["pitch"] if pros[i] else "+0Hz")}
-                    path2_ = os.path.join(folder, f"tts_{i}_f.mp3")
-                    if tts_retry(t_, voices_[i], path2_, p2_, tries=2):
+                        goal_ = hi_ * 0.97 if d_cur > hi_ * 1.03 else min(hi_, mouth_ * 0.95)
+                        mult_ = (1.0 + base_ / 100.0) * (d_cur / max(0.3, goal_))
+                        new_rate = int(round(max(-20, min(55, (mult_ - 1.0) * 100))))
+                        if new_rate == base_:
+                            break
+                        p2_ = {"rate": f"{new_rate:+d}%",
+                               "volume": (p_cur or {}).get("volume", "+0%"),
+                               "pitch": (p_cur or {}).get("pitch", "+0Hz")}
+                        path2_ = os.path.join(folder, f"tts_{i}_f.mp3")
+                        if not tts_retry(text_, voices_[i], path2_, p2_, tries=2):
+                            break
                         d2_, _, _ = probe_media(path2_)
-                        faster_ = d_ > slot0 * 1.04 and d2_ < d_
-                        slower_ = d_ <= slot0 * 1.04 and d_ < d2_ <= slot0
-                        if faster_ or slower_:
+                        if _miss(d2_) < _miss(d_cur):
                             shutil.move(path2_, path_)
-                            d_ = d2_
-                except Exception:
-                    pass
-            # ប្រយោគវែងពេកជាង ១.៤ ដង នៃចន្លោះមាត់ (លឿនជាងនេះស្តាប់មិនបាន)៖ បង្រួមបន្តិចរក្សាអត្ថន័យ
-            # ហើយបង្កើតសំឡេងម្តងទៀត យកតែបើខ្លីជាងពិតប្រាកដ។
-            if (not clone_voice) and d_ > slot0 * 1.8 and len(t_) > 40:
+                            d_cur, p_cur = d2_, p2_
+                        else:
+                            break
+                    except Exception:
+                        break
+                return d_cur, p_cur
+
+            p_cur_ = pros[i]
+            if not clone_voice:
+                d_, p_cur_ = _fit_rate(t_, d_, p_cur_)
+            # នៅតែវែងពេក៖ បង្រួមឃ្លាបន្តិច (រក្សាអត្ថន័យ) រួចតម្រឹមល្បឿនម្តងទៀត
+            if (not clone_voice) and d_ > slot0 * 1.25 and len(t_) > 24:
                 short_ = condense_for_slot(t_, slot0, client, model, groq_key)
                 if short_ != t_:
                     path3_ = os.path.join(folder, f"tts_{i}_s.mp3")
-                    if tts_retry(short_, voices_[i], path3_, pros[i], tries=2):
+                    if tts_retry(short_, voices_[i], path3_, p_cur_, tries=2):
                         d3_, _, _ = probe_media(path3_)
                         if d3_ < d_ * 0.9:
                             shutil.move(path3_, path_)
                             d_ = d3_
+                            d_, p_cur_ = _fit_rate(short_, d_, p_cur_)
             # Preserve the complete translated sentence otherwise.
             if clone_voice:
                 try:
@@ -3342,7 +3478,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         start = max(s + offset - lead, 0.0)
         if start >= duration - 0.3:
             break
-        slot = max(0.6, min(next_s - 0.04, e + (0.3 if tight else 1.2)) - start)
+        slot = max(0.6, min(next_s - 0.04, e + (0.4 if tight else 1.2)) - start)
         # Fit the complete generated sentence into its available slot when
         # possible. atempo > 1 speeds up; < 1 slows down. Avoid extreme rates
         # that make Khmer hard to understand.
@@ -3574,7 +3710,15 @@ def run_worker(job, item, settings, fonts_data):
                 item["pct"] = 0.6
                 rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                 try:
-                    client = (make_gemini_client(settings["gemini_key"]) if used_engine == "gemini" else None)
+                    client = None
+                    dub_model = used_model
+                    if settings["gemini_key"]:
+                        try:
+                            client = make_gemini_client(settings["gemini_key"], types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
+                            _ms = model_order(get_available_models(client)[:5], "gemini")
+                            dub_model = _ms[0] if _ms else None
+                        except Exception:
+                            client = None
                     dub_segments = merge_for_dub(segments)
                     seg_voices = None
                     targets = None
@@ -3643,7 +3787,7 @@ def run_worker(job, item, settings, fonts_data):
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     try:
-                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, used_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=0.0, tight=False)
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=0.0, tight=True)
                     finally:
                         if clone_voice:
                             eleven_delete_voice(settings["eleven_key"], clone_voice)
@@ -3925,11 +4069,13 @@ with tab_vid:
 with tab_trans:
     with st.container(border=True):
         engine_options = []
-        if GEMINI_KEY:
-            engine_options.append(ENGINE_GEMINI)   # Gemini ស្តាប់ និងទាញអត្ថបទពីវីដេអូជាមុន
         if GROQ_KEY:
             engine_options.append(ENGINE_FREE)
+        if GEMINI_KEY:
+            engine_options.append(ENGINE_GEMINI)   # Gemini = ម៉ាស៊ីនបម្រុង
         engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0)
+        if GROQ_KEY and GEMINI_KEY:
+            st.caption("🔁 បើម៉ាស៊ីនទីមួយមានបញ្ហា ឬអស់កូតា កម្មវិធីប្តូរទៅ Gemini បម្រុងដោយស្វ័យប្រវត្តិ។")
         lc1, lc2 = st.columns(2)
         with lc1:
             language_label = st.selectbox("ភាសាដើម", list(LANGUAGES.keys()), index=0)
