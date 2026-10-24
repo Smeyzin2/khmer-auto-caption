@@ -4138,6 +4138,41 @@ def build_zip(items, folder):
     return zip_path
 
 
+class _NoProgress:
+    def progress(self, *a, **k):
+        pass
+
+    def write(self, *a, **k):
+        pass
+
+
+def fetch_link_preview(url):
+    """ទាញវីដេអូពីតំណមកទុកជាមុន (ដើម្បីបង្ហាញ មើល ទាញយក និងបកប្រែ)។"""
+    cache = st.session_state.setdefault("link_cache", {})
+    ent = cache.get(url)
+    if ent is not None:
+        return ent
+    folder = tempfile.mkdtemp(prefix="kac_link_")
+    path = os.path.join(folder, "video.mp4")
+    try:
+        download_video(url, path, _NoProgress())
+        ent = {"path": path, "ok": True}
+    except Exception:
+        shutil.rmtree(folder, ignore_errors=True)
+        ent = {"path": None, "ok": False}
+    cache[url] = ent
+    return ent
+
+
+def drop_link_cache(keep=()):
+    cache = st.session_state.get("link_cache", {})
+    for k in list(cache.keys()):
+        if k not in keep:
+            ent = cache.pop(k)
+            if ent.get("path"):
+                shutil.rmtree(os.path.dirname(ent["path"]), ignore_errors=True)
+
+
 def dl_button(label, data, file_name, mime, key, **kwargs):
     if ST_VER >= (1, 43):
         return st.download_button(label, data=data, file_name=file_name, mime=mime, key=key, on_click="ignore", **kwargs)
@@ -4412,12 +4447,42 @@ with tab_vid:
                         label_visibility="collapsed", key="mode_pick")
         uploaded_files = []
         link_text = ""
+        link_translate = False
         if mode.startswith("📁"):
             uploaded_files = st.file_uploader(
                 "បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"],
                 accept_multiple_files=True) or []
         else:
             link_text = st.text_area("តំណវីដេអូ TikTok (មួយបន្ទាត់ ១ តំណ)", placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ", height=90)
+            _link_lines = [ln.strip() for ln in link_text.splitlines()
+                           if ln.strip().lower().startswith(("http://", "https://"))][:MAX_VIDEOS]
+            drop_link_cache(keep=_link_lines)
+            _any_ok = False
+            for _n, _u in enumerate(_link_lines, start=1):
+                if _u not in st.session_state.get("link_cache", {}):
+                    with st.spinner(f"កំពុងរកវីដេអូទី {_n}..."):
+                        _ent = fetch_link_preview(_u)
+                else:
+                    _ent = fetch_link_preview(_u)
+                if _ent["ok"] and _ent["path"] and os.path.isfile(_ent["path"]):
+                    _any_ok = True
+                    try:
+                        st.video(_ent["path"])
+                    except Exception:
+                        pass
+                    with open(_ent["path"], "rb") as _fh:
+                        _bytes = _fh.read()
+                    dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _bytes, f"video_{_n}.mp4", "video/mp4",
+                              key=f"dl_link_{_n}", use_container_width=True)
+                    del _bytes
+                else:
+                    st.error("រកតំណមិនឃើញ។ ព្យាយាមម្តងទៀត។")
+                    if st.button("🔄 ព្យាយាមម្តងទៀត", key=f"retry_link_{_n}", use_container_width=True):
+                        st.session_state.get("link_cache", {}).pop(_u, None)
+                        st.rerun()
+            if _any_ok:
+                link_translate = st.button("✨ បកប្រែ", type="primary", use_container_width=True,
+                                           disabled=busy, key="link_translate_btn")
         st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
         _ram_txt = server_ram_info()
         if _ram_txt:
@@ -4610,9 +4675,11 @@ if uploaded_files:
         items.append({"name": f.name, "file": f, "url": None})
 else:
     lines = [ln.strip() for ln in link_text.splitlines() if ln.strip().lower().startswith(("http://", "https://"))]
+    _cache = st.session_state.get("link_cache", {})
+    lines = [u for u in lines if _cache.get(u, {}).get("ok")]
     too_many = len(lines) > MAX_VIDEOS
     for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
-        items.append({"name": f"វីដេអូទី {i}", "file": None, "url": url})
+        items.append({"name": f"វីដេអូទី {i}", "file": None, "url": url, "cached": _cache[url]["path"]})
 
 # ============================ ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) ============================
 run = False
@@ -4628,6 +4695,9 @@ with start_slot:
         run = st.button(label, type="primary", use_container_width=True)
     if too_many:
         st.caption(f"⚠️ ធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូដំបូង។")
+
+if link_translate and items and not busy:
+    run = True
 
 if run:
     try:
@@ -4668,6 +4738,10 @@ if run:
             p = os.path.join(job_folder, f"upload_{idx}.bin")
             with open(p, "wb") as f:
                 f.write(it["file"].getbuffer())
+            item["path"] = p
+        elif it.get("cached") and os.path.isfile(it["cached"]):
+            p = os.path.join(job_folder, f"upload_{idx}.bin")
+            shutil.copyfile(it["cached"], p)
             item["path"] = p
         job_items.append(item)
     job = Job(job_items, job_folder)
