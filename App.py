@@ -1645,7 +1645,8 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
         for i, t in enumerate(texts)
     )
     models = groq_chat_models(api_key)
-    models = model_order(models, "groq")
+    _strong = [m for m in models if not any(x in m.lower() for x in ("8b", "instant", "scout", "20b"))]
+    models = model_order(_strong or models, "groq")
     if rotate and len(models) > 1:
         _shift = (int(rotate) if not isinstance(rotate, bool) else 1) % len(models)
         models = models[_shift:] + models[:_shift]   # ឱ្យម៉ូដែលផ្សេងពីអ្នកបកដំបូង មកពិនិត្យ
@@ -1832,6 +1833,67 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
     return result
 
 
+JUDGE_SYSTEM = (
+    "You are the final Khmer (Cambodian) dubbing judge. Each item has the ORIGINAL line, sometimes an ENGLISH meaning, and two Khmer candidates A and B. "
+    "Decide which candidate is MORE FAITHFUL to the original (every fact, name, number, negation, who-does-what-to-whom, tone) AND sounds like natural everyday spoken Khmer. "
+    "Then output the best final Khmer line: you may pick A, pick B, or fix/merge them if both have a flaw. Never add information that is not in the original, never drop a negation or a number. "
+    "Use neighbouring lines for context (speakers, pronouns, politeness) and keep pronouns consistent. Do not make it longer than needed. "
+    "One complete sentence per item, Khmer script only, end with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
+    "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
+)
+
+
+def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress=None, shift=2):
+    """ប្រៀបធៀបឃ្លាបកពីរបែប ហើយជ្រើស/កែយកមួយល្អបំផុត (ត្រឹមត្រូវតាមអត្ថន័យដើម និងធម្មជាតិ)។"""
+    n = len(cand_a)
+    result = list(cand_a)
+    groups = [list(range(k, min(k + 6, n))) for k in range(0, n, 6)]
+
+    def work(idxs):
+        rows = []
+        for i in idxs:
+            row = f"ORIGINAL: {str(texts[i]).strip()}"
+            if englishes[i] and "[unclear]" not in englishes[i]:
+                row += f" | ENGLISH: {englishes[i]}"
+            row += f" | A: {cand_a[i]} | B: {cand_b[i]}"
+            rows.append(row)
+        prev = [str(cand_a[j]) for j in range(max(0, idxs[0] - 3), idxs[0]) if cand_a[j]]
+        nxt = [str(cand_a[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 3)) if cand_a[j]]
+        ctx = ""
+        if prev:
+            ctx += "PREVIOUS LINES (context only): " + " / ".join(prev) + " "
+        if nxt:
+            ctx += "NEXT LINES (context only): " + " / ".join(nxt)
+        if gemini_key:
+            try:
+                res = gemini_lines(gemini_key, JUDGE_SYSTEM + " " + ctx, rows)
+                if res:
+                    return idxs, res
+            except Exception:
+                pass
+        if groq_key:
+            try:
+                return idxs, groq_translate_chunk(groq_key, rows, None, system=JUDGE_SYSTEM + " " + ctx, rotate=shift)
+            except Exception:
+                pass
+        return idxs, None
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        for idxs, res in pool.map(work, groups):
+            if res:
+                for i, r in zip(idxs, res):
+                    if r and has_khmer(str(r)) and khmer_dominant(str(r)):
+                        result[i] = r
+            done += len(idxs)
+            if progress:
+                try:
+                    progress(f"កំពុងជ្រើសការបកប្រែល្អបំផុត {done}/{n} ឃ្លា...")
+                except Exception:
+                    pass
+    return result
+
+
 def make_synopsis(english, texts, gemini_key, groq_key):
     """សង្ខេបរឿងទាំងមូល (អ្នកណានិយាយទៅអ្នកណា ប្រធានបទ អារម្មណ៍) ជាអង់គ្លេស ដើម្បីជួយបកប្រែឱ្យត្រូវបរិបទ។"""
     body = " ".join((english[i] or str(texts[i])) for i in range(len(texts)))[:7000]
@@ -1929,7 +1991,7 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
     n = len(outs)
     result = list(outs)
     over = [i for i in range(n)
-            if budgets[i] and len(str(outs[i])) > budgets[i] * 1.25 and len(str(outs[i])) > 24]
+            if budgets[i] and len(str(outs[i])) > budgets[i] * 1.6 and len(str(outs[i])) > 30]
     if not over:
         return result
     groups = [over[k:k + 6] for k in range(0, len(over), 6)]
@@ -2155,15 +2217,15 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     # ពិនិត្យ ២ ជុំ ដោយម៉ូដែលផ្សេងគ្នា លើគ្រប់ឃ្លា (ជុំទី២ ពិនិត្យអត្ថន័យ និងភាពស៊ីសង្វាក់ម្តងទៀត)
     allidx = list(range(n))
     if allidx and (groq_key or gemini_key) and all(o and has_khmer(str(o)) for o in outs):
-        for _pass, _shift in enumerate((1, 2)):
-            try:
-                sub = refine_khmer([texts[i] for i in allidx], [english[i] for i in allidx], [outs[i] for i in allidx],
-                                   gemini_key, groq_key, progress=progress, shift=_shift)
-                for i, r in zip(allidx, sub):
-                    if r:
-                        outs[i] = r
-            except Exception as e:
-                errors.append(f"refine{_pass + 1}: {e}"[:200])
+        try:
+            cand_a = list(outs)
+            cand_b = refine_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a,
+                                  gemini_key, groq_key, progress=progress, shift=1)
+            cand_b = [b or a for a, b in zip(cand_a, cand_b)]
+            outs = judge_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a, cand_b,
+                               gemini_key, groq_key, progress=progress, shift=2)
+        except Exception as e:
+            errors.append(f"refine/judge: {e}"[:200])
     # តម្រឹមប្រវែងឃ្លាខ្មែរឱ្យសមនឹងពេលមាត់តួអង្គនិយាយ (lip-sync)
     if budgets and all(o and has_khmer(str(o)) for o in outs):
         try:
@@ -2426,7 +2488,7 @@ def transcribe_khmer_google(audio_path, duration, speech, status):
     return out
 
 
-KHMER_CPS = 12.0   # តួអក្សរខ្មែរដែលសំឡេង AI អានបានក្នុង ១ វិនាទី (ប្រហែល)
+KHMER_CPS = 14.0   # តួអក្សរខ្មែរដែលសំឡេង AI អានបានក្នុង ១ វិនាទី (ប្រហែល)
 
 
 def lip_budgets(segs):
@@ -3439,7 +3501,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             if not clone_voice:
                 d_, p_cur_ = _fit_rate(t_, d_, p_cur_)
             # នៅតែវែងពេក៖ បង្រួមឃ្លាបន្តិច (រក្សាអត្ថន័យ) រួចតម្រឹមល្បឿនម្តងទៀត
-            if (not clone_voice) and d_ > slot0 * 1.25 and len(t_) > 24:
+            if (not clone_voice) and d_ > slot0 * 1.6 and len(t_) > 30:
                 short_ = condense_for_slot(t_, slot0, client, model, groq_key)
                 if short_ != t_:
                     path3_ = os.path.join(folder, f"tts_{i}_s.mp3")
