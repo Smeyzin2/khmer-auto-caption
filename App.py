@@ -4417,14 +4417,24 @@ document.getElementById("b").onclick = async () => {
     const bin = atob(B64);
     const arr = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
-    const file = new File([arr], NAME, {type: "video/mp4"});
-    if (navigator.canShare && navigator.canShare({files: [file]})) {
-      await navigator.share({files: [file]});
-    } else {
-      m.textContent = "ឧបករណ៍ ឬកម្មវិធីរុករកនេះមិនគាំទ្រការបង្ហោះផ្ទាល់ទេ។ សូមទាញយកវីដេអូជាមុន។";
+    const targets = [];
+    try { if (window.parent && window.parent.navigator && window.parent.File) targets.push([window.parent.navigator, window.parent.File]); } catch (e) {}
+    targets.push([navigator, File]);
+    for (const [nav, F] of targets) {
+      try {
+        const file = new F([arr], NAME, {type: "video/mp4"});
+        if (nav.canShare && nav.canShare({files: [file]})) {
+          await nav.share({files: [file]});
+          return;
+        }
+      } catch (e) {
+        if (e && e.name === "AbortError") return;
+      }
     }
+    m.innerHTML = "ឧបករណ៍ ឬកម្មវិធីរុករកនេះមិនគាំទ្រការបង្ហោះផ្ទាល់ទេ។ សូមទាញយកវីដេអូ រួច "
+      + '<a href="https://www.tiktok.com/tiktokstudio/upload" target="_blank" style="color:#fff">បើកទំព័រ TikTok</a>';
   } catch (e) {
-    if (e && e.name !== "AbortError") m.textContent = "មិនអាចបង្ហោះបានទេ។ សូមទាញយកវីដេអូជាមុន។";
+    m.textContent = "មិនអាចបង្ហោះបានទេ។ សូមទាញយកវីដេអូជាមុន។";
   }
 };
 </script>
