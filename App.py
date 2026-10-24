@@ -4388,18 +4388,11 @@ def make_mobile_copy(src, dst):
 PREVIEW_MAX_MB = 60   # វីដេអូធំជាងនេះ មិនបង្ហាញ preview
 
 
-PUBLISH_LINKS = (
-    ("▶️ YouTube", "https://www.youtube.com/upload"),
-    ("📘 Reels", "https://www.facebook.com/reels/create"),
-    ("🎵 TikTok", "https://www.tiktok.com/tiktokstudio/upload"),
-)
-
-
 SHARE_MAX_MB = 30
 
 
 def share_button(path, fname):
-    """ចែករំលែកវីដេអូផ្ទាល់ទៅកម្មវិធី YouTube/Facebook/TikTok ក្នុងទូរស័ព្ទ (មិនបាច់ទាញយក)។"""
+    """បង្ហោះវីដេអូទៅ TikTok តាមបញ្ជី Share ក្នុងទូរស័ព្ទ (មិនបាច់ទាញយក)។"""
     try:
         size = os.path.getsize(path)
     except Exception:
@@ -4412,11 +4405,11 @@ def share_button(path, fname):
         """
 <button id="b" style="width:100%;padding:14px;font-size:17px;font-weight:700;color:#fff;border:0;
 border-radius:14px;background:linear-gradient(90deg,#B13CFF,#3C6BFF);cursor:pointer;
-font-family:system-ui,sans-serif;">📤 បង្ហោះផ្ទាល់ (YouTube · Facebook · TikTok)</button>
+font-family:system-ui,sans-serif;">🎵 បង្ហោះទៅ TikTok</button>
 <div id="m" style="color:#ffb4b4;font-size:14px;margin-top:6px;font-family:system-ui,sans-serif;"></div>
 <script>
-const B64 = "%s";
-const NAME = %s;
+const B64 = "__B64__";
+const NAME = __NAME__;
 document.getElementById("b").onclick = async () => {
   const m = document.getElementById("m");
   m.textContent = "";
@@ -4428,28 +4421,17 @@ document.getElementById("b").onclick = async () => {
     if (navigator.canShare && navigator.canShare({files: [file]})) {
       await navigator.share({files: [file]});
     } else {
-      m.textContent = "ឧបករណ៍ ឬកម្មវិធីរុករកនេះមិនគាំទ្រការបង្ហោះផ្ទាល់ទេ។";
+      m.textContent = "ឧបករណ៍ ឬកម្មវិធីរុករកនេះមិនគាំទ្រការបង្ហោះផ្ទាល់ទេ។ សូមទាញយកវីដេអូជាមុន។";
     }
   } catch (e) {
-    if (e && e.name !== "AbortError") m.textContent = "មិនអាចបង្ហោះផ្ទាល់បានទេ។";
+    if (e && e.name !== "AbortError") m.textContent = "មិនអាចបង្ហោះបានទេ។ សូមទាញយកវីដេអូជាមុន។";
   }
 };
 </script>
-""" % (b64, json.dumps(fname)),
+""".replace("__B64__", b64).replace("__NAME__", json.dumps(fname)),
         height=84,
     )
     return True
-
-
-def publish_buttons(key_prefix):
-    st.caption("📤 ឬបើកទំព័របង្ហោះរបស់វេទិកា")
-    cols = st.columns(len(PUBLISH_LINKS))
-    for col, (label, url) in zip(cols, PUBLISH_LINKS):
-        with col:
-            if hasattr(st, "link_button"):
-                st.link_button(label, url, use_container_width=True)
-            else:
-                st.markdown(f"[{label}]({url})")
 
 
 def download_area(job):
@@ -4474,8 +4456,10 @@ def download_area(job):
                 with open(vp, "rb") as vf:
                     dl_button("⬇️ ទាញយកវីដេអូ", vf, fname, "video/mp4",
                               key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
-                share_button(vp, fname)
-                publish_buttons(f"pub_{job.id}_{i}")
+                if not share_button(vp, fname):
+                    if hasattr(st, "link_button"):
+                        st.link_button("🎵 បង្ហោះទៅ TikTok", "https://www.tiktok.com/tiktokstudio/upload",
+                                       use_container_width=True)
                 if size_mb <= PREVIEW_MAX_MB:
                     with st.expander("▶️ មើលវីដេអូ"):
                         st.video(vp)
