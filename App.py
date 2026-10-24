@@ -1875,7 +1875,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         english[i] = r
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
-    synopsis = make_synopsis(english, texts, gemini_key, groq_key) if ((gemini_key or groq_key) and n > 2) else ""
+    synopsis = make_synopsis(english, texts, None, groq_key) if (groq_key and n > 2) else ""
     # ជំហាន ២: Gemini បកជាខ្មែរមុន (ល្អបំផុតសម្រាប់ខ្មែរ) ដោយមានបរិបទមុន/ក្រោយ
     missing = [i for i, o in enumerate(outs) if o is None]
     batches = [missing[k:k + 6] for k in range(0, len(missing), 6)]
@@ -2012,9 +2012,9 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         if r and has_khmer(str(r)):
             outs[i] = r
     # ជំហានកែសម្រួលចុងក្រោយ: ពិនិត្យអត្ថន័យខ្មែរប្រៀបនឹងអត្ថបទដើម
-    if (gemini_key or groq_key) and all(o and has_khmer(str(o)) for o in outs):
+    if groq_key and not gemini_key and all(o and has_khmer(str(o)) for o in outs):
         try:
-            outs = refine_khmer(texts, english, outs, gemini_key, groq_key, progress=progress)
+            outs = refine_khmer(texts, english, outs, None, groq_key, progress=progress)
         except Exception as e:
             errors.append(f"refine: {e}"[:200])
     # កុំទុកលទ្ធផលទទេ ឬអង់គ្លេសសុទ្ធឱ្យបន្តជាសំឡេង dubbing
@@ -3582,7 +3582,7 @@ def run_worker(job, item, settings, fonts_data):
                     if settings["emotion"]:
                         try:
                             rep.write("🎭 កំពុងវិភាគអារម្មណ៍...")
-                            emotions, emo_lines = plan_emotions(dub_segments, seg_voices, pitch_inf, runs_, settings["groq_key"], settings["gemini_key"])
+                            emotions, emo_lines = plan_emotions(dub_segments, seg_voices, pitch_inf, runs_, settings["groq_key"], None)
                             voice_notes = voice_notes + emo_lines
                         except Exception:
                             emotions = None
