@@ -4456,7 +4456,16 @@ with tab_vid:
             link_text = st.text_area("តំណវីដេអូ TikTok (មួយបន្ទាត់ ១ តំណ)", placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ", height=90)
             _link_lines = [ln.strip() for ln in link_text.splitlines()
                            if ln.strip().lower().startswith(("http://", "https://"))][:MAX_VIDEOS]
-            drop_link_cache(keep=_link_lines)
+            if st.button("🔍 ស្វែងរក", type="primary", use_container_width=True, key="link_search_btn",
+                         disabled=(not _link_lines)):
+                _cache0 = st.session_state.get("link_cache", {})
+                for _u0 in _link_lines:
+                    if _u0 in _cache0 and not _cache0[_u0].get("ok"):
+                        _cache0.pop(_u0, None)
+                st.session_state["link_searched"] = list(_link_lines)
+            _searched = [u for u in st.session_state.get("link_searched", []) if u in _link_lines]
+            drop_link_cache(keep=_searched)
+            _link_lines = _searched
             _any_ok = False
             for _n, _u in enumerate(_link_lines, start=1):
                 if _u not in st.session_state.get("link_cache", {}):
