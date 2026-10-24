@@ -2105,29 +2105,46 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
     if missing:
         _say(f"កំពុងបកឃ្លាដែលនៅខ្វះ {len(missing)} ឃ្លា...")
-    for i in missing:
-        one = [str(texts[i]).strip()]
-        bud = [budgets[i]] if budgets else None
-        r = None
-        if gemini_key:
-            try:
-                r = gemini_translate_khmer(gemini_key, one, [english[i]], bud)[0]
-            except Exception as e:
-                errors.append(f"gemini-1: {e}"[:200])
-        if (not r or not has_khmer(str(r))) and groq_key:
-            try:
-                r = groq_translate_chunk(groq_key, one, bud)[0]
-            except Exception as e:
-                errors.append(f"groq-1: {e}"[:200])
-            time.sleep(0.6)
-        if not r or not has_khmer(str(r)):
-            try:
-                r = clean_translation(google_translate_request(english[i] or one[0]))
-            except Exception as e:
-                errors.append(f"google-1: {e}"[:200])
-                time.sleep(5)
-        if r and has_khmer(str(r)):
-            outs[i] = r
+        # ធ្វើស្របគ្នា + ឈប់សាកម៉ាស៊ីនដែលខូចជាប់ៗគ្នា + កំណត់ពេលអតិបរមា ដើម្បីកុំឱ្យរង់ចាំយូរដូចគាំង
+        dead = {"gemini": 0, "groq": 0, "google": 0}
+        t_end = time.time() + 75
+        lock = threading.Lock()
+
+        def _fail(name, msg):
+            with lock:
+                dead[name] += 1
+                errors.append(msg[:200])
+
+        def _one_line(i):
+            if time.time() > t_end:
+                return i, None
+            one = [str(texts[i]).strip()]
+            bud = [budgets[i]] if budgets else None
+            r = None
+            if gemini_key and dead["gemini"] < 2:
+                try:
+                    r = gemini_translate_khmer(gemini_key, one, [english[i]], bud)[0]
+                    dead["gemini"] = 0
+                except Exception as e:
+                    _fail("gemini", f"gemini-1: {e}")
+            if (not r or not has_khmer(str(r))) and groq_key and dead["groq"] < 2 and time.time() < t_end:
+                try:
+                    r = groq_translate_chunk(groq_key, one, bud)[0]
+                    dead["groq"] = 0
+                except Exception as e:
+                    _fail("groq", f"groq-1: {e}")
+            if (not r or not has_khmer(str(r))) and dead["google"] < 2 and time.time() < t_end:
+                try:
+                    r = clean_translation(google_translate_request(english[i] or one[0], retries=1))
+                    dead["google"] = 0
+                except Exception as e:
+                    _fail("google", f"google-1: {e}")
+            return i, r
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for i, r in pool.map(_one_line, missing):
+                if r and has_khmer(str(r)):
+                    outs[i] = r
     # ជំហានកែសម្រួលចុងក្រោយ: ពិនិត្យអត្ថន័យខ្មែរប្រៀបនឹងអត្ថបទដើម
     weak = [i for i in range(n) if i not in gem_ok]
     if weak and (groq_key or gemini_key) and all(o and has_khmer(str(o)) for o in outs):
