@@ -520,6 +520,7 @@ MAX_UPLOAD_MB = 100  # ទំហំអតិបរមាសម្រាប់ Up
 MAX_DOWNLOAD_MB = _env_int("MAX_DOWNLOAD_MB", 200000)   # តំណវីដេអូ: ទំហំប៉ុន្មានក៏បាន (ចំនួនធំណាស់)
 MAX_VIDEOS = _env_int("MAX_VIDEOS", 10)
 MAX_ZIP_MB = 600
+MOBILE_COPY = os.environ.get("MOBILE_COPY", "0") == "1"   # បង្កើតកំណែតូចសម្រាប់ទូរស័ព្ទ (encode ម្តងទៀត → យឺត) លំនាំដើមបិទ
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 2
 MAX_VIDEOS_AT_ONCE = _env_int("MAX_VIDEOS_AT_ONCE", 2)   # ធ្វើវីដេអូស្របគ្នាអតិបរមា ២ ដើម្បីកុំឲ្យអស់រ៉េមរហូតគាំងកម្មវិធី
@@ -573,8 +574,8 @@ FONT_SOURCES = [
 ]
 
 QUALITY = {
-    "⚡ លឿន 480p": (480, 30, "veryfast"),
-    "✨ ល្អ 720p": (720, 28, "veryfast"),
+    "⚡ លឿន 480p": (480, 30, "ultrafast"),
+    "✨ ល្អ 720p": (720, 28, "superfast"),
     "💎 ខ្ពស់ (ដើម)": (0, 25, "veryfast"),
 }
 
@@ -679,6 +680,48 @@ def run_ffmpeg(args, cwd=None, verbose=False, env=None):
         err = (e.stderr or b"").decode("utf-8", "ignore")[-1500:]
         raise RuntimeError("FFmpeg បរាជ័យ:\n" + err)
     return (result.stderr or b"").decode("utf-8", "ignore")
+
+
+def run_ffmpeg_progress(args, cwd=None, env=None, total=0.0, on_pct=None):
+    """រត់ ffmpeg ហើយរាយការណ៍ភាគរយ (មិនចាំបាច់រង់ចាំងងឹតរហូតចប់)។"""
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    cmd = [exe, "-y", "-nostats", "-progress", "pipe:1"] + args
+    full_env = None
+    if env:
+        full_env = os.environ.copy()
+        full_env.update(env)
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=cwd, env=full_env,
+                            text=True, encoding="utf-8", errors="ignore")
+    err_buf = []
+
+    def _drain():
+        for line in proc.stderr:
+            err_buf.append(line)
+            if len(err_buf) > 400:
+                del err_buf[:200]
+
+    th = threading.Thread(target=_drain, daemon=True)
+    th.start()
+    t0 = time.time()
+    last_cb = 0.0
+    for line in proc.stdout:
+        if not line.startswith("out_time_us="):
+            continue
+        try:
+            sec = int(line.split("=", 1)[1]) / 1e6
+        except Exception:
+            continue
+        now = time.time()
+        if total > 0 and on_pct and now - last_cb >= 1.0:
+            last_cb = now
+            try:
+                on_pct(max(0.0, min(0.99, sec / total)), now - t0)
+            except Exception:
+                pass
+    proc.wait()
+    th.join(timeout=3)
+    if proc.returncode != 0:
+        raise RuntimeError("FFmpeg បរាជ័យ:\n" + "".join(err_buf)[-1500:])
 
 
 def probe_media(path):
@@ -4040,38 +4083,63 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
     plan = [(0, False), (0, True)]
     plan += [(i, True) for i in range(1, len(fonts))]
     attempts = []
-    have_output = False
-    best = None
+    chosen = None
+    fallback = None
+    # ជំហាន ១: សាក Font លើក្លីបខ្លី ១.៥ វិនាទី (លឿន) ជំនួសឱ្យ render ទាំងមូលច្រើនដង
     for font_index, use_conf in plan:
         font_path, default_name = fonts[font_index]
         family = get_font_family(font_path, default_name)
         keys = [family.lower(), default_name.lower()]
-        write_ass(ass_path, captions, family, font_size, outline_size, color, vid_w, vid_h, style)
-        args = ["-i", "input.mp4"]
-        if dub:
-            args += ["-i", "dub.wav"]
-        extra_in, vf_args = video_filter_args(max_side, True, dub, fx_spec, vid_w, vid_h)
-        args += extra_in + vf_args
-        args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
-                 "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1],
-                 "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "output.mp4"]
+        write_ass(ass_path, [(0.0, 3.0, "ខ្ញុំស្រឡាញ់អ្នក")], family, font_size, outline_size, color, vid_w, vid_h, style)
         try:
-            log = run_ffmpeg(args, cwd=folder, verbose=True, env=conf_env if use_conf else None)
+            log = run_ffmpeg(
+                ["-i", "input.mp4", "-t", "1.5", "-an",
+                 "-vf", "ass=filename=captions.ass:fontsdir=.,format=yuv420p",
+                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "40", "font_test.mp4"],
+                cwd=folder, verbose=True, env=conf_env if use_conf else None)
         except RuntimeError:
             attempts.append(f"{family} conf={use_conf}: ffmpeg error")
-            if not have_output and (font_index, use_conf) == plan[-1]:
-                raise
             continue
         ok = font_was_used(log, keys)
         attempts.append(f"{family} conf={use_conf}: ok={ok}")
-        have_output = True
-        best = (family, log)
+        if fallback is None:
+            fallback = (font_index, use_conf, family, log)
         if ok:
+            chosen = (font_index, use_conf, family, log)
             break
         dbg(status, f"Font {family} មិនត្រូវបានប្រើ កំពុងសាកវិធីផ្សេង...")
-    if not have_output:
+    if chosen is None:
+        chosen = fallback
+    if chosen is None:
         raise RuntimeError("Render មិនបាន។\n" + "\n".join(attempts))
-    return output_path, best[0], best[1], attempts
+    font_index, use_conf, family, test_log = chosen
+    # ជំហាន ២: render ពេញមួយដងតែប៉ុណ្ណោះ ជាមួយ Font ដែលបានជ្រើស
+    write_ass(ass_path, captions, family, font_size, outline_size, color, vid_w, vid_h, style)
+    args = ["-i", "input.mp4"]
+    if dub:
+        args += ["-i", "dub.wav"]
+    extra_in, vf_args = video_filter_args(max_side, True, dub, fx_spec, vid_w, vid_h)
+    args += extra_in + vf_args
+    args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+             "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1],
+             "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "output.mp4"]
+    try:
+        total_dur = probe_media(os.path.join(folder, "input.mp4"))[0]
+    except Exception:
+        total_dur = 0.0
+    item_ = getattr(status, "item", None)
+
+    def _on_pct(frac, elapsed):
+        if item_ is None:
+            return
+        item_["pct"] = max(item_.get("pct", 0.0), 0.82 + 0.17 * frac)
+        msg = f"៤/៤ កំពុងដាក់អក្សរចូលវីដេអូ... {int(frac * 100)}%"
+        if frac > 0.03:
+            msg += f" · នៅសល់ប្រហែល {int(elapsed / frac - elapsed)} វិនាទី"
+        item_["stage"] = msg
+
+    run_ffmpeg_progress(args, cwd=folder, env=conf_env if use_conf else None, total=total_dur, on_pct=_on_pct)
+    return output_path, family, test_log, attempts
 
 
 def new_item(name, path=None, url=None):
@@ -4291,7 +4359,7 @@ def run_worker(job, item, settings, fonts_data):
             shutil.move(out_path, final_path)
             item["video_path"] = final_path
             out_size = os.path.getsize(final_path)
-            if out_size > 40 * 1024 * 1024:
+            if MOBILE_COPY and out_size > 40 * 1024 * 1024:
                 try:
                     rep.write("📱 កំពុងបង្កើតកំណែតូចសម្រាប់ទូរស័ព្ទ...")
                     item["small_path"] = make_mobile_copy(final_path, os.path.join(job.folder, f"mobile_{uuid.uuid4().hex[:8]}.mp4"))
