@@ -4901,10 +4901,10 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             try:
-                st.link_button("🎬 បើក TikTok ShortDrama (ជ្រើសវីដេអូ)", "https://www.tiktok.com/shortdrama",
-                               use_container_width=True)
+                st.link_button("🎬 បើក TikTok", "https://www.tiktok.com/", use_container_width=True)
             except Exception:
-                st.markdown("[🎬 បើក TikTok ShortDrama (ជ្រើសវីដេអូ)](https://www.tiktok.com/shortdrama)")
+                st.markdown("[🎬 បើក TikTok](https://www.tiktok.com/)")
+            st.caption("ក្នុង TikTok (ឬ ShortDrama) ចុច Share → Copy link រួចត្រឡប់មកបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
             with st.expander("⚡ បកប្រែអូតូពី TikTok (Bookmarklet)"):
                 st.markdown(
                     "១. ចម្លងកូដខាងក្រោម រួចបង្កើត Bookmark ថ្មីក្នុង Browser ហើយបិទភ្ជាប់កូដនេះជា «URL» (ដាក់ឈ្មោះ «បកប្រែខ្មែរ»)។\n\n"
