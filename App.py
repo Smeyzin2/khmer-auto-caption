@@ -34,6 +34,73 @@ st.set_page_config(
     layout="wide",
 )
 
+# =====================================================================
+#  MODE កំពុង UPDATE
+#  ► ពេលកំពុង update: ទុក MAINTENANCE_MODE = True  (អ្នកប្រើនឹងឃើញតែសារ «កំពុង Update»)
+#  ► ពេល update ចប់: ប្តូរទៅ False  (ឬដាក់ MAINTENANCE_MODE = "0" ក្នុង Secrets)
+# =====================================================================
+MAINTENANCE_MODE = True
+_maint_env = str(os.environ.get("MAINTENANCE_MODE", "")).strip().lower()
+if _maint_env in ("0", "false", "off", "no"):
+    MAINTENANCE_MODE = False
+elif _maint_env in ("1", "true", "on", "yes"):
+    MAINTENANCE_MODE = True
+
+# លេខសម្ងាត់អ្នកគ្រប់គ្រង (ចូលកែ/សាកល្បងពេលកំពុង update)។ ប្តូរបាន ឬដាក់ MAINTENANCE_KEY ក្នុង Secrets
+MAINTENANCE_ADMIN_KEY = os.environ.get("MAINTENANCE_KEY", "").strip() or "admin1234"
+_is_admin = False
+if MAINTENANCE_MODE:
+    _qk = st.query_params.get("admin")
+    if isinstance(_qk, list):
+        _qk = _qk[0] if _qk else ""
+    if st.session_state.get("_maint_admin") or (_qk and _qk == MAINTENANCE_ADMIN_KEY):
+        st.session_state["_maint_admin"] = True
+        _is_admin = True
+
+if MAINTENANCE_MODE and not _is_admin:
+    st.markdown(
+        """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;700&display=swap');
+.stApp { background: radial-gradient(circle at 50% 0%, #1b1450 0%, #0A0F2E 60%) !important; }
+header, [data-testid="stToolbar"], [data-testid="stSidebar"] { display: none !important; }
+.kvai-maint {
+  max-width: 460px; margin: 18vh auto 0; padding: 36px 26px; text-align: center;
+  border: 1px solid rgba(177,60,255,.45); border-radius: 26px;
+  background: rgba(17,24,66,.75); box-shadow: 0 0 40px rgba(177,60,255,.25);
+  font-family: 'Kantumruy Pro', 'Battambang', sans-serif; color: #E8ECFF;
+}
+.kvai-maint .ic { font-size: 64px; line-height: 1; animation: kvai-spin 3.2s linear infinite; display: inline-block; }
+.kvai-maint h1 { font-size: 28px; margin: 18px 0 8px; color: #fff; }
+.kvai-maint p { font-size: 17px; line-height: 1.7; margin: 6px 0; color: #C9D0FF; }
+.kvai-maint .dots span { animation: kvai-blink 1.4s infinite both; font-size: 30px; color: #B13CFF; }
+.kvai-maint .dots span:nth-child(2) { animation-delay: .2s; }
+.kvai-maint .dots span:nth-child(3) { animation-delay: .4s; }
+@keyframes kvai-spin { to { transform: rotate(360deg); } }
+@keyframes kvai-blink { 0%, 80%, 100% { opacity: .15; } 40% { opacity: 1; } }
+</style>
+<div class="kvai-maint">
+  <div class="ic">⚙️</div>
+  <h1>កំពុង Update</h1>
+  <p>យើងកំពុងធ្វើបច្ចុប្បន្នភាពកម្មវិធី ដើម្បីឱ្យប្រសើរជាងមុន។</p>
+  <p>សូមអត់ធ្មត់ ហើយត្រឡប់មកវិញនៅពេលក្រោយ។ សូមអរគុណ 🙏</p>
+  <div class="dots"><span>●</span><span>●</span><span>●</span></div>
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+    with st.expander("🔑 អ្នកគ្រប់គ្រង"):
+        _pw = st.text_input("លេខសម្ងាត់", type="password", key="_maint_pw")
+        if _pw and _pw == MAINTENANCE_ADMIN_KEY:
+            st.session_state["_maint_admin"] = True
+            st.rerun()
+        elif _pw:
+            st.error("លេខសម្ងាត់មិនត្រឹមត្រូវ")
+    st.stop()
+
+if MAINTENANCE_MODE and _is_admin:
+    st.warning("⚙️ កំពុងស្ថិតក្នុង Mode Update — មានតែអ្នក (អ្នកគ្រប់គ្រង) ទេដែលឃើញកម្មវិធីពេញលេញ។ អ្នកដទៃឃើញតែទំព័រ «កំពុង Update»។")
+
 # ---- Streamlit Cloud ----
 # លំនាំដើម: អនុញ្ញាតឱ្យរត់លើ Cloud (មិនចាំបាច់ដាក់ Secrets អ្វីទេ)
 # បើចង់បិទមិនឱ្យរត់លើ Cloud (ឱ្យរត់តែលើម៉ាស៊ីនមេខ្លួនឯង) កំណត់ BLOCK_STREAMLIT_CLOUD=1
