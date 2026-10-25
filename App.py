@@ -4574,7 +4574,31 @@ def fetch_links_preview(urls, status=None):
     return {u: cache[u] for u in urls}
 
 
-SPLIT_SECONDS = 6 * 60   # បំបែកវីដេអូជាផ្នែកប្រវែង ៦ នាទី
+SPLIT_SECONDS = 6 * 60   # លំនាំដើម: បំបែកវីដេអូជាផ្នែកប្រវែង ៦ នាទី
+SPLIT_PRESETS = {
+    "៣០ វិនាទី": 30, "១ នាទី": 60, "២ នាទី": 120, "៣ នាទី": 180,
+    "៥ នាទី": 300, "៦ នាទី": 360, "១០ នាទី": 600, "១៥ នាទី": 900,
+}
+SPLIT_QUEUE_MAX = 30   # ចំនួនផ្នែកអតិបរមាដែលផ្ញើទៅបកប្រែម្តង
+
+
+def get_split_seconds():
+    """ប្រវែងមួយផ្នែក (វិនាទី) តាមការកំណត់ក្នុងផ្ទាំងវីដេអូ។ 0 = មិនបំបែក។"""
+    if not st.session_state.get("auto_split_toggle", True):
+        return 0
+    return SPLIT_PRESETS.get(st.session_state.get("split_len_pick"), SPLIT_SECONDS)
+
+
+def fmt_len(sec):
+    sec = int(sec)
+    return f"{sec // 60} នាទី" if sec >= 60 and sec % 60 == 0 else f"{sec} វិនាទី"
+
+
+def fmt_clock(sec):
+    sec = int(round(sec))
+    h, r = divmod(sec, 3600)
+    m, s = divmod(r, 60)
+    return f"{h}:{m:02d}:{s:02d}" if h else f"{m:02d}:{s:02d}"
 
 
 def link_or_copy(src, dst):
@@ -4585,25 +4609,55 @@ def link_or_copy(src, dst):
         shutil.copyfile(src, dst)
 
 
-def split_video_parts(src, folder, idx):
-    """បំបែកវីដេអូវែងជាផ្នែក ~៦ នាទី (កាត់ដោយមិន encode ឡើងវិញ ដូច្នេះលឿន)។ ត្រឡប់បញ្ជីផ្លូវឯកសារតាមលំដាប់ ឬ None បើមិនចាំបាច់/បរាជ័យ។"""
+def cut_clips(src, folder, prefix, seg_seconds, exact=False):
+    """កាត់វីដេអូជាផ្នែកប្រវែង seg_seconds។
+    លំនាំដើម: កាត់ដោយមិន encode (លឿន) ហើយបើបរាជ័យ ប្តូរទៅ encode ឡើងវិញដោយស្វ័យប្រវត្តិ។
+    exact=True: encode ឡើងវិញជានិច្ច ដើម្បីកាត់ឱ្យចំពេលវេលា។
+    ត្រឡប់បញ្ជីឯកសារតាមលំដាប់ (អាចទទេ)។"""
+    seg = max(5, int(seg_seconds))
+    pattern = os.path.join(folder, f"{prefix}%03d.mp4")
+
+    def _list():
+        out = sorted(os.path.join(folder, fn) for fn in os.listdir(folder)
+                     if fn.startswith(prefix) and fn.endswith(".mp4"))
+        return [pp for pp in out if os.path.getsize(pp) > 1000]
+
+    def _clean():
+        for fn in os.listdir(folder):
+            if fn.startswith(prefix) and fn.endswith(".mp4"):
+                try:
+                    os.remove(os.path.join(folder, fn))
+                except OSError:
+                    pass
+
+    base = ["-i", src, "-map", "0:v:0", "-map", "0:a:0?"]
+    tail = ["-f", "segment", "-segment_time", str(seg), "-reset_timestamps", "1", pattern]
+    copy_args = base + ["-c", "copy"] + tail
+    enc_args = base + ["-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
+                       "-c:a", "aac", "-b:a", "128k",
+                       "-force_key_frames", f"expr:gte(t,n_forced*{seg})"] + tail
+    for args in ([enc_args] if exact else [copy_args, enc_args]):
+        _clean()
+        try:
+            run_ffmpeg(args)
+        except Exception:
+            continue
+        parts = _list()
+        if parts:
+            return parts
+    return []
+
+
+def split_video_parts(src, folder, idx, seg_seconds=None, exact=False):
+    """បំបែកវីដេអូវែងជាផ្នែកខ្លីៗ ត្រឡប់បញ្ជីផ្លូវឯកសារតាមលំដាប់ ឬ None បើមិនចាំបាច់/បរាជ័យ។"""
+    seg = int(seg_seconds or SPLIT_SECONDS)
     try:
         duration, _w, _h = probe_media(src)
     except Exception:
         return None
-    if duration <= SPLIT_SECONDS + 20:
+    if duration <= seg + 20:
         return None
-    pattern = os.path.join(folder, f"part_{idx}_%03d.mp4")
-    try:
-        run_ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
-                    "-f", "segment", "-segment_time", str(SPLIT_SECONDS),
-                    "-reset_timestamps", "1", pattern])
-    except Exception:
-        return None
-    prefix = f"part_{idx}_"
-    parts = sorted(os.path.join(folder, fn) for fn in os.listdir(folder)
-                   if fn.startswith(prefix) and fn.endswith(".mp4"))
-    parts = [pp for pp in parts if os.path.getsize(pp) > 1000]
+    parts = cut_clips(src, folder, f"part_{idx}_", seg, exact)
     return parts if len(parts) > 1 else None
 
 
@@ -4939,8 +4993,8 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
 
-tab_vid, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["🏠 វីដេអូ", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
 )
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
@@ -4997,9 +5051,10 @@ with tab_vid:
                         try:
                             _dur, _w0, _h0 = probe_media(_ent["path"])
                             _info += f" · ⏱ {_dur / 60:.1f} នាទី"
-                            if _dur > SPLIT_SECONDS + 20:
-                                _np = int(-(-_dur // SPLIT_SECONDS))
-                                _info += f" · ✂️ នឹងបំបែកជា {_np} ផ្នែក (ក្នុងមួយផ្នែក ៦ នាទី)"
+                            _ssec = get_split_seconds()
+                            if _ssec and _dur > _ssec + 20:
+                                _np = int(-(-_dur // _ssec))
+                                _info += f" · ✂️ នឹងបំបែកជា {_np} ផ្នែក (ក្នុងមួយផ្នែក {fmt_len(_ssec)})"
                         except Exception:
                             pass
                         st.caption(_info)
@@ -5034,7 +5089,7 @@ with tab_vid:
         if mode.startswith("📁"):
             st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
         else:
-            st.caption(f"រហូតដល់ {MAX_VIDEOS} តំណ · ប្រវែង និងទំហំប៉ុន្មានក៏បាន · វីដេអូវែងនឹងបំបែកជាផ្នែក ៦ នាទី ហើយធ្វើតាមលំដាប់")
+            st.caption(f"រហូតដល់ {MAX_VIDEOS} តំណ · ប្រវែង និងទំហំប៉ុន្មានក៏បាន · វីដេអូវែងអាចបំបែកជាផ្នែកខ្លីៗ (មើលការកំណត់ខាងក្រោម) ហើយធ្វើតាមលំដាប់")
         _ram_txt = server_ram_info()
         if _ram_txt:
             st.caption(_ram_txt)
@@ -5046,6 +5101,157 @@ with tab_vid:
     with st.container(border=True):
         quality_label = st.radio("📈 គុណភាពវីដេអូ", list(QUALITY.keys()), index=1,
                                  horizontal=True, key="quality_pick")
+    with st.container(border=True):
+        st.markdown("**✂️ កាត់វីដេអូវែងជាផ្នែកខ្លីៗ មុនបកប្រែ**")
+        auto_split = st.toggle("បំបែកវីដេអូវែងជាផ្នែកខ្លីៗ ហើយបកប្រែម្តងមួយផ្នែក",
+                               value=True, key="auto_split_toggle")
+        split_sec = 0
+        split_exact = False
+        if auto_split:
+            _split_labels = list(SPLIT_PRESETS.keys())
+            _split_lbl = st.selectbox("ប្រវែងមួយផ្នែក", _split_labels,
+                                      index=_split_labels.index("៦ នាទី"), key="split_len_pick")
+            split_sec = SPLIT_PRESETS[_split_lbl]
+            split_exact = st.checkbox("🎯 កាត់ឱ្យចំពេលវេលា (យឺតជាង — encode ឡើងវិញ)", key="split_exact_pick")
+            st.caption(f"វីដេអូវែងជាង {fmt_len(split_sec + 20)} នឹងត្រូវបំបែក ហើយផ្នែកនីមួយៗបកប្រែតាមលំដាប់។ "
+                       "ចង់កាត់ទាញយកទុកតែមួយៗ សូមប្រើផ្ទាំង «✂️ កាត់»។")
+
+# ============================ ផ្ទាំង កាត់វីដេអូ ============================
+with tab_cut:
+    with st.container(border=True):
+        st.markdown("**✂️ កាត់វីដេអូវែងជាវីដេអូខ្លីៗ**")
+        st.caption("កាត់វីដេអូវែងជាផ្នែកខ្លីៗ រួចទាញយកទុក ឬផ្ញើទៅបកប្រែម្តងមួយផ្នែក។")
+        _cache_c = st.session_state.get("link_cache", {})
+        _link_src = [(u, _cache_c[u]["path"]) for u in st.session_state.get("link_searched", [])
+                     if _cache_c.get(u, {}).get("ok") and _cache_c[u].get("path")
+                     and os.path.isfile(_cache_c[u]["path"])]
+        cut_src_mode = "📁 Upload"
+        if _link_src:
+            cut_src_mode = st.radio("ប្រភព", ["📁 Upload", "🔗 វីដេអូពីតំណ (ផ្ទាំងវីដេអូ)"], horizontal=True,
+                                    key="cut_src_mode", label_visibility="collapsed")
+        cut_path = None
+        cut_name = "video"
+        cut_up = None
+        if cut_src_mode.startswith("📁"):
+            cut_up = st.file_uploader("ជ្រើសវីដេអូវែង", type=["mp4", "mov", "mkv", "avi", "webm"],
+                                      key="cut_upload")
+            if cut_up is not None:
+                cut_name = os.path.splitext(cut_up.name)[0]
+        else:
+            _pick = st.selectbox("ជ្រើសវីដេអូ", list(range(len(_link_src))),
+                                 format_func=lambda i: f"វីដេអូទី {i + 1}", key="cut_link_pick")
+            cut_path = _link_src[_pick][1]
+            cut_name = f"video_{_pick + 1}"
+            try:
+                _cd, _cw, _ch = probe_media(cut_path)
+                st.caption(f"⏱ {fmt_clock(_cd)}")
+            except Exception:
+                pass
+        _cut_opts = list(SPLIT_PRESETS.keys()) + ["✏️ កំណត់ខ្លួនឯង"]
+        _cut_lbl = st.selectbox("ប្រវែងមួយផ្នែក", _cut_opts, index=2, key="cut_len_pick")
+        if _cut_lbl.startswith("✏️"):
+            cut_sec = int(st.number_input("ប្រវែងមួយផ្នែក (វិនាទី)", min_value=5, max_value=3600,
+                                          value=90, step=5, key="cut_len_custom"))
+        else:
+            cut_sec = SPLIT_PRESETS[_cut_lbl]
+        cut_exact = st.checkbox("🎯 កាត់ឱ្យចំពេលវេលា (យឺតជាង — encode ឡើងវិញ)", key="cut_exact_pick")
+        st.caption("លំនាំដើមកាត់ដោយមិន encode ដូច្នេះលឿនណាស់ តែចុងផ្នែកអាចខុសពីប្រវែងដែលជ្រើសបន្តិច (កាត់តាម keyframe)។")
+        _can_cut = (cut_up is not None) or bool(cut_path)
+        if st.button("✂️ កាត់ឥឡូវនេះ", type="primary", use_container_width=True,
+                     disabled=not _can_cut, key="cut_go_btn"):
+            _old = st.session_state.pop("cut_result", None)
+            if _old:
+                shutil.rmtree(_old["folder"], ignore_errors=True)
+            st.session_state.pop("_cut_sent", None)
+            st.session_state.pop("_split_queue", None)
+            _fold = tempfile.mkdtemp(prefix="kcut_")
+            try:
+                with st.spinner("កំពុងកាត់វីដេអូ..."):
+                    _own = False
+                    if cut_up is not None and cut_src_mode.startswith("📁"):
+                        _csrc = os.path.join(_fold, "src.bin")
+                        with open(_csrc, "wb") as _fh:
+                            _fh.write(cut_up.getbuffer())
+                        _own = True
+                    else:
+                        _csrc = cut_path
+                    _cdur = probe_media(_csrc)[0]
+                    if _cdur <= cut_sec + 1:
+                        raise UserError("វីដេអូខ្លីជាងប្រវែងដែលបានជ្រើស។ សូមជ្រើសប្រវែងខ្លីជាងនេះ។")
+                    _files = cut_clips(_csrc, _fold, "clip_", cut_sec, cut_exact)
+                    if _own:
+                        try:
+                            os.remove(_csrc)
+                        except OSError:
+                            pass
+                    if not _files:
+                        raise UserError("កាត់វីដេអូមិនបានទេ។ សូមសាកម្តងទៀត ឬបើក «កាត់ឱ្យចំពេលវេលា»។")
+                    _parts, _t = [], 0.0
+                    for _k, _pp in enumerate(_files, start=1):
+                        try:
+                            _d = probe_media(_pp)[0]
+                        except Exception:
+                            _d = float(cut_sec)
+                        _parts.append({"name": f"{safe_filename(cut_name)}_part{_k:02d}.mp4",
+                                       "label": f"ផ្នែក {_k}", "path": _pp, "start": _t, "dur": _d,
+                                       "mb": os.path.getsize(_pp) / (1024 * 1024)})
+                        _t += _d
+                    _zip = None
+                    if sum(x["mb"] for x in _parts) <= MAX_ZIP_MB:
+                        _zip = os.path.join(_fold, "clips.zip")
+                        with zipfile.ZipFile(_zip, "w", zipfile.ZIP_STORED) as _z:
+                            for x in _parts:
+                                _z.write(x["path"], x["name"])
+                    st.session_state["cut_result"] = {"folder": _fold, "parts": _parts,
+                                                      "zip": _zip, "base": cut_name}
+            except Exception as _e:
+                shutil.rmtree(_fold, ignore_errors=True)
+                st.error(str(_e) if isinstance(_e, UserError) else friendly_message(_e))
+
+    if st.session_state.get("_cut_sent") and st.session_state.get("job"):
+        st.info(f"✅ បានផ្ញើ {st.session_state['_cut_sent']} ផ្នែកទៅបកប្រែហើយ — មើលនៅផ្ទាំង ⬇️ ទាញយក។")
+
+    _res = st.session_state.get("cut_result")
+    if _res and all(os.path.isfile(x["path"]) for x in _res["parts"]):
+        _n = len(_res["parts"])
+        with st.container(border=True):
+            st.markdown(f"**✅ កាត់បាន {_n} ផ្នែក**")
+            for _i, x in enumerate(_res["parts"], start=1):
+                with st.container(border=True):
+                    st.markdown(f"**{x['label']}** · {fmt_clock(x['start'])} → "
+                                f"{fmt_clock(x['start'] + x['dur'])} · {x['mb']:.0f}MB")
+                    with open(x["path"], "rb") as _fh:
+                        dl_button(f"⬇️ ទាញយក {x['label']}", _fh, x["name"], "video/mp4",
+                                  key=f"cutdl_{_i}", use_container_width=True)
+                    if x["mb"] <= PREVIEW_MAX_MB:
+                        with st.expander("▶️ មើលវីដេអូ"):
+                            st.video(x["path"])
+            if _res.get("zip") and os.path.isfile(_res["zip"]):
+                with open(_res["zip"], "rb") as _zf:
+                    dl_button("📦 ទាញយកទាំងអស់ (ZIP)", _zf, f"{safe_filename(_res['base'])}_parts.zip",
+                              "application/zip", key="cut_zip_dl", use_container_width=True)
+            _c1, _c2 = st.columns(2)
+            with _c1:
+                _lbl_tr = f"✨ បកប្រែ {_n} ផ្នែកនេះ"
+                if _n > SPLIT_QUEUE_MAX:
+                    _lbl_tr = f"✨ បកប្រែ {SPLIT_QUEUE_MAX} ផ្នែកដំបូង"
+                if st.button(_lbl_tr, type="primary", use_container_width=True, disabled=busy,
+                             key="cut_translate_btn"):
+                    st.session_state["_split_queue"] = [
+                        {"name": f"{_res['base']} · ផ្នែក {k}/{_n}", "path": x["path"]}
+                        for k, x in enumerate(_res["parts"], start=1)]
+                    st.session_state["_run_split"] = True
+                    st.session_state["_cut_sent"] = min(_n, SPLIT_QUEUE_MAX)
+                    st.rerun()
+            with _c2:
+                if st.button("🗑 លុបលទ្ធផលកាត់", use_container_width=True, key="cut_clear_btn"):
+                    shutil.rmtree(_res["folder"], ignore_errors=True)
+                    st.session_state.pop("cut_result", None)
+                    st.session_state.pop("_split_queue", None)
+                    st.session_state.pop("_cut_sent", None)
+                    st.rerun()
+    elif _res:
+        st.session_state.pop("cut_result", None)
 
 # ============================ ផ្ទាំង ២: បកប្រែ ============================
 with tab_trans:
@@ -5236,6 +5442,14 @@ else:
     for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
         items.append({"name": f"វីដេអូទី {i}", "file": None, "url": url, "cached": _cache[url]["path"]})
 
+# ផ្នែកដែលបានកាត់ពីផ្ទាំង «✂️ កាត់» ហើយបានចុច «បកប្រែ» → ជំនួសបញ្ជីវីដេអូ
+_sq = st.session_state.get("_split_queue")
+if _sq and st.session_state.get("_run_split"):
+    _sq = [q for q in _sq if os.path.isfile(q["path"])]
+    items = [{"name": q["name"], "file": None, "url": None, "cached": q["path"], "presplit": True}
+             for q in _sq[:SPLIT_QUEUE_MAX]]
+    too_many = len(_sq) > SPLIT_QUEUE_MAX
+
 # ============================ ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) ============================
 run = False
 with start_slot:
@@ -5253,6 +5467,11 @@ with start_slot:
 
 if link_translate and items and not busy:
     run = True
+if st.session_state.get("_run_split") and not busy:
+    if items:
+        run = True
+    else:
+        st.session_state["_run_split"] = False
 
 if run:
     try:
@@ -5279,6 +5498,7 @@ if run:
         "narrate_on": False, "review_on": False,
         "style": {"align": POS_MAP[pos_pick], "bold": bold_, "italic": italic_, "box": BOX_OPTIONS[box_pick]},
     }
+    st.session_state["_run_split"] = False
     old = st.session_state.get("job")
     if old:
         shutil.rmtree(old.folder, ignore_errors=True)
@@ -5289,15 +5509,37 @@ if run:
     job_items = []
     for idx, it in enumerate(items, start=1):
         if it["file"] is not None:
-            item = new_item(it["name"], url=it["url"])
             p = os.path.join(job_folder, f"upload_{idx}.bin")
             with open(p, "wb") as f:
                 f.write(it["file"].getbuffer())
+            parts = None
+            if split_sec:
+                with st.spinner(f"កំពុងកាត់វីដេអូទី {idx} ជាផ្នែកខ្លីៗ..."):
+                    parts = split_video_parts(p, job_folder, idx, split_sec, split_exact)
+            if parts:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
+                for k, pp in enumerate(parts, start=1):
+                    item = new_item(f"{it['name']} · ផ្នែក {k}/{len(parts)}")
+                    item["path"] = pp
+                    job_items.append(item)
+            else:
+                item = new_item(it["name"], url=it["url"])
+                item["path"] = p
+                job_items.append(item)
+        elif it.get("presplit"):
+            item = new_item(it["name"])
+            p = os.path.join(job_folder, f"upload_{idx}.bin")
+            link_or_copy(it["cached"], p)
             item["path"] = p
             job_items.append(item)
         elif it.get("cached") and os.path.isfile(it["cached"]):
-            with st.spinner(f"កំពុងរៀបចំវីដេអូទី {idx}..."):
-                parts = split_video_parts(it["cached"], job_folder, idx)
+            parts = None
+            if split_sec:
+                with st.spinner(f"កំពុងរៀបចំវីដេអូទី {idx}..."):
+                    parts = split_video_parts(it["cached"], job_folder, idx, split_sec, split_exact)
             if parts:
                 for k, pp in enumerate(parts, start=1):
                     item = new_item(f"{it['name']} · ផ្នែក {k}/{len(parts)}")
