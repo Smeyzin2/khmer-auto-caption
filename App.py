@@ -4599,6 +4599,64 @@ def split_video_parts(src, folder, idx):
     return parts if len(parts) > 1 else None
 
 
+# =====================================================================
+#  បណ្ណាល័យវីដេអូស្រាប់ (អ្នកគ្រប់គ្រងដាក់តំណ → អ្នកប្រើជ្រើសយកទៅបកប្រែ)
+# =====================================================================
+# ដាក់តំណនៅទីនេះ ឬក្នុង Secrets (VIDEO_LIBRARY = មួយបន្ទាត់ ១ តំណ) ឬបន្ថែមតាមអ្នកគ្រប់គ្រងក្នុងកម្មវិធី
+VIDEO_LIBRARY = [
+    # {"url": "https://www.tiktok.com/@user/video/123...", "title": "ចំណងជើង (មិនបង្ខំ)"},
+]
+LIB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_library.json")
+LIB_PAGE = 6
+
+
+def _lib_read_file():
+    try:
+        with open(LIB_FILE, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return [d for d in data if isinstance(d, dict) and d.get("url")]
+    except Exception:
+        return []
+
+
+def _lib_write_file(items):
+    try:
+        with open(LIB_FILE, "w", encoding="utf-8") as fh:
+            json.dump(items, fh, ensure_ascii=False, indent=1)
+        return True
+    except Exception:
+        return False
+
+
+def load_library():
+    out, seen = [], set()
+    sources = list(VIDEO_LIBRARY)
+    sources += [{"url": u, "title": ""} for u in extract_links(os.environ.get("VIDEO_LIBRARY", ""))]
+    sources += _lib_read_file()
+    for d in sources:
+        u = str(d.get("url", "")).strip()
+        if u and u not in seen:
+            seen.add(u)
+            out.append({"url": u, "title": str(d.get("title", "") or "")})
+    return out
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def video_meta(url):
+    """យកចំណងជើង និងរូបតូចពី TikTok oEmbed (បើបរាជ័យ ត្រឡប់ទទេ)។"""
+    try:
+        if "tiktok.com" in url:
+            api = "https://www.tiktok.com/oembed?url=" + urllib.parse.quote(url, safe="")
+            req = urllib.request.Request(api, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=6) as r:
+                d = json.loads(r.read().decode("utf-8"))
+            return {"title": d.get("title") or "", "thumb": d.get("thumbnail_url") or "",
+                    "author": d.get("author_name") or ""}
+    except Exception:
+        pass
+    return {"title": "", "thumb": "", "author": ""}
+
+
 def drop_link_cache(keep=()):
     cache = st.session_state.get("link_cache", {})
     for k in list(cache.keys()):
@@ -4967,14 +5025,75 @@ with tab_vid:
                 "បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"],
                 accept_multiple_files=True) or []
         else:
-            # Browser ក្នុងកម្មវិធី (iframe) — ដំណើរការតែជាមួយគេហទំព័រដែលអនុញ្ញាតឱ្យបង្កប់
-            _br_on = st.toggle("🌐 បើក Browser ក្នុងកម្មវិធី", key="browser_on")
-            if _br_on:
-                _br_url = st.text_input("តំណគេហទំព័រ", value="https://www.tiktok.com/", key="browser_url")
-                if _br_url.strip().lower().startswith(("http://", "https://")):
-                    components.iframe(_br_url.strip(), height=640, scrolling=True)
-                st.caption("បើទំព័រទទេ ឬបង្ហាញកំហុស មានន័យថាគេហទំព័រនោះហាមមិនឱ្យបង្កប់ក្នុងកម្មវិធីផ្សេង។ "
-                           "ចុច Share → Copy link ក្នុង TikTok រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
+            # ---------- វីដេអូស្រាប់ ----------
+            _lib = load_library()
+            if _lib:
+                st.markdown("**🎞 វីដេអូស្រាប់ — ជ្រើសយកទៅបកប្រែ**")
+                _shown = st.session_state.get("lib_shown", LIB_PAGE)
+                for _i, _v in enumerate(_lib[:_shown]):
+                    _m = video_meta(_v["url"])
+                    with st.container(border=True):
+                        if _m["thumb"]:
+                            try:
+                                st.image(_m["thumb"], use_container_width=True)
+                            except Exception:
+                                try:
+                                    st.image(_m["thumb"])
+                                except Exception:
+                                    pass
+                        _title = _v["title"] or _m["title"] or f"វីដេអូទី {_i + 1}"
+                        st.caption(_title[:120] + (f" · @{_m['author']}" if _m["author"] else ""))
+                        _c1, _c2 = st.columns(2)
+                        _add = _c1.button("➕ បន្ថែម", key=f"lib_add_{_i}", use_container_width=True)
+                        _go = _c2.button("✨ បកប្រែ", key=f"lib_go_{_i}", use_container_width=True, disabled=busy)
+                        if _go:
+                            st.session_state["link_text_area"] = _v["url"]
+                            st.session_state["link_searched"] = [_v["url"]]
+                            st.session_state["_auto_translate"] = True
+                        elif _add:
+                            _cur = extract_links(st.session_state.get("link_text_area", ""))
+                            if _v["url"] not in _cur:
+                                _cur.append(_v["url"])
+                            _cur = _cur[:MAX_VIDEOS]
+                            st.session_state["link_text_area"] = "\n".join(_cur)
+                            st.session_state["link_searched"] = list(_cur)
+                if len(_lib) > _shown:
+                    if st.button(f"បង្ហាញបន្ថែម ({len(_lib) - _shown})", key="lib_more", use_container_width=True):
+                        st.session_state["lib_shown"] = _shown + LIB_PAGE
+                        st.rerun()
+            else:
+                st.caption("🎞 មិនទាន់មានវីដេអូស្រាប់ទេ។ អ្នកគ្រប់គ្រងអាចបន្ថែមខាងក្រោម។")
+            with st.expander("🔑 អ្នកគ្រប់គ្រង (បន្ថែម/លុបវីដេអូស្រាប់)"):
+                if not st.session_state.get("_lib_admin"):
+                    _lpw = st.text_input("លេខសម្ងាត់", type="password", key="_lib_pw")
+                    if _lpw and _lpw == MAINTENANCE_ADMIN_KEY:
+                        st.session_state["_lib_admin"] = True
+                        st.rerun()
+                    elif _lpw:
+                        st.error("លេខសម្ងាត់មិនត្រឹមត្រូវ")
+                else:
+                    _new = st.text_area("តំណវីដេអូថ្មី (មួយបន្ទាត់ ១ តំណ)", key="lib_new_links", height=110)
+                    if st.button("➕ បន្ថែមទៅបណ្ណាល័យ", key="lib_save_btn", use_container_width=True):
+                        _file_items = _lib_read_file()
+                        _have = {d["url"] for d in load_library()}
+                        _added = 0
+                        for _u in extract_links(_new):
+                            if _u not in _have:
+                                _file_items.append({"url": _u, "title": ""})
+                                _added += 1
+                        if _lib_write_file(_file_items):
+                            st.success(f"បានបន្ថែម {_added} តំណ")
+                            st.rerun()
+                        else:
+                            st.error("រក្សាទុកមិនបាន")
+                    _file_now = _lib_read_file()
+                    if _file_now:
+                        _del = st.multiselect("លុបវីដេអូ", [d["url"] for d in _file_now], key="lib_del_sel")
+                        if _del and st.button("🗑 លុបដែលបានជ្រើស", key="lib_del_btn", use_container_width=True):
+                            _lib_write_file([d for d in _file_now if d["url"] not in _del])
+                            st.rerun()
+                    st.caption("ចំណាំ៖ នៅលើ Streamlit Cloud បញ្ជីដែលបន្ថែមតាមទីនេះអាចបាត់ពេល reboot/deploy ថ្មី។ "
+                               "ដើម្បីរក្សាជាអចិន្ត្រៃយ៍ ដាក់ក្នុងបញ្ជី VIDEO_LIBRARY ក្នុងកូដ ឬក្នុង Secrets។")
             with st.expander("⚡ បកប្រែអូតូពី TikTok (Bookmarklet)"):
                 st.markdown(
                     "១. ចម្លងកូដខាងក្រោម រួចបង្កើត Bookmark ថ្មីក្នុង Browser ហើយបិទភ្ជាប់កូដនេះជា «URL» (ដាក់ឈ្មោះ «បកប្រែខ្មែរ»)។\n\n"
