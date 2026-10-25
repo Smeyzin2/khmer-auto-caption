@@ -5291,8 +5291,14 @@ with tab_cut:
         cut_exact = st.checkbox("🎯 កាត់ឱ្យចំពេលវេលា (យឺតជាង — encode ឡើងវិញ)", key="cut_exact_pick")
         st.caption("លំនាំដើមកាត់ដោយមិន encode ដូច្នេះលឿនណាស់ តែចុងផ្នែកអាចខុសពីប្រវែងដែលជ្រើសបន្តិច (កាត់តាម keyframe)។")
         _can_cut = (cut_up is not None) or bool(cut_path)
-        if st.button("✂️ កាត់ឥឡូវនេះ", type="primary", use_container_width=True,
-                     disabled=not _can_cut, key="cut_go_btn"):
+        _gc1, _gc2 = st.columns(2)
+        with _gc1:
+            _go_cut = st.button("✂️ កាត់ទុក", type="primary", use_container_width=True,
+                                disabled=not _can_cut, key="cut_go_btn")
+        with _gc2:
+            _go_cut_tr = st.button("✂️✨ កាត់ ហើយបកប្រែតែម្តង", type="primary", use_container_width=True,
+                                   disabled=(not _can_cut) or busy, key="cut_go_tr_btn")
+        if _go_cut or _go_cut_tr:
             _old = st.session_state.pop("cut_result", None)
             if _old:
                 shutil.rmtree(_old["folder"], ignore_errors=True)
@@ -5341,6 +5347,15 @@ with tab_cut:
             except Exception as _e:
                 shutil.rmtree(_fold, ignore_errors=True)
                 st.error(str(_e) if isinstance(_e, UserError) else friendly_message(_e))
+            _cr = st.session_state.get("cut_result")
+            if _go_cut_tr and _cr:
+                _nn = len(_cr["parts"])
+                st.session_state["_split_queue"] = [
+                    {"name": f"{_cr['base']} · ផ្នែក {k}/{_nn}", "path": x["path"]}
+                    for k, x in enumerate(_cr["parts"], start=1)]
+                st.session_state["_run_split"] = True
+                st.session_state["_cut_sent"] = min(_nn, SPLIT_QUEUE_MAX)
+                st.rerun()
 
     if st.session_state.get("_cut_sent") and st.session_state.get("job"):
         st.info(f"✅ បានផ្ញើ {st.session_state['_cut_sent']} ផ្នែកទៅបកប្រែហើយ — មើលនៅផ្ទាំង ⬇️ ទាញយក។")
@@ -5354,9 +5369,19 @@ with tab_cut:
                 with st.container(border=True):
                     st.markdown(f"**{x['label']}** · {fmt_clock(x['start'])} → "
                                 f"{fmt_clock(x['start'] + x['dur'])} · {x['mb']:.0f}MB")
-                    with open(x["path"], "rb") as _fh:
-                        dl_button(f"⬇️ ទាញយក {x['label']}", _fh, x["name"], "video/mp4",
-                                  key=f"cutdl_{_i}", use_container_width=True)
+                    _bc1, _bc2 = st.columns(2)
+                    with _bc1:
+                        with open(x["path"], "rb") as _fh:
+                            dl_button("⬇️ ទាញយក", _fh, x["name"], "video/mp4",
+                                      key=f"cutdl_{_i}", use_container_width=True)
+                    with _bc2:
+                        if st.button("✨ បកប្រែ", type="primary", use_container_width=True,
+                                     disabled=busy, key=f"cut_tr_{_i}"):
+                            st.session_state["_split_queue"] = [
+                                {"name": f"{_res['base']} · {x['label']}/{_n}", "path": x["path"]}]
+                            st.session_state["_run_split"] = True
+                            st.session_state["_cut_sent"] = 1
+                            st.rerun()
                     if x["mb"] <= PREVIEW_MAX_MB:
                         with st.expander("▶️ មើលវីដេអូ"):
                             st.video(x["path"])
