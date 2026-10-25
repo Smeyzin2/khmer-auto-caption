@@ -4314,17 +4314,29 @@ def extract_links(text):
     return out
 
 
-def _fetch_one(url):
-    """ទាញវីដេអូមួយតំណ (មិនប៉ះ st.session_state ដូច្នេះអាចរត់ក្នុង thread បាន)។"""
-    folder = tempfile.mkdtemp(prefix="kac_link_")
-    path = os.path.join(folder, "video.mp4")
-    try:
-        download_video(url, path, _NoProgress())
-        return {"path": path, "ok": True}
-    except Exception as e:
-        shutil.rmtree(folder, ignore_errors=True)
-        _err = re.sub(r"https?://\S+", "[link]", str(e) or type(e).__name__)
-        return {"path": None, "ok": False, "err": _err[:600]}
+LINK_RETRIES = _env_int("LINK_RETRIES", 8)   # ចំនួនលើកព្យាយាមអតិបរមាក្នុងមួយតំណ
+
+
+def _fetch_one(url, on_try=None):
+    """ទាញវីដេអូមួយតំណ ហើយព្យាយាមម្តងទៀតដោយស្វ័យប្រវត្តិរហូតរកឃើញ (មិនប៉ះ st.session_state)។"""
+    last = ""
+    for attempt in range(1, LINK_RETRIES + 1):
+        if on_try:
+            try:
+                on_try(attempt)
+            except Exception:
+                pass
+        folder = tempfile.mkdtemp(prefix="kac_link_")
+        path = os.path.join(folder, "video.mp4")
+        try:
+            download_video(url, path, _NoProgress())
+            return {"path": path, "ok": True, "tries": attempt}
+        except Exception as e:
+            shutil.rmtree(folder, ignore_errors=True)
+            last = re.sub(r"https?://\S+", "[link]", str(e) or type(e).__name__)[:600]
+            if attempt < LINK_RETRIES:
+                time.sleep(min(2 * attempt, 8))
+    return {"path": None, "ok": False, "err": last, "tries": LINK_RETRIES}
 
 
 def fetch_link_preview(url):
@@ -4337,14 +4349,17 @@ def fetch_link_preview(url):
     return ent
 
 
-def fetch_links_preview(urls, workers=3):
-    """ទាញវីដេអូច្រើនតំណក្នុងពេលតែមួយ (ស្របគ្នា ៣)។"""
+def fetch_links_preview(urls, status=None):
+    """រកតំណម្តងមួយៗតាមលំដាប់ (ទី១ រួចទី២ ...) តំណណារកមិនឃើញ ព្យាយាមម្តងទៀតរហូតរកឃើញ ទើបទៅតំណបន្ទាប់។"""
     cache = st.session_state.setdefault("link_cache", {})
-    todo = [u for u in urls if u not in cache]
-    if todo:
-        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(todo)))) as pool:
-            for u, ent in zip(todo, pool.map(_fetch_one, todo)):
-                cache[u] = ent
+    for u in [u for u in urls if u not in cache]:
+        num = urls.index(u) + 1
+
+        def _cb(attempt, num=num):
+            if status is not None:
+                status.info(f"⏳ កំពុងរកវីដេអូទី {num} / {len(urls)} · ព្យាយាមលើកទី {attempt}/{LINK_RETRIES}")
+
+        cache[u] = _fetch_one(u, _cb)
     return {u: cache[u] for u in urls}
 
 
@@ -4720,8 +4735,9 @@ with tab_vid:
             if _link_lines:
                 _need = [u for u in _link_lines if u not in st.session_state.get("link_cache", {})]
                 if _need:
-                    with st.spinner(f"កំពុងរកវីដេអូ {len(_need)} តំណ..."):
-                        fetch_links_preview(_link_lines)
+                    _ph = st.empty()
+                    fetch_links_preview(_link_lines, _ph)
+                    _ph.empty()
             _n_ok = 0
             _multi = len(_link_lines) > 1
             for _n, _u in enumerate(_link_lines, start=1):
@@ -4738,10 +4754,10 @@ with tab_vid:
                             dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _fh, f"video_{_n}.mp4", "video/mp4",
                                       key=f"dl_link_{_n}", use_container_width=True)
                     else:
-                        st.error("រកតំណមិនឃើញ។ ព្យាយាមម្តងទៀត។")
+                        st.error("រកតំណមិនឃើញទេ ទោះបានព្យាយាមច្រើនលើកហើយ។ សូមចុចព្យាយាមម្តងទៀត។")
                         if _ent.get("err"):
-                            with st.expander("ព័ត៌មានបច្ចេកទេស"):
-                                st.code(_ent["err"])
+                            st.caption(f"ព័ត៌មានបច្ចេកទេស (បានព្យាយាម {_ent.get('tries', 1)} លើក)")
+                            st.code(_ent["err"])
                         if st.button("🔄 ព្យាយាមម្តងទៀត", key=f"retry_link_{_n}", use_container_width=True):
                             st.session_state.get("link_cache", {}).pop(_u, None)
                             st.rerun()
