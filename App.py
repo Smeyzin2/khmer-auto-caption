@@ -6,10 +6,10 @@ import os
 #  លុប «ដាក់_key_ទីនេះ» ចេញ ហើយ paste key ពិតជំនួស។ បើមិនមាន Groq ទុកទទេបាន។
 # =====================================================================
 _MY_GEMINI_KEYS = """
-ដាក់_key_ទីនេះ
+AQ.Ab8RN6LB7uBoKJeM8c29Hzh4YBZB1LLt6wOMT_ynazT-IseY_g
 """
 _MY_GROQ_KEYS = """
-ដាក់_key_ទីនេះ
+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
 """
 for _name, _val in (("GEMINI_API_KEY", _MY_GEMINI_KEYS), ("GROQ_API_KEY", _MY_GROQ_KEYS)):
     _clean = "\n".join(l.strip() for l in _val.splitlines() if l.strip() and "ដាក់_key_ទីនេះ" not in l)
