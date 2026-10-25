@@ -39,7 +39,7 @@ st.set_page_config(
 #  ► ពេលកំពុង update: ទុក MAINTENANCE_MODE = True  (អ្នកប្រើនឹងឃើញតែសារ «កំពុង Update»)
 #  ► ពេល update ចប់: ប្តូរទៅ False  (ឬដាក់ MAINTENANCE_MODE = "0" ក្នុង Secrets)
 # =====================================================================
-MAINTENANCE_MODE = True
+MAINTENANCE_MODE = False
 _maint_env = str(os.environ.get("MAINTENANCE_MODE", "")).strip().lower()
 if _maint_env in ("0", "false", "off", "no"):
     MAINTENANCE_MODE = False
