@@ -1881,7 +1881,7 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
     last = "មិនមានម៉ូដែល"
     for model in models[:8]:
         body = json.dumps({
-            "model": model, "temperature": 0.1,
+            "model": model, "temperature": 0.05,
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": system or TRANS_SYSTEM},
@@ -1953,7 +1953,7 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
         try:
             resp = client.models.generate_content(
                 model=model, contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.1, response_mime_type="application/json"),
+                config=types.GenerateContentConfig(temperature=0.05, response_mime_type="application/json"),
             )
             raw = (getattr(resp, "text", "") or "").strip()
             raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
@@ -1971,7 +1971,7 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
 
 
 REFINE_SYSTEM = (
-    "You are a senior Khmer (Cambodian) dubbing editor and bilingual proofreader. Each numbered item has an ORIGINAL line, "
+    "You are a senior Khmer (Cambodian) dubbing editor and bilingual proofreader. For EVERY item first back-translate the KHMER DRAFT into English in your head and compare it with the ORIGINAL: any difference in meaning (an idea added or missing, a lost negation, wrong subject or object, wrong number or name, wrong tense or mood, changed emotion or tone) must be fixed. Each numbered item has an ORIGINAL line, "
     "sometimes an ENGLISH meaning, and a KHMER DRAFT. Check the KHMER DRAFT against the ORIGINAL: fix wrong or missing meaning, "
     "mistranslated words, wrong pronouns/politeness, literal word-for-word phrasing, unnatural or ungrammatical Khmer, and any leftover "
     "foreign words (except names). Rewrite into natural everyday SPOKEN Khmer that a native Phnom Penh speaker would say and instantly understand, "
@@ -2062,7 +2062,7 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
 
 
 JUDGE_SYSTEM = (
-    "You are the final Khmer (Cambodian) dubbing judge. Each item has the ORIGINAL line, sometimes an ENGLISH meaning, and two Khmer candidates A and B. "
+    "You are the final Khmer (Cambodian) dubbing judge. For each candidate first back-translate it into English in your head and compare it with the ORIGINAL; a candidate that changes, adds or drops any meaning, negation, number, name or emotion loses. Each item has the ORIGINAL line, sometimes an ENGLISH meaning, and two Khmer candidates A and B. "
     "Decide which candidate is MORE FAITHFUL to the original (every fact, name, number, negation, who-does-what-to-whom, tone) AND sounds like natural everyday spoken Khmer. "
     "Then output the best final Khmer line: you may pick A, pick B, or fix/merge them if both have a flaw. Never add information that is not in the original, never drop a negation or a number. "
     "Use neighbouring lines for context (speakers, pronouns, politeness) and keep pronouns consistent. Do not make it longer than needed. "
@@ -3257,28 +3257,42 @@ def atempo_chain(x):
     return ",".join(parts)
 
 
-EMO_LABELS = ["neutral", "happy", "excited", "angry", "sad", "fear", "whisper"]
-EMO_HIGH = ("happy", "excited", "angry", "fear")
-EMO_LOW = ("sad", "whisper")
+EMO_LABELS = ["neutral", "happy", "excited", "angry", "sad", "fear", "whisper",
+              "shout", "tender", "surprised", "worried", "sarcastic"]
+EMO_HIGH = ("happy", "excited", "angry", "fear", "shout", "surprised")
+EMO_LOW = ("sad", "whisper", "tender", "worried")
 
+# (rate %, pitch Hz, volume %) ត្រូវគុណនឹងកម្លាំងអារម្មណ៍ (intensity)
 EMO_PRESETS = {
-    "neutral": (0, 0, 0), "happy": (6, 10, 4), "excited": (10, 14, 10),
-    "angry": (8, 4, 20), "sad": (-10, -8, -12), "fear": (8, 14, -4),
-    "whisper": (-6, -3, -35),
+    "neutral": (0, 0, 0),
+    "happy": (8, 12, 6),
+    "excited": (14, 18, 14),
+    "angry": (12, 6, 28),
+    "sad": (-16, -12, -20),
+    "fear": (12, 18, -6),
+    "whisper": (-10, -5, -45),
+    "shout": (10, 10, 40),
+    "tender": (-10, -4, -18),
+    "surprised": (10, 20, 12),
+    "worried": (-4, 6, -10),
+    "sarcastic": (-8, 4, 0),
 }
 
 EMO_NAMES = {
     "neutral": "😐 ធម្មតា", "happy": "😊 សប្បាយ", "excited": "🤩 រំភើប",
     "angry": "😠 ខឹង", "sad": "😢 ក្រៀមក្រំ", "fear": "😨 ភ័យ",
-    "whisper": "🤫 ខ្សឹប",
+    "whisper": "🤫 ខ្សឹប", "shout": "📢 ស្រែក", "tender": "🥰 ទន់ភ្លន់",
+    "surprised": "😲 ភ្ញាក់ផ្អើល", "worried": "😟 បារម្ភ", "sarcastic": "😏 ចំអក",
 }
 
 EMO_SYSTEM = (
-    "You label the emotion of each Khmer subtitle line spoken by a "
-    "character. Use ONLY these labels: neutral, happy, excited, angry, "
-    "sad, fear, whisper. Judge from meaning and punctuation. "
-    "Return JSON: {\"emotions\": [...]} with exactly the same number of "
-    "items, in the same order."
+    "You are a film dubbing director. Each numbered Khmer line is spoken by a character. Decide the emotion the voice actor must PERFORM "
+    "for that line so the dubbed voice sounds like a real, feeling human, not a reading machine. Use the neighbouring/context lines to understand "
+    "the scene, who is speaking to whom and the mood. Allowed labels ONLY: neutral, happy, excited, angry, sad, fear, whisper, shout, tender, "
+    "surprised, worried, sarcastic. Judge from the meaning, word choice, particles, punctuation (! ? ...), insults, pleading, crying, laughing, "
+    "teasing, commands and exclamations. Do NOT default to neutral: use neutral only when the line is truly flat or purely informational. "
+    "Also give intensity from 0.2 (slight) to 1.0 (very strong). "
+    "Return JSON {\"emotions\": [{\"label\": \"angry\", \"intensity\": 0.8}, ...]} with exactly the same number of items, in the same order."
 )
 
 
@@ -3287,8 +3301,21 @@ def norm_emotion(x):
     return x if x in EMO_LABELS else "neutral"
 
 
-def groq_emotion_chunk(api_key, texts):
+def parse_emo_item(x):
+    """ទទួលទាំង {"label","intensity"} និងអក្សរសុទ្ធ → (label, intensity)។"""
+    if isinstance(x, dict):
+        lab = norm_emotion(x.get("label") or x.get("emotion"))
+        try:
+            inten = float(x.get("intensity", 0.7))
+        except Exception:
+            inten = 0.7
+        return lab, max(0.2, min(1.0, inten))
+    return norm_emotion(x), 0.7
+
+
+def groq_emotion_chunk(api_key, texts, context=""):
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+    user = (("CONTEXT (previous lines, do NOT label them): " + context + "\n\n") if context else "") + "LINES TO LABEL:\n" + numbered
     models = groq_chat_models(api_key)
     good = _groq_chat_cache["good"]
     if good in models:
@@ -3300,7 +3327,7 @@ def groq_emotion_chunk(api_key, texts):
             "response_format": {"type": "json_object"},
             "messages": [
                 {"role": "system", "content": EMO_SYSTEM},
-                {"role": "user", "content": numbered},
+                {"role": "user", "content": user},
             ],
         }).encode("utf-8")
         for attempt in range(2):
@@ -3316,7 +3343,7 @@ def groq_emotion_chunk(api_key, texts):
                 items = json.loads(content).get("emotions") or []
                 if len(items) == len(texts):
                     _groq_chat_cache["good"] = model
-                    return [norm_emotion(x) for x in items]
+                    return [parse_emo_item(x) for x in items]
                 last = f"{model}: ចំនួនមិនត្រូវគ្នា"
                 break
             except urllib.error.HTTPError as e:
@@ -3333,9 +3360,11 @@ def groq_emotion_chunk(api_key, texts):
 
 def gemini_emotion_labels(api_key, texts):
     client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
-    models = get_available_models(client)[:3]
+    avail = get_available_models(client)
+    avail = [m for m in avail if "pro" in m.lower()] + [m for m in avail if "pro" not in m.lower()]
+    models = avail[:3]
     numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
-    prompt = EMO_SYSTEM + "\n\n" + numbered
+    prompt = EMO_SYSTEM + "\n\nLINES TO LABEL:\n" + numbered
     last = None
     for model in models:
         try:
@@ -3348,44 +3377,53 @@ def gemini_emotion_labels(api_key, texts):
             data = json.loads(raw)
             items = data.get("emotions") if isinstance(data, dict) else data
             if isinstance(items, list) and len(items) == len(texts):
-                return [norm_emotion(x) for x in items]
+                return [parse_emo_item(x) for x in items]
         except Exception as e:
             last = e
     raise RuntimeError(f"Gemini emotion: {last}")
 
 
 def label_emotions(texts, groq_key, gemini_key):
+    """ត្រឡប់បញ្ជី (label, intensity) ឬ None។ ប្រើ Gemini មុន (យល់ខ្មែរល្អជាង) រួច Groq ជាបម្រុង។"""
     if not texts:
         return None
+    if gemini_key:
+        try:
+            out = gemini_emotion_labels(gemini_key, texts)
+            if out and len(out) == len(texts):
+                return out
+        except Exception:
+            pass
     if groq_key:
         out = []
         ok = True
         for k in range(0, len(texts), 25):
+            ctx = " / ".join(str(t) for t in texts[max(0, k - 3):k])
             try:
-                out.extend(groq_emotion_chunk(groq_key, texts[k:k + 25]))
+                out.extend(groq_emotion_chunk(groq_key, texts[k:k + 25], ctx))
             except Exception:
                 ok = False
                 break
             time.sleep(0.5)
         if ok and len(out) == len(texts):
             return out
-    if gemini_key:
-        try:
-            return gemini_emotion_labels(gemini_key, texts)
-        except Exception:
-            pass
     return None
 
 
-def combine_emotion(text_label, arousal):
+def combine_emotion(text_label, arousal, text_inten=None):
+    """ผสมอารម្មណ៍ពីអត្ថបទ (AI) និងកម្លាំងសំឡេងដើម (arousal)។"""
+    ti = 0.7 if text_inten is None else max(0.2, min(1.0, float(text_inten)))
+    base = 0.4 + 1.0 * ti            # 0.6 .. 1.4
     if text_label in EMO_HIGH:
-        return text_label, max(0.3, min(1.4, 0.6 + 0.5 * arousal))
+        return text_label, max(0.4, min(1.7, base + 0.5 * arousal))
     if text_label in EMO_LOW:
-        return text_label, max(0.3, min(1.4, 0.6 - 0.5 * arousal))
-    if arousal > 0.35:
-        return "excited", min(1.2, 0.4 + (arousal - 0.35) * 0.9)
-    if arousal < -0.35:
-        return "sad", min(1.2, 0.4 + (-arousal - 0.35) * 0.9)
+        return text_label, max(0.4, min(1.7, base - 0.3 * arousal))
+    if text_label == "sarcastic":
+        return text_label, max(0.5, min(1.3, base))
+    if arousal > 0.3:
+        return "excited", min(1.4, 0.5 + (arousal - 0.3) * 1.1)
+    if arousal < -0.3:
+        return "sad", min(1.4, 0.5 + (-arousal - 0.3) * 1.1)
     return "neutral", 0.0
 
 
@@ -3424,8 +3462,8 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
                 pitch_st = 12.0 * np.log2(own / base_f)
                 std_st = float(np.std(12.0 * np.log2(f[m] / own)))
                 arousal = (0.5 * clip(loud_db / 6.0) + 0.3 * clip(pitch_st / 4.0) + 0.2 * clip((std_st - 2.5) / 2.0))
-        text_label = labels[i] if labels else None
-        result.append(combine_emotion(text_label, arousal))
+        text_label, text_inten = (labels[i] if labels else (None, None))
+        result.append(combine_emotion(text_label, arousal, text_inten))
     counts = Counter(lab for lab, _ in result)
     source = ("តាមអត្ថបទ + សំឡេងដើម" if labels and have_audio else "តាមអត្ថបទតែប៉ុណ្ណោះ" if labels else "តាមសំឡេងដើមតែប៉ុណ្ណោះ" if have_audio else "មិនមានទិន្នន័យ")
     summary = (f"🎭 អារម្មណ៍ ({source})៖ " + " · ".join(f"{EMO_NAMES[k]} {counts[k]}" for k in EMO_LABELS if counts.get(k)))
@@ -3444,9 +3482,9 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
 def emotion_prosody(label, intensity, use_pitch=True):
     rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
     k = max(0.0, float(intensity))
-    rate = int(max(-10, min(10, rate * k * 0.8)))
-    pitch = int(max(-6, min(6, pitch * k * 0.5))) if use_pitch else 0
-    vol = int(max(-15, min(10, vol * k * 0.5)))
+    rate = int(max(-22, min(22, rate * k)))
+    pitch = int(max(-16, min(16, pitch * k * 0.8))) if use_pitch else 0
+    vol = int(max(-35, min(30, vol * k * 0.7)))
     if rate == 0 and pitch == 0 and vol == 0:
         return None
     return {"rate": f"{rate:+d}%", "pitch": f"{pitch:+d}Hz", "volume": f"{vol:+d}%"}
@@ -4215,7 +4253,7 @@ def run_worker(job, item, settings, fonts_data):
                     if settings["emotion"]:
                         try:
                             rep.write("🎭 កំពុងវិភាគអារម្មណ៍...")
-                            emotions, emo_lines = plan_emotions(dub_segments, seg_voices, pitch_inf, runs_, settings["groq_key"], None)
+                            emotions, emo_lines = plan_emotions(dub_segments, seg_voices, pitch_inf, runs_, settings["groq_key"], settings["gemini_key"])
                             voice_notes = voice_notes + emo_lines
                         except Exception:
                             emotions = None
