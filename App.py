@@ -4676,6 +4676,103 @@ def dl_button(label, data, file_name, mime, key, **kwargs):
     return st.download_button(label, data=data, file_name=file_name, mime=mime, key=key, **kwargs)
 
 
+KM_UNITS = ["", "មួយ", "ពីរ", "បី", "បួន", "ប្រាំ", "ប្រាំមួយ", "ប្រាំពីរ", "ប្រាំបី", "ប្រាំបួន"]
+KM_TENS = {1: "ដប់", 2: "ម្ភៃ", 3: "សាមសិប", 4: "សែសិប", 5: "ហាសិប",
+           6: "ហុកសិប", 7: "ចិតសិប", 8: "ប៉ែតសិប", 9: "កៅសិប"}
+ANN_VOICE = "km-KH-SreymomNeural"
+_ANN_CACHE = {}
+
+
+def khmer_number_word(n):
+    n = int(n)
+    if n <= 0 or n >= 100:
+        return str(n)
+    t, u = divmod(n, 10)
+    return (KM_TENS[t] if t else "") + KM_UNITS[u]
+
+
+def done_announcement_b64(n):
+    """សំឡេងខ្មែរប្រកាសថាវីដេអូទី n បានធ្វើរួច (mp3 → base64) ។ រក្សាទុកក្នុង cache។"""
+    text = f"វីដេអូទី{khmer_number_word(n)} បានធ្វើរួចហើយ។ អ្នកស្រី លោកម្ចាស់ អាចដោនឡូតបានហើយ។"
+    if text in _ANN_CACHE:
+        return _ANN_CACHE[text]
+    fd, path = tempfile.mkstemp(suffix=".mp3")
+    os.close(fd)
+    try:
+        if not tts_retry(text, ANN_VOICE, path, tries=3):
+            return None
+        with open(path, "rb") as fh:
+            b64 = base64.b64encode(fh.read()).decode()
+    finally:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    _ANN_CACHE[text] = b64
+    return b64
+
+
+def announce_html(ann_id, b64):
+    """លេងសំឡេងដោយស្វ័យប្រវត្តិ (ប្រើ Audio របស់ទំព័រមេ ដូច្នេះមិនដាច់ពេល element ត្រូវ refresh) ។
+    បើ browser ហាមលេងស្វ័យប្រវត្តិ នឹងបង្ហាញប៊ូតុង «🔊» ឱ្យចុច។"""
+    return """<script>
+(function(){
+  var P = window.parent || window;
+  try {
+    P.__kvPlayed = P.__kvPlayed || {};
+    P.__kvQ = P.__kvQ || [];
+    var id = "__ID__";
+    if (P.__kvPlayed[id]) return;
+    P.__kvPlayed[id] = 1;
+    P.__kvQ.push("data:audio/mpeg;base64,__B64__");
+    var next = function(){
+      if (P.__kvBusy) return;
+      var s = P.__kvQ.shift();
+      if (!s) return;
+      P.__kvBusy = true;
+      var a = new P.Audio(s);
+      var done = function(){ P.__kvBusy = false; next(); };
+      a.onended = done; a.onerror = done;
+      var pr = a.play();
+      if (pr && pr.catch) pr.catch(function(){
+        var d = P.document;
+        if (d.getElementById("kv-ann-btn")) { P.__kvBusy = false; P.__kvQ.unshift(s); return; }
+        var b = d.createElement("button");
+        b.id = "kv-ann-btn";
+        b.textContent = "🔊 ចុចដើម្បីស្តាប់សារ";
+        b.style.cssText = "position:fixed;left:50%;bottom:90px;transform:translateX(-50%);z-index:99999;padding:14px 22px;border:0;border-radius:999px;background:#7C3AED;color:#fff;font-size:16px;font-weight:700;box-shadow:0 6px 20px rgba(0,0,0,.3)";
+        b.onclick = function(){
+          b.remove();
+          a.onended = done; a.onerror = done;
+          a.play().catch(done);
+        };
+        d.body.appendChild(b);
+      });
+    };
+    next();
+  } catch (e) {}
+})();
+</script>""".replace("__ID__", str(ann_id)).replace("__B64__", b64)
+
+
+def announce_new_done(job):
+    """ប្រកាសសំឡេងសម្រាប់វីដេអូដែលទើបធ្វើរួច (ម្តងមួយដង)។ ត្រឡប់ True បើមានការប្រកាស។"""
+    if not st.session_state.get("announce_toggle", True):
+        return False
+    played = False
+    for i, it in enumerate(job.items, start=1):
+        if it["state"] == "done" and not it.get("announced"):
+            it["announced"] = True
+            try:
+                b64 = done_announcement_b64(i)
+            except Exception:
+                b64 = None
+            if b64:
+                components.html(announce_html(f"{job.id}_{i}", b64), height=0)
+                played = True
+    return played
+
+
 def work_area(job, was_running, reviewing=False):
     items = job.items
     total = len(items)
@@ -4708,7 +4805,10 @@ def work_area(job, was_running, reviewing=False):
                 st.progress(max(0.0, min(1.0, it["pct"])), text=it["stage"])
             for w in it["warn"]:
                 st.warning(w)
+    _played = announce_new_done(job)
     if (was_running and not job.running()) or (reviewing != job.reviewing()):
+        if _played:
+            time.sleep(1.5)   # ឱ្យ browser ទទួលនិងចាប់ផ្តើមលេងសំឡេងសិន មុន rerun
         st.rerun()
 
 
@@ -5125,10 +5225,9 @@ with tab_cut:
         _link_src = [(u, _cache_c[u]["path"]) for u in st.session_state.get("link_searched", [])
                      if _cache_c.get(u, {}).get("ok") and _cache_c[u].get("path")
                      and os.path.isfile(_cache_c[u]["path"])]
-        cut_src_mode = "📁 Upload"
-        if _link_src:
-            cut_src_mode = st.radio("ប្រភព", ["📁 Upload", "🔗 វីដេអូពីតំណ (ផ្ទាំងវីដេអូ)"], horizontal=True,
-                                    key="cut_src_mode", label_visibility="collapsed")
+        _src_opts = ["📁 Upload", "🔗 Link"] + (["🎬 ពីផ្ទាំងវីដេអូ"] if _link_src else [])
+        cut_src_mode = st.radio("ប្រភព", _src_opts, horizontal=True,
+                                key="cut_src_mode", label_visibility="collapsed")
         cut_path = None
         cut_name = "video"
         cut_up = None
@@ -5137,6 +5236,41 @@ with tab_cut:
                                       key="cut_upload")
             if cut_up is not None:
                 cut_name = os.path.splitext(cut_up.name)[0]
+        elif cut_src_mode.startswith("🔗"):
+            st.caption("បិទភ្ជាប់តំណវីដេអូ (TikTok ឬតំណផ្សេង) ១ តំណ រួចចុច «ស្វែងរកវីដេអូ» — ទំហំនិងប្រវែងប៉ុន្មានក៏បាន។")
+            _cut_url_text = st.text_area("តំណវីដេអូ", key="cut_link_text", height=90,
+                                         placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ")
+            _cut_urls = extract_links(_cut_url_text)
+            _cl = st.session_state.get("cut_link")
+            if st.button("🔍 ស្វែងរកវីដេអូ", use_container_width=True, disabled=not _cut_urls,
+                         key="cut_link_search"):
+                if _cl and _cl.get("path"):
+                    shutil.rmtree(os.path.dirname(_cl["path"]), ignore_errors=True)
+                _ph_c = st.empty()
+
+                def _cb_c(attempt):
+                    _ph_c.info(f"⏳ កំពុងរកវីដេអូ · ព្យាយាមលើកទី {attempt}/{LINK_RETRIES}")
+
+                _ent_c = _fetch_one(_cut_urls[0], _cb_c)
+                _ph_c.empty()
+                st.session_state["cut_link"] = dict(_ent_c, url=_cut_urls[0])
+                _cl = st.session_state["cut_link"]
+            if _cl and _cl.get("url") in _cut_urls:
+                if _cl.get("ok") and _cl.get("path") and os.path.isfile(_cl["path"]):
+                    cut_path = _cl["path"]
+                    cut_name = "video_link"
+                    _info_c = f"📦 {os.path.getsize(cut_path) / (1024 * 1024):.0f}MB"
+                    try:
+                        _info_c += f" · ⏱ {fmt_clock(probe_media(cut_path)[0])}"
+                    except Exception:
+                        pass
+                    st.success("✅ រកឃើញវីដេអូហើយ · " + _info_c)
+                else:
+                    st.error("រកតំណមិនឃើញទេ។ សូមសាកម្តងទៀត។")
+                    if _cl.get("err"):
+                        st.code(_cl["err"])
+            elif _cut_urls:
+                st.caption("ចុច «ស្វែងរកវីដេអូ» ជាមុនសិន។")
         else:
             _pick = st.selectbox("ជ្រើសវីដេអូ", list(range(len(_link_src))),
                                  format_func=lambda i: f"វីដេអូទី {i + 1}", key="cut_link_pick")
@@ -5277,6 +5411,7 @@ with tab_voice:
     with st.container(border=True):
         # Keep only the simple voice choices requested by the user.
         voice_label = st.radio("ជ្រើសសំឡេងនិយាយ", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
+        st.toggle("🔔 ប្រកាសសំឡេងខ្មែរដោយស្វ័យប្រវត្តិ ពេលវីដេអូនីមួយៗធ្វើរួច", value=True, key="announce_toggle")
         keep_bg = st.toggle("🎵 រក្សាសំឡេងដើម (សំឡេងផ្ទៃក្រោយ)", value=True, key="keep_bg_toggle")
         bg_level = 8
         if keep_bg:
