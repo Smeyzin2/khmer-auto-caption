@@ -518,11 +518,11 @@ def _env_int(name, default):
 # អាចប្តូរបានតាម Environment Variable MAX_UPLOAD_MB
 MAX_UPLOAD_MB = 100  # ទំហំអតិបរមាសម្រាប់ Upload (ថេរ ១០០MB)
 MAX_DOWNLOAD_MB = _env_int("MAX_DOWNLOAD_MB", MAX_UPLOAD_MB)
-MAX_VIDEOS = _env_int("MAX_VIDEOS", 5)
-MAX_ZIP_MB = 250
+MAX_VIDEOS = _env_int("MAX_VIDEOS", 10)
+MAX_ZIP_MB = 600
 REFRESH_SECONDS = 2
 MAX_RENDER_AT_ONCE = 2
-MAX_VIDEOS_AT_ONCE = 2   # ធ្វើវីដេអូស្របគ្នាអតិបរមា ២ ដើម្បីកុំឲ្យអស់រ៉េមរហូតគាំងកម្មវិធី
+MAX_VIDEOS_AT_ONCE = _env_int("MAX_VIDEOS_AT_ONCE", 2)   # ធ្វើវីដេអូស្របគ្នាអតិបរមា ២ ដើម្បីកុំឲ្យអស់រ៉េមរហូតគាំងកម្មវិធី
 _PIPELINE_SLOTS = threading.Semaphore(MAX_VIDEOS_AT_ONCE)
 MAX_DURATION_MIN = 300
 
@@ -4303,23 +4303,49 @@ class _NoProgress:
         pass
 
 
-def fetch_link_preview(url):
-    """ទាញវីដេអូពីតំណមកទុកជាមុន (ដើម្បីបង្ហាញ មើល ទាញយក និងបកប្រែ)។"""
-    cache = st.session_state.setdefault("link_cache", {})
-    ent = cache.get(url)
-    if ent is not None:
-        return ent
+def extract_links(text):
+    """ទាញតំណ http/https ទាំងអស់ពីអត្ថបទ (បំបែកដោយបន្ទាត់ ដកឃ្លា ឬក្បៀស ក៏បាន) ហើយលុបតំណស្ទួន។"""
+    found = re.findall(r"https?://[^\s<>\"'\u3000\uff0c\u3002]+", text or "", flags=re.I)
+    out = []
+    for u in found:
+        u = u.rstrip(".,;:!?)]}\u00bb\u17d4")
+        if len(u) > 10 and u not in out:
+            out.append(u)
+    return out
+
+
+def _fetch_one(url):
+    """ទាញវីដេអូមួយតំណ (មិនប៉ះ st.session_state ដូច្នេះអាចរត់ក្នុង thread បាន)។"""
     folder = tempfile.mkdtemp(prefix="kac_link_")
     path = os.path.join(folder, "video.mp4")
     try:
         download_video(url, path, _NoProgress())
-        ent = {"path": path, "ok": True}
+        return {"path": path, "ok": True}
     except Exception as e:
         shutil.rmtree(folder, ignore_errors=True)
         _err = re.sub(r"https?://\S+", "[link]", str(e) or type(e).__name__)
-        ent = {"path": None, "ok": False, "err": _err[:600]}
-    cache[url] = ent
+        return {"path": None, "ok": False, "err": _err[:600]}
+
+
+def fetch_link_preview(url):
+    """ទាញវីដេអូពីតំណមកទុកជាមុន (ដើម្បីបង្ហាញ មើល ទាញយក និងបកប្រែ)។"""
+    cache = st.session_state.setdefault("link_cache", {})
+    ent = cache.get(url)
+    if ent is None:
+        ent = _fetch_one(url)
+        cache[url] = ent
     return ent
+
+
+def fetch_links_preview(urls, workers=3):
+    """ទាញវីដេអូច្រើនតំណក្នុងពេលតែមួយ (ស្របគ្នា ៣)។"""
+    cache = st.session_state.setdefault("link_cache", {})
+    todo = [u for u in urls if u not in cache]
+    if todo:
+        with ThreadPoolExecutor(max_workers=max(1, min(workers, len(todo)))) as pool:
+            for u, ent in zip(todo, pool.map(_fetch_one, todo)):
+                cache[u] = ent
+    return {u: cache[u] for u in urls}
 
 
 def drop_link_cache(keep=()):
@@ -4671,10 +4697,17 @@ with tab_vid:
                 "បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"],
                 accept_multiple_files=True) or []
         else:
-            link_text = st.text_area("តំណវីដេអូ TikTok (មួយបន្ទាត់ ១ តំណ)", placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ", height=90)
-            _link_lines = [ln.strip() for ln in link_text.splitlines()
-                           if ln.strip().lower().startswith(("http://", "https://"))][:MAX_VIDEOS]
-            if st.button("🔍 ស្វែងរក", type="primary", use_container_width=True, key="link_search_btn",
+            link_text = st.text_area(
+                "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
+                placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
+                height=170)
+            _all_links = extract_links(link_text)
+            _link_lines = _all_links[:MAX_VIDEOS]
+            if _all_links:
+                st.caption(f"🔗 រកឃើញ {len(_all_links)} តំណ"
+                           + (f" · ធ្វើបាន {MAX_VIDEOS} តំណដំបូង" if len(_all_links) > MAX_VIDEOS else ""))
+            _search_label = "🔍 ស្វែងរក" + (f" ({len(_link_lines)} តំណ)" if len(_link_lines) > 1 else "")
+            if st.button(_search_label, type="primary", use_container_width=True, key="link_search_btn",
                          disabled=(not _link_lines)):
                 _cache0 = st.session_state.get("link_cache", {})
                 for _u0 in _link_lines:
@@ -4684,35 +4717,40 @@ with tab_vid:
             _searched = [u for u in st.session_state.get("link_searched", []) if u in _link_lines]
             drop_link_cache(keep=_searched)
             _link_lines = _searched
-            _any_ok = False
+            if _link_lines:
+                _need = [u for u in _link_lines if u not in st.session_state.get("link_cache", {})]
+                if _need:
+                    with st.spinner(f"កំពុងរកវីដេអូ {len(_need)} តំណ..."):
+                        fetch_links_preview(_link_lines)
+            _n_ok = 0
+            _multi = len(_link_lines) > 1
             for _n, _u in enumerate(_link_lines, start=1):
-                if _u not in st.session_state.get("link_cache", {}):
-                    with st.spinner(f"កំពុងរកវីដេអូទី {_n}..."):
-                        _ent = fetch_link_preview(_u)
-                else:
-                    _ent = fetch_link_preview(_u)
-                if _ent["ok"] and _ent["path"] and os.path.isfile(_ent["path"]):
-                    _any_ok = True
-                    try:
-                        st.video(_ent["path"])
-                    except Exception:
-                        pass
-                    with open(_ent["path"], "rb") as _fh:
-                        _bytes = _fh.read()
-                    dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _bytes, f"video_{_n}.mp4", "video/mp4",
-                              key=f"dl_link_{_n}", use_container_width=True)
-                    del _bytes
-                else:
-                    st.error("រកតំណមិនឃើញ។ ព្យាយាមម្តងទៀត។")
-                    if _ent.get("err"):
-                        with st.expander("ព័ត៌មានបច្ចេកទេស"):
-                            st.code(_ent["err"])
-                    if st.button("🔄 ព្យាយាមម្តងទៀត", key=f"retry_link_{_n}", use_container_width=True):
-                        st.session_state.get("link_cache", {}).pop(_u, None)
-                        st.rerun()
-            if _any_ok:
-                link_translate = st.button("✨ បកប្រែ", type="primary", use_container_width=True,
-                                           disabled=busy, key="link_translate_btn")
+                _ent = fetch_link_preview(_u)
+                _box = (st.expander(f"🎬 វីដេអូទី {_n}", expanded=(_n == 1)) if _multi else st.container())
+                with _box:
+                    if _ent["ok"] and _ent["path"] and os.path.isfile(_ent["path"]):
+                        _n_ok += 1
+                        try:
+                            st.video(_ent["path"])
+                        except Exception:
+                            pass
+                        with open(_ent["path"], "rb") as _fh:
+                            dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _fh, f"video_{_n}.mp4", "video/mp4",
+                                      key=f"dl_link_{_n}", use_container_width=True)
+                    else:
+                        st.error("រកតំណមិនឃើញ។ ព្យាយាមម្តងទៀត។")
+                        if _ent.get("err"):
+                            with st.expander("ព័ត៌មានបច្ចេកទេស"):
+                                st.code(_ent["err"])
+                        if st.button("🔄 ព្យាយាមម្តងទៀត", key=f"retry_link_{_n}", use_container_width=True):
+                            st.session_state.get("link_cache", {}).pop(_u, None)
+                            st.rerun()
+            if _multi:
+                st.caption(f"✅ រកឃើញ {_n_ok} / {len(_link_lines)} វីដេអូ")
+            if _n_ok:
+                link_translate = st.button(
+                    f"✨ បកប្រែ ({_n_ok} វីដេអូ)" if _n_ok > 1 else "✨ បកប្រែ",
+                    type="primary", use_container_width=True, disabled=busy, key="link_translate_btn")
         st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
         _ram_txt = server_ram_info()
         if _ram_txt:
@@ -4904,7 +4942,7 @@ if uploaded_files:
     for f in uploaded_files[:MAX_VIDEOS]:
         items.append({"name": f.name, "file": f, "url": None})
 else:
-    lines = [ln.strip() for ln in link_text.splitlines() if ln.strip().lower().startswith(("http://", "https://"))]
+    lines = extract_links(link_text)
     _cache = st.session_state.get("link_cache", {})
     lines = [u for u in lines if _cache.get(u, {}).get("ok")]
     too_many = len(lines) > MAX_VIDEOS
