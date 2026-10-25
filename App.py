@@ -62,17 +62,17 @@ if MAINTENANCE_MODE and not _is_admin:
         """
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;700&display=swap');
-.stApp { background: radial-gradient(circle at 50% 0%, #1b1450 0%, #0A0F2E 60%) !important; }
+.stApp { background: radial-gradient(circle at 50% 0%, #E4DCFF 0%, #F4F7FF 60%) !important; }
 header, [data-testid="stToolbar"], [data-testid="stSidebar"] { display: none !important; }
 .kvai-maint {
   max-width: 460px; margin: 18vh auto 0; padding: 36px 26px; text-align: center;
   border: 1px solid rgba(177,60,255,.45); border-radius: 26px;
-  background: rgba(17,24,66,.75); box-shadow: 0 0 40px rgba(177,60,255,.25);
-  font-family: 'Kantumruy Pro', 'Battambang', sans-serif; color: #E8ECFF;
+  background: rgba(255,255,255,.95); box-shadow: 0 8px 36px rgba(100,80,200,.18);
+  font-family: 'Kantumruy Pro', 'Battambang', sans-serif; color: #1F2A44;
 }
 .kvai-maint .ic { font-size: 64px; line-height: 1; animation: kvai-spin 3.2s linear infinite; display: inline-block; }
-.kvai-maint h1 { font-size: 28px; margin: 18px 0 8px; color: #fff; }
-.kvai-maint p { font-size: 17px; line-height: 1.7; margin: 6px 0; color: #C9D0FF; }
+.kvai-maint h1 { font-size: 28px; margin: 18px 0 8px; color: #1F2A44; }
+.kvai-maint p { font-size: 17px; line-height: 1.7; margin: 6px 0; color: #44506E; }
 .kvai-maint .dots span { animation: kvai-blink 1.4s infinite both; font-size: 30px; color: #B13CFF; }
 .kvai-maint .dots span:nth-child(2) { animation-delay: .2s; }
 .kvai-maint .dots span:nth-child(3) { animation-delay: .4s; }
@@ -115,14 +115,14 @@ if IS_STREAMLIT_CLOUD and os.environ.get("BLOCK_STREAMLIT_CLOUD") == "1":
     st.stop()
 
 # =====================================================================
-#  THEME (Khmer Video AI — dark)
+#  THEME (Khmer Video AI — light)
 # =====================================================================
 for _k, _v in {
-    "theme.base": "dark",
-    "theme.primaryColor": "#B13CFF",
-    "theme.backgroundColor": "#0A0F2E",
-    "theme.secondaryBackgroundColor": "#111842",
-    "theme.textColor": "#E8ECFF",
+    "theme.base": "light",
+    "theme.primaryColor": "#7C3AED",
+    "theme.backgroundColor": "#F4F7FF",
+    "theme.secondaryBackgroundColor": "#FFFFFF",
+    "theme.textColor": "#1F2A44",
     "server.maxUploadSize": 100,
 }.items():
     try:
@@ -135,15 +135,15 @@ THEME_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Kantumruy+Pro:wght@400;500;600;700;800&family=Battambang:wght@400;700&family=Noto+Sans+Khmer:wght@400;500;600;700;800&display=swap');
 
 :root {
-  --ink: #E8ECFF;
-  --soft: #9AA3D0;
-  --bg: #0A0F2E;
-  --card: #111842;
-  --card2: #0D1438;
-  --line: rgba(125,145,255,.22);
-  --p1: #B13CFF;
-  --p2: #3C6BFF;
-  --gold: #F5B72E;
+  --ink: #1F2A44;
+  --soft: #55627F;
+  --bg: #F4F7FF;
+  --card: #FFFFFF;
+  --card2: #F1F5FF;
+  --line: rgba(80,100,190,.25);
+  --p1: #7C3AED;
+  --p2: #2563EB;
+  --gold: #B45309;
   --r-lg: 20px;
   --r-md: 14px;
   --r-sm: 12px;
@@ -154,10 +154,10 @@ THEME_CSS = """
 [data-testid="manage-app-button"] { display: none !important; }
 
 html, body, .stApp, [data-testid="stAppViewContainer"] {
-  background: radial-gradient(900px 480px at 15% -8%, #2B1B72 0%, rgba(10,15,46,0) 60%), #0A0F2E !important;
+  background: radial-gradient(900px 480px at 15% -8%, #E4DCFF 0%, rgba(244,247,255,0) 60%), #F4F7FF !important;
   color: var(--ink);
   font-family: 'Kantumruy Pro', 'Noto Sans Khmer', 'Battambang', system-ui, sans-serif !important;
-  color-scheme: dark;
+  color-scheme: light;
 }
 .stApp p, .stApp label, .stApp h1, .stApp h2, .stApp h3, .stApp li, .stApp small,
 .stApp textarea, .stApp input, .stApp button p, .stApp a,
@@ -189,7 +189,7 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p,
 .kvai-title h1 {
   margin: 0 !important; padding: 0 !important;
   font-size: clamp(1.5rem, 6vw, 2rem) !important;
-  font-weight: 800 !important; line-height: 1.2 !important; color: #fff !important;
+  font-weight: 800 !important; line-height: 1.2 !important; color: var(--ink) !important;
 }
 .kvai-title h1 span {
   background: linear-gradient(90deg, #B13CFF, #3C6BFF);
@@ -213,7 +213,7 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p,
   color: var(--soft) !important; text-decoration: none !important; font-weight: 600;
 }
 .kvai-nav a.on { background: linear-gradient(135deg, var(--p1), var(--p2)); color: #fff !important; }
-.kvai-nav a:hover { color: #fff !important; }
+.kvai-nav a:hover { color: var(--ink) !important; }
 
 /* ---------- Tabs ---------- */
 [data-baseweb="tab-list"] {
@@ -243,14 +243,14 @@ button[data-baseweb="tab"][aria-selected="true"] {
 
 /* ---------- Cards ---------- */
 div[data-testid="stVerticalBlockBorderWrapper"] {
-  background: rgba(17,24,66,.85) !important;
+  background: rgba(255,255,255,.94) !important;
   border: 1px solid var(--line) !important;
   border-radius: var(--r-lg) !important;
-  box-shadow: 0 6px 22px rgba(0,0,0,.25);
+  box-shadow: 0 6px 22px rgba(70,90,170,.14);
   padding: 6px 4px;
 }
 div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlockBorderWrapper"] {
-  box-shadow: none; background: rgba(13,20,56,.9) !important;
+  box-shadow: none; background: #F7F9FF !important;
 }
 
 /* ---------- Select ---------- */
@@ -269,9 +269,9 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 [data-baseweb="select"] * { color: var(--ink) !important; }
 [data-baseweb="select"] svg { fill: var(--ink) !important; }
 [data-baseweb="popover"] ul, [data-baseweb="popover"] li, [data-baseweb="menu"] {
-  background: #121A4A !important; color: var(--ink) !important;
+  background: #FFFFFF !important; color: var(--ink) !important;
 }
-[data-baseweb="popover"] li:hover { background: rgba(177,60,255,.25) !important; }
+[data-baseweb="popover"] li:hover { background: rgba(124,58,237,.12) !important; }
 
 /* ---------- Text area ---------- */
 .stTextArea textarea, [data-baseweb="textarea"], [data-baseweb="textarea"] > div {
@@ -310,7 +310,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 [data-testid="stCheckbox"] label > span:first-child,
 [data-baseweb="checkbox"] > span:first-child {
   border-radius: 7px !important;
-  border: 1.5px solid #5560A8 !important;
+  border: 1.5px solid #8C97C8 !important;
   background-color: var(--card2) !important;
 }
 [data-testid="stCheckbox"] label:has(input:checked) > span:first-child,
@@ -318,7 +318,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
   background: linear-gradient(135deg, var(--p1), var(--p2)) !important;
   border-color: transparent !important;
 }
-[data-testid="stToggle"] label > div:first-child { background: #2A3166 !important; }
+[data-testid="stToggle"] label > div:first-child { background: #C3CBE6 !important; }
 [data-testid="stToggle"] label:has(input:checked) > div:first-child {
   background: linear-gradient(90deg, var(--p1), var(--p2)) !important;
 }
@@ -330,12 +330,12 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 
 /* ---------- Uploader ---------- */
 [data-testid="stFileUploaderDropzone"] {
-  background: rgba(20,30,90,.35);
+  background: rgba(124,58,237,.06);
   border: 2px dashed var(--p2);
   border-radius: var(--r-lg);
   padding: 22px 16px;
 }
-[data-testid="stFileUploaderDropzone"]:hover { border-color: var(--p1); background: rgba(40,30,110,.45); }
+[data-testid="stFileUploaderDropzone"]:hover { border-color: var(--p1); background: rgba(124,58,237,.12); }
 [data-testid="stFileUploaderDropzone"] * { color: var(--ink) !important; }
 [data-testid="stFileUploaderDropzoneInstructions"] small,
 [data-testid="stFileUploaderDropzoneInstructions"] span + span,
@@ -369,10 +369,10 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 .stButton > button[kind="primary"] *, .stDownloadButton > button[kind="primary"] * { color: #fff !important; }
 .stButton > button:hover, .stDownloadButton > button:hover { transform: translateY(-1px); border-color: var(--p2); }
 .stButton > button:focus-visible { outline: 3px solid var(--gold); outline-offset: 2px; }
-.stButton > button:disabled { background: #1B2250 !important; color: #6E77A8 !important; box-shadow: none; transform: none; }
+.stButton > button:disabled { background: #E3E8F5 !important; color: #7A85A6 !important; box-shadow: none; transform: none; }
 
 /* ---------- Progress ---------- */
-[data-testid="stProgress"] > div > div { background: #1B2250 !important; border-radius: 999px; }
+[data-testid="stProgress"] > div > div { background: #E3E8F5 !important; border-radius: 999px; }
 [data-testid="stProgress"] > div > div > div { background: linear-gradient(90deg, var(--p1), var(--p2)) !important; border-radius: 999px; }
 
 /* ---------- Metrics ---------- */
@@ -382,7 +382,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
   border-radius: var(--r-md);
   padding: 12px 14px;
 }
-[data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-weight: 800; color: #fff !important; }
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * { font-weight: 800; color: var(--ink) !important; }
 [data-testid="stMetricLabel"] p { color: var(--soft) !important; font-weight: 500; }
 
 /* ---------- Alerts ---------- */
@@ -391,7 +391,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 
 /* ---------- Expander ---------- */
 [data-testid="stExpander"] {
-  background: rgba(13,20,56,.9);
+  background: #FFFFFF;
   border: 1.5px solid var(--line) !important;
   border-radius: var(--r-md);
 }
@@ -410,6 +410,17 @@ hr { border-color: var(--line) !important; margin: 1.6rem 0 !important; }
   font-family: 'Battambang', 'Kantumruy Pro', sans-serif;
   padding: 3px 10px; border-radius: 6px; line-height: 1.5;
 }
+
+/* ---------- Light theme extras: input / code / placeholder ---------- */
+.stTextInput input, .stNumberInput input, [data-baseweb="input"], [data-baseweb="input"] > div,
+[data-baseweb="base-input"] {
+  background: var(--card2) !important; color: var(--ink) !important;
+  border-color: var(--line) !important; border-radius: var(--r-sm) !important;
+}
+.stTextInput input::placeholder, .stTextArea textarea::placeholder { color: #7A85A6 !important; opacity: 1; }
+[data-testid="stCodeBlock"] pre, .stCode pre { background: #EEF2FF !important; }
+[data-testid="stCodeBlock"] code, .stCode code { color: #1F2A44 !important; }
+[data-testid="stFileUploaderDropzone"] { background: rgba(124,58,237,.06) !important; }
 </style>
 """
 
@@ -450,7 +461,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] { padding: 4px 2px; }
   position: fixed; bottom: 0; left: 50%; transform: translateX(-50%);
   width: min(100%, 1240px); z-index: 999;
   padding: 18px 12px calc(10px + env(safe-area-inset-bottom));
-  background: linear-gradient(180deg, rgba(10,15,46,0), #0A0F2E 35%);
+  background: linear-gradient(180deg, rgba(244,247,255,0), #F4F7FF 35%);
 }
 .st-key-startbar .stButton > button { min-height: 52px; }
 </style>
@@ -4599,64 +4610,6 @@ def split_video_parts(src, folder, idx):
     return parts if len(parts) > 1 else None
 
 
-# =====================================================================
-#  បណ្ណាល័យវីដេអូស្រាប់ (អ្នកគ្រប់គ្រងដាក់តំណ → អ្នកប្រើជ្រើសយកទៅបកប្រែ)
-# =====================================================================
-# ដាក់តំណនៅទីនេះ ឬក្នុង Secrets (VIDEO_LIBRARY = មួយបន្ទាត់ ១ តំណ) ឬបន្ថែមតាមអ្នកគ្រប់គ្រងក្នុងកម្មវិធី
-VIDEO_LIBRARY = [
-    # {"url": "https://www.tiktok.com/@user/video/123...", "title": "ចំណងជើង (មិនបង្ខំ)"},
-]
-LIB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "video_library.json")
-LIB_PAGE = 6
-
-
-def _lib_read_file():
-    try:
-        with open(LIB_FILE, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return [d for d in data if isinstance(d, dict) and d.get("url")]
-    except Exception:
-        return []
-
-
-def _lib_write_file(items):
-    try:
-        with open(LIB_FILE, "w", encoding="utf-8") as fh:
-            json.dump(items, fh, ensure_ascii=False, indent=1)
-        return True
-    except Exception:
-        return False
-
-
-def load_library():
-    out, seen = [], set()
-    sources = list(VIDEO_LIBRARY)
-    sources += [{"url": u, "title": ""} for u in extract_links(os.environ.get("VIDEO_LIBRARY", ""))]
-    sources += _lib_read_file()
-    for d in sources:
-        u = str(d.get("url", "")).strip()
-        if u and u not in seen:
-            seen.add(u)
-            out.append({"url": u, "title": str(d.get("title", "") or "")})
-    return out
-
-
-@st.cache_data(ttl=86400, show_spinner=False)
-def video_meta(url):
-    """យកចំណងជើង និងរូបតូចពី TikTok oEmbed (បើបរាជ័យ ត្រឡប់ទទេ)។"""
-    try:
-        if "tiktok.com" in url:
-            api = "https://www.tiktok.com/oembed?url=" + urllib.parse.quote(url, safe="")
-            req = urllib.request.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-            with urllib.request.urlopen(req, timeout=6) as r:
-                d = json.loads(r.read().decode("utf-8"))
-            return {"title": d.get("title") or "", "thumb": d.get("thumbnail_url") or "",
-                    "author": d.get("author_name") or ""}
-    except Exception:
-        pass
-    return {"title": "", "thumb": "", "author": ""}
-
-
 def drop_link_cache(keep=()):
     cache = st.session_state.get("link_cache", {})
     for k in list(cache.keys()):
@@ -4741,7 +4694,7 @@ def share_button(path, fname):
 <button id="b" style="width:100%;padding:14px;font-size:17px;font-weight:700;color:#fff;border:0;
 border-radius:14px;background:linear-gradient(90deg,#B13CFF,#3C6BFF);cursor:pointer;
 font-family:system-ui,sans-serif;">🎵 បង្ហោះទៅ TikTok</button>
-<div id="m" style="color:#ffb4b4;font-size:14px;margin-top:6px;font-family:system-ui,sans-serif;"></div>
+<div id="m" style="color:#B42318;font-size:14px;margin-top:6px;font-family:system-ui,sans-serif;"></div>
 <script>
 const B64 = "__B64__";
 const NAME = __NAME__;
@@ -4767,7 +4720,7 @@ document.getElementById("b").onclick = async () => {
       }
     }
     m.innerHTML = "ឧបករណ៍ ឬកម្មវិធីរុករកនេះមិនគាំទ្រការបង្ហោះផ្ទាល់ទេ។ សូមទាញយកវីដេអូ រួច "
-      + '<a href="https://www.tiktok.com/tiktokstudio/upload" target="_blank" style="color:#fff">បើកទំព័រ TikTok</a>';
+      + '<a href="https://www.tiktok.com/tiktokstudio/upload" target="_blank" style="color:#1D4ED8">បើកទំព័រ TikTok</a>';
   } catch (e) {
     m.textContent = "មិនអាចបង្ហោះបានទេ។ សូមទាញយកវីដេអូជាមុន។";
   }
@@ -5025,75 +4978,7 @@ with tab_vid:
                 "បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"],
                 accept_multiple_files=True) or []
         else:
-            # ---------- វីដេអូស្រាប់ ----------
-            _lib = load_library()
-            if _lib:
-                st.markdown("**🎞 វីដេអូស្រាប់ — ជ្រើសយកទៅបកប្រែ**")
-                _shown = st.session_state.get("lib_shown", LIB_PAGE)
-                for _i, _v in enumerate(_lib[:_shown]):
-                    _m = video_meta(_v["url"])
-                    with st.container(border=True):
-                        if _m["thumb"]:
-                            try:
-                                st.image(_m["thumb"], use_container_width=True)
-                            except Exception:
-                                try:
-                                    st.image(_m["thumb"])
-                                except Exception:
-                                    pass
-                        _title = _v["title"] or _m["title"] or f"វីដេអូទី {_i + 1}"
-                        st.caption(_title[:120] + (f" · @{_m['author']}" if _m["author"] else ""))
-                        _c1, _c2 = st.columns(2)
-                        _add = _c1.button("➕ បន្ថែម", key=f"lib_add_{_i}", use_container_width=True)
-                        _go = _c2.button("✨ បកប្រែ", key=f"lib_go_{_i}", use_container_width=True, disabled=busy)
-                        if _go:
-                            st.session_state["link_text_area"] = _v["url"]
-                            st.session_state["link_searched"] = [_v["url"]]
-                            st.session_state["_auto_translate"] = True
-                        elif _add:
-                            _cur = extract_links(st.session_state.get("link_text_area", ""))
-                            if _v["url"] not in _cur:
-                                _cur.append(_v["url"])
-                            _cur = _cur[:MAX_VIDEOS]
-                            st.session_state["link_text_area"] = "\n".join(_cur)
-                            st.session_state["link_searched"] = list(_cur)
-                if len(_lib) > _shown:
-                    if st.button(f"បង្ហាញបន្ថែម ({len(_lib) - _shown})", key="lib_more", use_container_width=True):
-                        st.session_state["lib_shown"] = _shown + LIB_PAGE
-                        st.rerun()
-            else:
-                st.caption("🎞 មិនទាន់មានវីដេអូស្រាប់ទេ។ អ្នកគ្រប់គ្រងអាចបន្ថែមខាងក្រោម។")
-            with st.expander("🔑 អ្នកគ្រប់គ្រង (បន្ថែម/លុបវីដេអូស្រាប់)"):
-                if not st.session_state.get("_lib_admin"):
-                    _lpw = st.text_input("លេខសម្ងាត់", type="password", key="_lib_pw")
-                    if _lpw and _lpw == MAINTENANCE_ADMIN_KEY:
-                        st.session_state["_lib_admin"] = True
-                        st.rerun()
-                    elif _lpw:
-                        st.error("លេខសម្ងាត់មិនត្រឹមត្រូវ")
-                else:
-                    _new = st.text_area("តំណវីដេអូថ្មី (មួយបន្ទាត់ ១ តំណ)", key="lib_new_links", height=110)
-                    if st.button("➕ បន្ថែមទៅបណ្ណាល័យ", key="lib_save_btn", use_container_width=True):
-                        _file_items = _lib_read_file()
-                        _have = {d["url"] for d in load_library()}
-                        _added = 0
-                        for _u in extract_links(_new):
-                            if _u not in _have:
-                                _file_items.append({"url": _u, "title": ""})
-                                _added += 1
-                        if _lib_write_file(_file_items):
-                            st.success(f"បានបន្ថែម {_added} តំណ")
-                            st.rerun()
-                        else:
-                            st.error("រក្សាទុកមិនបាន")
-                    _file_now = _lib_read_file()
-                    if _file_now:
-                        _del = st.multiselect("លុបវីដេអូ", [d["url"] for d in _file_now], key="lib_del_sel")
-                        if _del and st.button("🗑 លុបដែលបានជ្រើស", key="lib_del_btn", use_container_width=True):
-                            _lib_write_file([d for d in _file_now if d["url"] not in _del])
-                            st.rerun()
-                    st.caption("ចំណាំ៖ នៅលើ Streamlit Cloud បញ្ជីដែលបន្ថែមតាមទីនេះអាចបាត់ពេល reboot/deploy ថ្មី។ "
-                               "ដើម្បីរក្សាជាអចិន្ត្រៃយ៍ ដាក់ក្នុងបញ្ជី VIDEO_LIBRARY ក្នុងកូដ ឬក្នុង Secrets។")
+            st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
             with st.expander("⚡ បកប្រែអូតូពី TikTok (Bookmarklet)"):
                 st.markdown(
                     "១. ចម្លងកូដខាងក្រោម រួចបង្កើត Bookmark ថ្មីក្នុង Browser ហើយបិទភ្ជាប់កូដនេះជា «URL» (ដាក់ឈ្មោះ «បកប្រែខ្មែរ»)។\n\n"
