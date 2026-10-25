@@ -517,7 +517,7 @@ def _env_int(name, default):
 # Streamlit Cloud (RAM តូច) = 200MB · ម៉ាស៊ីនមេផ្ទាល់ខ្លួន = 2GB (ប្រើ RAM របស់ម៉ាស៊ីនខ្លួនឯង)
 # អាចប្តូរបានតាម Environment Variable MAX_UPLOAD_MB
 MAX_UPLOAD_MB = 100  # ទំហំអតិបរមាសម្រាប់ Upload (ថេរ ១០០MB)
-MAX_DOWNLOAD_MB = _env_int("MAX_DOWNLOAD_MB", MAX_UPLOAD_MB)
+MAX_DOWNLOAD_MB = _env_int("MAX_DOWNLOAD_MB", 200000)   # តំណវីដេអូ: ទំហំប៉ុន្មានក៏បាន (ចំនួនធំណាស់)
 MAX_VIDEOS = _env_int("MAX_VIDEOS", 10)
 MAX_ZIP_MB = 600
 REFRESH_SECONDS = 2
@@ -4056,6 +4056,8 @@ class Job:
         self.zip = None
         self.zip_done = False
         self.scrolled = False
+        self.turn = 0
+        self.turn_cv = threading.Condition()
     def running(self):
         return any(it["state"] in ("queued", "running", "review") for it in self.items)
     def reviewing(self):
@@ -4069,7 +4071,17 @@ def engine_name(engine):
 def run_worker(job, item, settings, fonts_data):
     rep = Reporter(item)
     item["stage"] = "ក្នុងជួររង់ចាំ..."
+    _seq = item.get("seq")
+    if _seq is not None:
+        # ចាប់ផ្តើមតាមលំដាប់លំដោយ: ផ្នែកទី១ មុន រួចផ្នែកទី២ ...
+        with job.turn_cv:
+            while job.turn != _seq:
+                job.turn_cv.wait(timeout=5)
     _PIPELINE_SLOTS.acquire()
+    if _seq is not None:
+        with job.turn_cv:
+            job.turn = _seq + 1
+            job.turn_cv.notify_all()
     item["t0"] = time.time()
     item["state"] = "running"
     try:
@@ -4361,6 +4373,39 @@ def fetch_links_preview(urls, status=None):
 
         cache[u] = _fetch_one(u, _cb)
     return {u: cache[u] for u in urls}
+
+
+SPLIT_SECONDS = 6 * 60   # បំបែកវីដេអូជាផ្នែកប្រវែង ៦ នាទី
+
+
+def link_or_copy(src, dst):
+    """បង្កើត hard link (លឿន មិនចំណាយទំហំថ្មី) បើមិនបានទើបចម្លង។"""
+    try:
+        os.link(src, dst)
+    except Exception:
+        shutil.copyfile(src, dst)
+
+
+def split_video_parts(src, folder, idx):
+    """បំបែកវីដេអូវែងជាផ្នែក ~៦ នាទី (កាត់ដោយមិន encode ឡើងវិញ ដូច្នេះលឿន)។ ត្រឡប់បញ្ជីផ្លូវឯកសារតាមលំដាប់ ឬ None បើមិនចាំបាច់/បរាជ័យ។"""
+    try:
+        duration, _w, _h = probe_media(src)
+    except Exception:
+        return None
+    if duration <= SPLIT_SECONDS + 20:
+        return None
+    pattern = os.path.join(folder, f"part_{idx}_%03d.mp4")
+    try:
+        run_ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-c", "copy",
+                    "-f", "segment", "-segment_time", str(SPLIT_SECONDS),
+                    "-reset_timestamps", "1", pattern])
+    except Exception:
+        return None
+    prefix = f"part_{idx}_"
+    parts = sorted(os.path.join(folder, fn) for fn in os.listdir(folder)
+                   if fn.startswith(prefix) and fn.endswith(".mp4"))
+    parts = [pp for pp in parts if os.path.getsize(pp) > 1000]
+    return parts if len(parts) > 1 else None
 
 
 def drop_link_cache(keep=()):
@@ -4746,13 +4791,26 @@ with tab_vid:
                 with _box:
                     if _ent["ok"] and _ent["path"] and os.path.isfile(_ent["path"]):
                         _n_ok += 1
+                        _mb = os.path.getsize(_ent["path"]) / (1024 * 1024)
+                        _info = f"📦 {_mb:.0f}MB"
                         try:
-                            st.video(_ent["path"])
+                            _dur, _w0, _h0 = probe_media(_ent["path"])
+                            _info += f" · ⏱ {_dur / 60:.1f} នាទី"
+                            if _dur > SPLIT_SECONDS + 20:
+                                _np = int(-(-_dur // SPLIT_SECONDS))
+                                _info += f" · ✂️ នឹងបំបែកជា {_np} ផ្នែក (ក្នុងមួយផ្នែក ៦ នាទី)"
                         except Exception:
                             pass
-                        with open(_ent["path"], "rb") as _fh:
-                            dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _fh, f"video_{_n}.mp4", "video/mp4",
-                                      key=f"dl_link_{_n}", use_container_width=True)
+                        st.caption(_info)
+                        if _mb <= PREVIEW_MAX_MB:
+                            try:
+                                st.video(_ent["path"])
+                            except Exception:
+                                pass
+                        if _mb <= 300:
+                            with open(_ent["path"], "rb") as _fh:
+                                dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _fh, f"video_{_n}.mp4", "video/mp4",
+                                          key=f"dl_link_{_n}", use_container_width=True)
                     else:
                         st.error("រកតំណមិនឃើញទេ ទោះបានព្យាយាមច្រើនលើកហើយ។ សូមចុចព្យាយាមម្តងទៀត។")
                         if _ent.get("err"):
@@ -4767,7 +4825,10 @@ with tab_vid:
                 link_translate = st.button(
                     f"✨ បកប្រែ ({_n_ok} វីដេអូ)" if _n_ok > 1 else "✨ បកប្រែ",
                     type="primary", use_container_width=True, disabled=busy, key="link_translate_btn")
-        st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
+        if mode.startswith("📁"):
+            st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
+        else:
+            st.caption(f"រហូតដល់ {MAX_VIDEOS} តំណ · ប្រវែង និងទំហំប៉ុន្មានក៏បាន · វីដេអូវែងនឹងបំបែកជាផ្នែក ៦ នាទី ហើយធ្វើតាមលំដាប់")
         _ram_txt = server_ram_info()
         if _ram_txt:
             st.caption(_ram_txt)
@@ -5017,17 +5078,31 @@ if run:
     job_folder = tempfile.mkdtemp(prefix="kac_")
     job_items = []
     for idx, it in enumerate(items, start=1):
-        item = new_item(it["name"], url=it["url"])
         if it["file"] is not None:
+            item = new_item(it["name"], url=it["url"])
             p = os.path.join(job_folder, f"upload_{idx}.bin")
             with open(p, "wb") as f:
                 f.write(it["file"].getbuffer())
             item["path"] = p
+            job_items.append(item)
         elif it.get("cached") and os.path.isfile(it["cached"]):
-            p = os.path.join(job_folder, f"upload_{idx}.bin")
-            shutil.copyfile(it["cached"], p)
-            item["path"] = p
-        job_items.append(item)
+            with st.spinner(f"កំពុងរៀបចំវីដេអូទី {idx}..."):
+                parts = split_video_parts(it["cached"], job_folder, idx)
+            if parts:
+                for k, pp in enumerate(parts, start=1):
+                    item = new_item(f"{it['name']} · ផ្នែក {k}/{len(parts)}")
+                    item["path"] = pp
+                    job_items.append(item)
+            else:
+                item = new_item(it["name"], url=it["url"])
+                p = os.path.join(job_folder, f"upload_{idx}.bin")
+                link_or_copy(it["cached"], p)
+                item["path"] = p
+                job_items.append(item)
+        else:
+            job_items.append(new_item(it["name"], url=it["url"]))
+    for _k, _it in enumerate(job_items):
+        _it["seq"] = _k
     job = Job(job_items, job_folder)
     st.session_state["job"] = job
     for item in job.items:
