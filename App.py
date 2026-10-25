@@ -4481,6 +4481,24 @@ def fetch_links_preview(urls, status=None):
     return {u: cache[u] for u in urls}
 
 
+def app_base_url():
+    """អាសយដ្ឋានកម្មវិធីនេះ (សម្រាប់បង្កើត Bookmarklet)។"""
+    try:
+        u = st.context.url
+        if u:
+            return str(u).split("?")[0]
+    except Exception:
+        pass
+    try:
+        h = st.context.headers
+        host = h.get("X-Forwarded-Host") or h.get("Host")
+        if host:
+            return f"https://{host}/"
+    except Exception:
+        pass
+    return "https://YOUR-APP.streamlit.app/"
+
+
 SPLIT_SECONDS = 6 * 60   # បំបែកវីដេអូជាផ្នែកប្រវែង ៦ នាទី
 
 
@@ -4852,6 +4870,25 @@ tab_vid, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 with tab_vid:
+    # បើកមកពី TikTok តាម Bookmarklet: ?link=<តំណវីដេអូ>&auto=1 → ដាក់តំណ ស្វែងរក ហើយបកប្រែអូតូ
+    _qp_link = st.query_params.get("link")
+    if isinstance(_qp_link, list):
+        _qp_link = _qp_link[0] if _qp_link else ""
+    if _qp_link and st.session_state.get("_qp_consumed") != _qp_link:
+        st.session_state["_qp_consumed"] = _qp_link
+        _ql = extract_links(_qp_link)[:MAX_VIDEOS]
+        if _ql:
+            st.session_state["mode_pick"] = "🔗 Link"
+            st.session_state["link_text_area"] = "\n".join(_ql)
+            st.session_state["link_searched"] = list(_ql)
+            _qa = st.query_params.get("auto")
+            if isinstance(_qa, list):
+                _qa = _qa[0] if _qa else ""
+            st.session_state["_auto_translate"] = (str(_qa) == "1")
+        try:
+            st.query_params.clear()
+        except Exception:
+            pass
     with st.container(border=True):
         mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True,
                         label_visibility="collapsed", key="mode_pick")
@@ -4863,8 +4900,20 @@ with tab_vid:
                 "បន្ថែមវីដេអូ (ជ្រើសបានច្រើន)", type=["mp4", "mov", "mkv", "avi", "webm"],
                 accept_multiple_files=True) or []
         else:
+            try:
+                st.link_button("🎬 បើក TikTok ShortDrama (ជ្រើសវីដេអូ)", "https://www.tiktok.com/shortdrama",
+                               use_container_width=True)
+            except Exception:
+                st.markdown("[🎬 បើក TikTok ShortDrama (ជ្រើសវីដេអូ)](https://www.tiktok.com/shortdrama)")
+            with st.expander("⚡ បកប្រែអូតូពី TikTok (Bookmarklet)"):
+                st.markdown(
+                    "១. ចម្លងកូដខាងក្រោម រួចបង្កើត Bookmark ថ្មីក្នុង Browser ហើយបិទភ្ជាប់កូដនេះជា «URL» (ដាក់ឈ្មោះ «បកប្រែខ្មែរ»)។\n\n"
+                    "២. បើក TikTok រើសវីដេអូណាមួយ ហើយចុច Bookmark នោះ → កម្មវិធីនេះនឹងបើក ទាញវីដេអូ និងបកប្រែអូតូ។")
+                st.code("javascript:(function(){location.href='" + app_base_url()
+                        + "?link='+encodeURIComponent(location.href)+'&auto=1';})();", language="text")
             link_text = st.text_area(
                 "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
+                key="link_text_area",
                 placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
                 height=170)
             _all_links = extract_links(link_text)
@@ -4931,6 +4980,11 @@ with tab_vid:
                 link_translate = st.button(
                     f"✨ បកប្រែ ({_n_ok} វីដេអូ)" if _n_ok > 1 else "✨ បកប្រែ",
                     type="primary", use_container_width=True, disabled=busy, key="link_translate_btn")
+                if st.session_state.get("_auto_translate") and not busy:
+                    st.session_state["_auto_translate"] = False
+                    link_translate = True
+            elif _link_lines and st.session_state.get("_auto_translate"):
+                st.session_state["_auto_translate"] = False
         if mode.startswith("📁"):
             st.caption(f"រហូតដល់ {MAX_VIDEOS} វីដេអូ · រហូតដល់ {MAX_DURATION_MIN // 60} ម៉ោង")
         else:
