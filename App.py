@@ -1983,6 +1983,9 @@ TRANS_SYSTEM = (
     "(13) Match the DELIVERY of the original: a short sharp exclamation, shout or one-word reply stays short and punchy in Khmer; a slow, soft, sad or "
     "thoughtful line becomes a calm, flowing Khmer sentence with natural softening particles; a fast angry or excited burst uses clipped, energetic words. "
     "Keep each speaker's pronouns, politeness level and vocabulary consistent across all lines of the video. "
+    "(14) ACCURACY: before answering each line, check who does what to whom, when, how many and why; keep every negation, question, condition and number exactly. "
+    "Chinese/foreign personal names: transliterate by SOUND the same way every time across all lines, never translate their meaning. Kinship words (older brother, aunt, boss, teacher) must match the real relationship. "
+    "If an English hint and the original disagree, the original wins. If a word is unclear choose the most common meaning that fits the scene, never invent or censor content, and never output nonsense words. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
@@ -2099,6 +2102,7 @@ REFINE_SYSTEM = (
     "keeping exactly the same facts, names, numbers, emotion and tone. Do not add or remove information. If the draft is already correct and natural, "
     "return it unchanged. Use the neighbouring items as story context (who speaks to whom). One complete sentence per item, same order, "
     "Khmer script only, end with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
+    "Also verify: every negation, question, number, name (same transliteration in every line), kinship word and who-does-what-to-whom is exactly right, and the Khmer has no invented or nonsense words. "
     "Return JSON {\"translations\": [...]} with exactly one item per input."
 )
 
@@ -2990,7 +2994,9 @@ def tts_segment(text, voice, path, prosody=None):
     async def _go(p):
         # Natural, slightly slower Khmer delivery by default.
         # Emotion-specific prosody still takes precedence when supplied.
-        kw = {"rate": "-4%"}
+        # ផ្លាស់ប្តូររបៀបអានបន្តិចបន្តួចតាមអត្ថបទ ដើម្បីកុំឱ្យស្តាប់ដូចម៉ាស៊ីនអានដដែលៗ
+        _h = sum(ord(c) for c in str(text)) if text else 0
+        kw = {"rate": f"{-4 + (_h % 5) - 2:+d}%", "pitch": f"{(_h // 5) % 7 - 3:+d}Hz"}
         if p:
             kw = {"rate": p["rate"], "volume": p["volume"], "pitch": p["pitch"]}
         await edge_tts.Communicate(tts_clean(text), voice, **kw).save(path)
@@ -3815,14 +3821,22 @@ def condense_for_slot(text, slot, client, model, groq_key):
     return text
 
 
+# ធ្វើឱ្យសំឡេងស្តាប់ទន់ ក្តៅ និងដូចមនុស្សនិយាយក្នុងបន្ទប់ (មិនស្ងួតដូចម៉ាស៊ីន)
+VOICE_POLISH = ("highpass=f=70,"
+                "acompressor=threshold=0.14:ratio=2:attack=12:release=180,"
+                "equalizer=f=180:t=q:w=1:g=1.5,"
+                "equalizer=f=3200:t=q:w=1.2:g=1.5,"
+                "aecho=0.85:0.9:28:0.10")
+
+
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0, tight=True):
+             clone_voice=None, eleven_key=None, ref_bands=None, offset=0.0, tight=True, bg_vol=0.08):
     inputs, filters = [], []
     n = 0
     if keep_bg:
         inputs += ["-i", "audio.mp3"]
-        filters.append("[0:a]volume=0.08[bg]")
+        filters.append(f"[0:a]volume={float(bg_vol):.3f}[bg]")
         n = 1
     first_voice = n
     n_seg = len(segments)
@@ -4000,6 +4014,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             chain = ("aresample=24000," f"asetrate={int(24000 * ratio)}," "aresample=24000," + atempo_chain(p["speed"] / ratio))
         if p.get("eq"):
             chain += "," + p["eq"]
+        chain += "," + VOICE_POLISH
         filters.append(f"[{n}:a]{chain},afade=t=in:d=0.03,adelay={delay}:all=1[a{n}]")
         n += 1
     if notes is not None:
@@ -4415,7 +4430,7 @@ def run_worker(job, item, settings, fonts_data):
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
                     try:
-                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=0.0, tight=True)
+                        dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], clone_voice=clone_voice, eleven_key=settings.get("eleven_key"), ref_bands=ref_bands, offset=0.0, tight=True, bg_vol=settings.get("bg_vol", 0.08))
                     finally:
                         if clone_voice:
                             eleven_delete_voice(settings["eleven_key"], clone_voice)
@@ -4557,24 +4572,6 @@ def fetch_links_preview(urls, status=None):
 
         cache[u] = _fetch_one(u, _cb)
     return {u: cache[u] for u in urls}
-
-
-def app_base_url():
-    """អាសយដ្ឋានកម្មវិធីនេះ (សម្រាប់បង្កើត Bookmarklet)។"""
-    try:
-        u = st.context.url
-        if u:
-            return str(u).split("?")[0]
-    except Exception:
-        pass
-    try:
-        h = st.context.headers
-        host = h.get("X-Forwarded-Host") or h.get("Host")
-        if host:
-            return f"https://{host}/"
-    except Exception:
-        pass
-    return "https://YOUR-APP.streamlit.app/"
 
 
 SPLIT_SECONDS = 6 * 60   # បំបែកវីដេអូជាផ្នែកប្រវែង ៦ នាទី
@@ -4948,25 +4945,6 @@ tab_vid, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 with tab_vid:
-    # បើកមកពី TikTok តាម Bookmarklet: ?link=<តំណវីដេអូ>&auto=1 → ដាក់តំណ ស្វែងរក ហើយបកប្រែអូតូ
-    _qp_link = st.query_params.get("link")
-    if isinstance(_qp_link, list):
-        _qp_link = _qp_link[0] if _qp_link else ""
-    if _qp_link and st.session_state.get("_qp_consumed") != _qp_link:
-        st.session_state["_qp_consumed"] = _qp_link
-        _ql = extract_links(_qp_link)[:MAX_VIDEOS]
-        if _ql:
-            st.session_state["mode_pick"] = "🔗 Link"
-            st.session_state["link_text_area"] = "\n".join(_ql)
-            st.session_state["link_searched"] = list(_ql)
-            _qa = st.query_params.get("auto")
-            if isinstance(_qa, list):
-                _qa = _qa[0] if _qa else ""
-            st.session_state["_auto_translate"] = (str(_qa) == "1")
-        try:
-            st.query_params.clear()
-        except Exception:
-            pass
     with st.container(border=True):
         mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True,
                         label_visibility="collapsed", key="mode_pick")
@@ -4979,12 +4957,6 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
-            with st.expander("⚡ បកប្រែអូតូពី TikTok (Bookmarklet)"):
-                st.markdown(
-                    "១. ចម្លងកូដខាងក្រោម រួចបង្កើត Bookmark ថ្មីក្នុង Browser ហើយបិទភ្ជាប់កូដនេះជា «URL» (ដាក់ឈ្មោះ «បកប្រែខ្មែរ»)។\n\n"
-                    "២. បើក TikTok រើសវីដេអូណាមួយ ហើយចុច Bookmark នោះ → កម្មវិធីនេះនឹងបើក ទាញវីដេអូ និងបកប្រែអូតូ។")
-                st.code("javascript:(function(){location.href='" + app_base_url()
-                        + "?link='+encodeURIComponent(location.href)+'&auto=1';})();", language="text")
             link_text = st.text_area(
                 "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
                 key="link_text_area",
@@ -5099,6 +5071,10 @@ with tab_voice:
     with st.container(border=True):
         # Keep only the simple voice choices requested by the user.
         voice_label = st.radio("ជ្រើសសំឡេងនិយាយ", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
+        keep_bg = st.toggle("🎵 រក្សាសំឡេងដើម (សំឡេងផ្ទៃក្រោយ)", value=True, key="keep_bg_toggle")
+        bg_level = 8
+        if keep_bg:
+            bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick")
 
 # ============================ ផ្ទាំង ៤: អក្សរ ============================
 with tab_text:
@@ -5292,7 +5268,7 @@ if run:
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
-        "keep_bg": keep_bg, "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
+        "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
         "voice_match": False, "emotion": emotion_on,
         "clone_sample": None,
         "eleven_key": ELEVEN_KEY,
