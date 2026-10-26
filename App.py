@@ -2053,11 +2053,21 @@ OAI_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
 OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
 
 
+OAI_USER_CFG = {}   # Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ដាក់ពេលចុច «ចាប់ផ្តើម» ក្នុងរបៀបនេះ មិនលាយជាមួយអ្នកដទៃ)
+
+
+def oai_cfg():
+    c = OAI_USER_CFG
+    return ((c.get("key") or OAI_KEY), (c.get("base") or OAI_BASE).rstrip("/"), (c.get("model") or OAI_MODEL))
+
+
 def oai_enabled():
-    return bool(OAI_KEY and OAI_BASE and OAI_MODEL)
+    k, b, m = oai_cfg()
+    return bool(k and b and m)
 
 
-def oai_translate_chunk(texts, budgets=None, system=None, to_english=False):
+def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None):
+    _key, _base, _model = cfg if cfg else oai_cfg()
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
@@ -2065,7 +2075,7 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False):
     last = "CodeCraft: មិនទាន់កំណត់"
     for use_json_mode in (True, False):
         payload = {
-            "model": OAI_MODEL, "temperature": 0.1,
+            "model": _model, "temperature": 0.1,
             "messages": [
                 {"role": "system", "content": system or TRANS_SYSTEM},
                 {"role": "user", "content": numbered},
@@ -2076,8 +2086,8 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False):
         body = json.dumps(payload).encode("utf-8")
         for attempt in range(2):
             request = urllib.request.Request(
-                OAI_BASE + "/chat/completions", data=body, method="POST",
-                headers={"Authorization": f"Bearer {OAI_KEY}", "Content-Type": "application/json",
+                _base + "/chat/completions", data=body, method="POST",
+                headers={"Authorization": f"Bearer {_key}", "Content-Type": "application/json",
                          "User-Agent": "Mozilla/5.0"})
             try:
                 with urllib.request.urlopen(request, timeout=90) as r:
@@ -2108,6 +2118,20 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False):
                 last = f"CodeCraft: {e}"
                 break
     raise RuntimeError(last[:300])
+
+
+def oai_test(key, base, model):
+    """សាកល្បង CodeCraft: ត្រឡប់ (True/False, សារ)។"""
+    key, base, model = str(key).strip(), str(base).strip().rstrip("/"), str(model).strip()
+    if not (key and base and model):
+        return False, "សូមបំពេញ Key, Base URL និងឈ្មោះម៉ូដែលឱ្យគ្រប់។"
+    if not base.startswith("http"):
+        return False, "Base URL ត្រូវចាប់ផ្តើមដោយ https://"
+    try:
+        out = oai_translate_chunk(["hello"], None, 'Translate each line to Khmer. Return JSON {"translations": [...]} only.', cfg=(key, base, model))
+        return (True, "") if out else (False, "មិនមានចម្លើយ")
+    except Exception as e:
+        return False, "សាកមិនបាន៖ " + str(e)[:220]
 
 
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
@@ -5167,21 +5191,37 @@ def user_key_box():
     with st.container(border=True):
         st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន**")
         st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ អ្នកអាចដាក់ Groq (console.groq.com/keys) ឬ Gemini (aistudio.google.com/apikey) Key របស់អ្នកផ្ទាល់ ដើម្បីបន្តប្រើបាន។")
-        for name, sk in (("Groq", "user_groq_key"), ("Gemini", "user_gemini_key")):
+        for name, sk in (("Groq", "user_groq_key"), ("Gemini", "user_gemini_key"), ("CodeCraft", "user_oai_key")):
             mine = st.session_state.get(sk, "")
             if mine:
                 st.success(f"✅ កំពុងប្រើ {name} Key របស់អ្នក (…{mine[-4:]})")
                 if st.button(f"🗑 ឈប់ប្រើ {name} Key", key=f"remove_{sk}"):
                     st.session_state.pop(sk, None)
                     st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["Groq", "Gemini"], horizontal=True, key="user_key_provider")
+        provider = st.radio("ប្រភេទ Key", ["Groq", "Gemini", "CodeCraft"], horizontal=True, key="user_key_provider")
         typed = st.text_input(f"{provider} API Key", type="password",
-                              placeholder="gsk_..." if provider == "Groq" else "AIza...", key="user_key_input")
+                              placeholder={"Groq": "gsk_...", "Gemini": "AIza...", "CodeCraft": "cc_..."}[provider],
+                              key="user_key_input")
+        oai_base_in = oai_model_in = ""
+        if provider == "CodeCraft":
+            oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://codecraftapi.com/v1"),
+                                        key="user_oai_base_input")
+            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"),
+                                         key="user_oai_model_input")
+            st.caption("CodeCraft ជាម៉ាស៊ីនបម្រុង ដំណើរការតែពេល Groq/Gemini បរាជ័យ។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq។")
         st.caption("🔒 Key ប្រើតែក្នុងទំព័រនេះ មិនត្រូវបានរក្សាទុកទេ ហើយបាត់ពេលអ្នកបិទទំព័រ ឬឈប់ប្រើ។")
         if st.button("✅ ពិនិត្យ និងប្រើ Key នេះ", key="user_key_save", use_container_width=True):
-            ok, msg = (validate_groq_key if provider == "Groq" else validate_gemini_key)(typed)
+            if provider == "CodeCraft":
+                ok, msg = oai_test(typed, oai_base_in, oai_model_in)
+            else:
+                ok, msg = (validate_groq_key if provider == "Groq" else validate_gemini_key)(typed)
             if ok:
-                st.session_state["user_groq_key" if provider == "Groq" else "user_gemini_key"] = typed.strip()
+                if provider == "CodeCraft":
+                    st.session_state["user_oai_key"] = typed.strip()
+                    st.session_state["user_oai_base"] = oai_base_in.strip().rstrip("/")
+                    st.session_state["user_oai_model"] = oai_model_in.strip()
+                else:
+                    st.session_state["user_groq_key" if provider == "Groq" else "user_gemini_key"] = typed.strip()
                 st.session_state["_clear_key_input"] = True
                 st.rerun()
             else:
@@ -5912,6 +5952,11 @@ if run:
         st.session_state.pop("job", None)
         old = None
         gc.collect()
+    OAI_USER_CFG.clear()
+    if st.session_state.get("user_oai_key"):
+        OAI_USER_CFG.update({"key": st.session_state.get("user_oai_key", ""),
+                             "base": st.session_state.get("user_oai_base", ""),
+                             "model": st.session_state.get("user_oai_model", "")})
     job_folder = tempfile.mkdtemp(prefix="kac_")
     job_items = []
     for idx, it in enumerate(items, start=1):
