@@ -5573,15 +5573,27 @@ def logo_preview_data(raw):
         return None, 1, 1
 
 
-def render_fx_preview(aspect, logo, lx, ly, lsize, lop, tint, blurs):
-    if aspect == "9:16":
-        box = "height:260px;aspect-ratio:9/16;margin:6px auto;"
-    elif aspect == "1:1":
-        box = "height:240px;aspect-ratio:1/1;margin:6px auto;"
-    else:
-        box = "width:100%;aspect-ratio:16/9;margin:6px 0;"
+def render_fx_preview(aspect, logo, lx, ly, lsize, lop, tint, blurs, frame=None):
+    """frame = (data_uri, ទទឹង, កម្ពស់) ស៊ុមពិតពីវីដេអូ។ បើមាន ប្រើទំហំពិតរបស់វីដេអូ (អូតូ)។"""
+    bg = "linear-gradient(160deg,#3A2C6E 0%,#1B2A5E 60%,#0E1636 100%)"
+    if frame and frame[0]:
+        fw, fh = max(1, frame[1]), max(1, frame[2])
+        ratio = fw / float(fh)
+        bg = f"#000 url({frame[0]}) center/cover no-repeat"
+        if aspect == "auto":
+            if ratio >= 1.0:
+                box = f"width:100%;aspect-ratio:{fw}/{fh};margin:6px 0;"
+            else:
+                box = f"height:460px;max-width:100%;aspect-ratio:{fw}/{fh};margin:6px auto;"
+    if not (frame and frame[0] and aspect == "auto"):
+        if aspect == "9:16":
+            box = "height:260px;aspect-ratio:9/16;margin:6px auto;"
+        elif aspect == "1:1":
+            box = "height:240px;aspect-ratio:1/1;margin:6px auto;"
+        else:
+            box = "width:100%;aspect-ratio:16/9;margin:6px 0;"
     html = [f'<div style="position:relative;overflow:hidden;border-radius:14px;border:1px solid rgba(125,145,255,.22);'
-            f'background:linear-gradient(160deg,#3A2C6E 0%,#1B2A5E 60%,#0E1636 100%);{box}">']
+            f'background:{bg};{box}">']
     for i, b in enumerate(blurs, start=1):
         c = BLUR_COLORS[(i - 1) % len(BLUR_COLORS)]
         html.append(
@@ -5598,6 +5610,69 @@ def render_fx_preview(aspect, logo, lx, ly, lsize, lop, tint, blurs):
             html.append(f'<img src="{uri}" style="{pos}height:auto;">')
     html.append("</div>")
     st.markdown("".join(html), unsafe_allow_html=True)
+
+
+def fx_frame_for(path, key):
+    """ដកស៊ុមមួយពីវីដេអូ (cache តាម key) → (data_uri, w, h) ឬ None។"""
+    c = st.session_state.get("_fx_frame")
+    if c and c.get("key") == key:
+        return c.get("val")
+    val = None
+    tmp = tempfile.mkdtemp(prefix="kfx_")
+    try:
+        out = os.path.join(tmp, "f.jpg")
+        for ss in ("1", "0"):
+            try:
+                run_ffmpeg(["-ss", ss, "-i", path, "-frames:v", "1", "-vf", "scale='min(640,iw)':-2", "-q:v", "4", out])
+                if os.path.isfile(out) and os.path.getsize(out) > 0:
+                    break
+            except Exception:
+                continue
+        if os.path.isfile(out):
+            from PIL import Image
+            with open(out, "rb") as fh:
+                raw = fh.read()
+            w_, h_ = Image.open(io.BytesIO(raw)).size
+            val = ("data:image/jpeg;base64," + base64.b64encode(raw).decode("ascii"), w_, h_)
+    except Exception:
+        val = None
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    st.session_state["_fx_frame"] = {"key": key, "val": val}
+    return val
+
+
+def fx_current_frame():
+    """រកវីដេអូដំបូងដែលបានជ្រើស/រកឃើញ (Upload, Link, ឬផ្នែកដែលកាត់) ហើយត្រឡប់ស៊ុមរបស់វា។"""
+    try:
+        if uploaded_files:
+            f0 = uploaded_files[0]
+            if f0.size > MAX_UPLOAD_MB * 1024 * 1024:
+                return None
+            key = f"up:{f0.name}:{f0.size}"
+            c = st.session_state.get("_fx_frame")
+            if c and c.get("key") == key:
+                return c.get("val")
+            tmpd = tempfile.mkdtemp(prefix="kfxu_")
+            try:
+                pth = os.path.join(tmpd, "v.bin")
+                with open(pth, "wb") as fh:
+                    fh.write(f0.getbuffer())
+                return fx_frame_for(pth, key)
+            finally:
+                shutil.rmtree(tmpd, ignore_errors=True)
+        _cache = st.session_state.get("link_cache", {})
+        for u in extract_links(link_text):
+            ent = _cache.get(u, {})
+            if ent.get("ok") and ent.get("path") and os.path.isfile(ent["path"]):
+                return fx_frame_for(ent["path"], f"ln:{ent['path']}")
+        _sq0 = st.session_state.get("_split_queue") or []
+        for q in _sq0:
+            if os.path.isfile(q["path"]):
+                return fx_frame_for(q["path"], f"sq:{q['path']}")
+    except Exception:
+        return None
+    return None
 
 
 fx_settings = None
@@ -5659,9 +5734,14 @@ with tab_fx:
             "logo_color": logo_tint,
         }
     with prev_fx:
-        aspect = st.radio("ទម្រង់មើលជាមុន", ["16:9", "9:16", "1:1"], horizontal=True, key="fx_aspect")
+        _frame = fx_current_frame()
+        _asp_opts = ["🔄 អូតូ (តាមវីដេអូ)", "16:9", "9:16", "1:1"]
+        _asp = st.radio("ទម្រង់មើលជាមុន", _asp_opts, horizontal=True, key="fx_aspect_v2")
+        aspect = "auto" if _asp.startswith("🔄") else _asp
         render_fx_preview(aspect, logo_preview_data(logo_file.getvalue()) if logo_file is not None else None,
-                          logo_x, logo_y, logo_size, logo_op / 100.0, logo_tint, blur_list)
+                          logo_x, logo_y, logo_size, logo_op / 100.0, logo_tint, blur_list, frame=_frame)
+        if _frame is None:
+            st.caption("🎞 ជ្រើសវីដេអូ ឬរកតំណឃើញជាមុន នោះនឹងបង្ហាញរូបពិតពីវីដេអូនៅទីនេះ ដើម្បីដាក់ Logo/Blur ឱ្យចំកន្លែង។")
         if logo_file is None and not blur_list:
             st.caption("Upload logo ឬបន្ថែមកន្លែង Blur ដើម្បីមើលជាមុន។ បើមិនប្រើ វីដេអូមិនមានការផ្លាស់ប្តូរទេ។")
 
