@@ -4673,13 +4673,47 @@ def _url_alive(url, pat, timeout=15):
         return None
 
 
+def _discover_tiktok(first_url, max_eps):
+    """TikTok: ពីវីដេអូភាគ ១ → វីដេអូរបស់ម្ចាស់ឆានែលដដែល ដែលបង្ហោះក្រោយវា (តាមលំដាប់ពេលវេលា)។
+    ID វីដេអូ TikTok កើនតាមពេលវេលា ដូច្នេះតម្រៀប ID ពីតូចទៅធំ = លំដាប់បង្ហោះ។"""
+    final = first_url
+    try:
+        req = urllib.request.Request(first_url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            final = r.geturl()
+    except Exception:
+        pass
+    m = re.search(r"tiktok\.com/@([^/?#]+)/video/(\d+)", final)
+    if not m:
+        raise UserError("មិនអាចអានម្ចាស់វីដេអូពីតំណនេះទេ។ សូមសាកតំណពេញ (tiktok.com/@ឈ្មោះ/video/...) ឬដាក់តំណម្តងមួយៗ។")
+    user, vid = m.group(1), int(m.group(2))
+    try:
+        import yt_dlp
+    except Exception:
+        raise UserError("yt-dlp មិនទាន់ដំឡើង")
+    opts = {"extract_flat": True, "quiet": True, "no_warnings": True, "skip_download": True,
+            "playlistend": 400, "socket_timeout": 30}
+    try:
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            info = ydl.extract_info(f"https://www.tiktok.com/@{user}", download=False)
+    except Exception:
+        raise UserError("ទាញបញ្ជីវីដេអូរបស់ឆានែលមិនបានទេ (TikTok អាចរារាំង)។ សូមដាក់តំណម្តងមួយៗ។")
+    ids = {vid}
+    for e in (info or {}).get("entries") or []:
+        s = str((e or {}).get("id") or "")
+        if s.isdigit():
+            ids.add(int(s))
+    later = sorted(i for i in ids if i >= vid)[:max_eps]
+    return [(k, f"https://www.tiktok.com/@{user}/video/{i}") for k, i in enumerate(later, 1)]
+
+
 def discover_episodes(first_url, max_eps=20):
     """ពីតំណភាគទី ១ → បញ្ជី [(លេខភាគ, តំណ)] ទាំងអស់។"""
     first_url = str(first_url or "").strip().split("#", 1)[0]
     if not first_url.lower().startswith(("http://", "https://")):
         raise UserError("សូមបិទភ្ជាប់តំណដែលចាប់ផ្តើមដោយ https://")
     if is_social_link(first_url):
-        raise UserError("តំណ TikTok មិនមានលេខភាគតាមលំដាប់ទេ។ សូមដាក់តំណវីដេអូម្តងមួយៗ។")
+        return _discover_tiktok(first_url, max_eps)
     tpl = _ep_template(first_url)
     if not tpl:
         raise UserError("រកលេខភាគក្នុងតំណមិនឃើញ។ សូមដាក់តំណដែលមានលេខភាគ ឧទាហរណ៍ .../episode-1")
@@ -5362,6 +5396,8 @@ with tab_vid:
                         if len(_found) < 2:
                             st.warning("រកឃើញតែភាគទី ១។ ម្ចាស់គេហទំព័រអាចបិទមិនឱ្យសាក ឬទម្រង់តំណខុសគ្នា។ សូមបន្ថែមតំណភាគផ្សេងដោយដៃក្នុងប្រអប់ខាងក្រោម។")
                         else:
+                            if is_social_link(_ep1):
+                                st.info("TikTok: កម្មវិធីយកវីដេអូរបស់ម្ចាស់ឆានែលដដែលដែលបង្ហោះបន្ទាប់ពីភាគ ១ តាមលំដាប់ពេល។ សូមពិនិត្យបញ្ជី ហើយលុបវីដេអូដែលមិនមែនជាភាគរឿង។")
                             st.success(f"✅ រកឃើញ {len(_found)} ភាគ — តំណទាំងអស់នៅប្រអប់ខាងក្រោម (កែ ឬលុបបាន)")
                     except Exception as _e:
                         st.error(str(_e) if isinstance(_e, UserError) else "រកភាគមិនបានទេ។ សូមសាកម្តងទៀត។")
