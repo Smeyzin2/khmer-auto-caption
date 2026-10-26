@@ -1126,6 +1126,7 @@ def _download_with_ytdlp(url, path, progress):
         "no_warnings": True,
         "noprogress": True,
         "noplaylist": True,
+        "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
         "socket_timeout": 30,
         "retries": 3,
         "progress_hooks": [hook],
@@ -1146,6 +1147,10 @@ def _download_with_ytdlp(url, path, progress):
     progress.progress(1.0)
 
 
+class _HtmlPage(Exception):
+    pass
+
+
 def download_video(url, path, progress):
     url = normalize_link(url)
     if is_social_link(url):
@@ -1156,7 +1161,7 @@ def download_video(url, path, progress):
         with urllib.request.urlopen(request, timeout=30) as response:
             ctype = (response.headers.get("Content-Type") or "").lower()
             if "text/html" in ctype:
-                raise UserError("តំណនេះមិនមែនជាវីដេអូផ្ទាល់ទេ។")
+                raise _HtmlPage()
             total = int(response.headers.get("Content-Length") or 0)
             if total > limit:
                 raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
@@ -1172,6 +1177,9 @@ def download_video(url, path, progress):
                         raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
                     if total:
                         progress.progress(min(1.0, done / total))
+    except _HtmlPage:
+        _download_with_ytdlp(url, path, progress)
+        return
     except UserError:
         raise
     except Exception:
@@ -4581,6 +4589,128 @@ def extract_links(text):
 LINK_RETRIES = _env_int("LINK_RETRIES", 8)   # ចំនួនលើកព្យាយាមអតិបរមាក្នុងមួយតំណ
 
 
+MAX_EPISODES = _env_int("MAX_EPISODES", 30)   # ចំនួនភាគអតិបរមាក្នុងរបៀប «ដាក់តែតំណភាគ ១»
+
+
+def _http_get_text(url, timeout=25):
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read(3 * 1024 * 1024)
+        enc = r.headers.get_content_charset() or "utf-8"
+    return raw.decode(enc, "ignore")
+
+
+def _ep_template(url):
+    """រកលេខភាគក្នុងតំណ → (prefix, number, suffix, width) ឬ None។"""
+    url = url.split("#", 1)[0]
+    p = urllib.parse.urlparse(url)
+    if not p.scheme or not p.netloc:
+        return None
+    head = f"{p.scheme}://{p.netloc}"
+    rest = url[len(head):]
+    best = None
+    for m in re.finditer(r"(?<!\d)\d{1,4}(?!\d)", rest):
+        prev = rest[max(0, m.start() - 12):m.start()].lower()
+        if re.search(r"(?<![a-z])(?:episode|ep|tap|part|chapter|chap|vol|no|e|ភាគ|第)[\s._=-]*$", prev):
+            score = 3
+        elif prev[-1:] in ("/", "-", "_", "="):
+            score = 1
+        else:
+            score = 0
+        if score < 3 and "?" in rest[:m.start()]:
+            score -= 1   # លេខក្នុង query (?q=720) មិនសូវជាលេខភាគ
+        if best is None or score >= best[0]:
+            best = (score, m)
+    if not best:
+        return None
+    m = best[1]
+    tok = m.group(0)
+    width = len(tok) if (len(tok) > 1 and tok.startswith("0")) else 0
+    return head + rest[:m.start()], int(tok), rest[m.end():], width
+
+
+def _ep_build(tpl, n):
+    prefix, _num, suffix, width = tpl
+    return prefix + (str(n).zfill(width) if width else str(n)) + suffix
+
+
+def _ep_pattern(tpl):
+    prefix, _num, suffix, _w = tpl
+    return re.compile("^" + re.escape(prefix) + r"(\d{1,4})" + re.escape(suffix) + "$")
+
+
+def _page_episode_numbers(html, page_url, pat):
+    """រកតំណភាគផ្សេងៗដែលមានក្នុងទំព័រ (ទម្រង់ដូចតំណភាគ ១)។"""
+    html = html.replace("\\/", "/").replace("&amp;", "&")
+    cands = re.findall(r"""(?:href|src|data-url|data-href|url)\s*[=:]\s*["']([^"'<>\s]+)["']""", html, flags=re.I)
+    cands += re.findall(r"https?://[^\s\"'<>\\]+", html)
+    nums = set()
+    for c in cands:
+        absu = urllib.parse.urljoin(page_url, c.strip()).split("#", 1)[0]
+        m = pat.match(absu)
+        if m:
+            nums.add(int(m.group(1)))
+    return nums
+
+
+def _nu(s):
+    return re.sub(r"^https?://(www\.)?", "", s).rstrip("/")
+
+
+def _url_alive(url, pat, timeout=15):
+    """True = មាន, False = គ្មាន (404...), None = មិនអាចដឹង (ត្រូវបានបិទ ឬមានបញ្ហា)។"""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            final = r.geturl().split("#", 1)[0]
+            r.read(1024)
+        return _nu(final) == _nu(url) or bool(pat.match(final))
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 410, 400):
+            return False
+        return None
+    except Exception:
+        return None
+
+
+def discover_episodes(first_url, max_eps=20):
+    """ពីតំណភាគទី ១ → បញ្ជី [(លេខភាគ, តំណ)] ទាំងអស់។"""
+    first_url = str(first_url or "").strip().split("#", 1)[0]
+    if not first_url.lower().startswith(("http://", "https://")):
+        raise UserError("សូមបិទភ្ជាប់តំណដែលចាប់ផ្តើមដោយ https://")
+    if is_social_link(first_url):
+        raise UserError("តំណ TikTok មិនមានលេខភាគតាមលំដាប់ទេ។ សូមដាក់តំណវីដេអូម្តងមួយៗ។")
+    tpl = _ep_template(first_url)
+    if not tpl:
+        raise UserError("រកលេខភាគក្នុងតំណមិនឃើញ។ សូមដាក់តំណដែលមានលេខភាគ ឧទាហរណ៍ .../episode-1")
+    start = tpl[1]
+    pat = _ep_pattern(tpl)
+    nums = {start}
+    try:
+        nums |= {n for n in _page_episode_numbers(_http_get_text(first_url), first_url, pat) if n >= start}
+    except Exception:
+        pass
+    n = max(nums) + 1
+    fails = 0
+    while len(nums) < max_eps and n <= 9999 and fails < 2:
+        alive = _url_alive(_ep_build(tpl, n), pat)
+        if alive is None:
+            break
+        if alive:
+            nums.add(n)
+            fails = 0
+        else:
+            fails += 1
+        n += 1
+    return [(k, _ep_build(tpl, k)) for k in sorted(nums)[:max_eps]]
+
+
+def _ep_label(url, n, plain=False):
+    num = (st.session_state.get("ep_numbers") or {}).get(url)
+    base = f"ភាគ {num}" if num else f"វីដេអូទី {n}"
+    return base if plain else "🎬 " + base
+
+
 def _fetch_one(url, on_try=None):
     """ទាញវីដេអូមួយតំណ ហើយព្យាយាមម្តងទៀតដោយស្វ័យប្រវត្តិរហូតរកឃើញ (មិនប៉ះ st.session_state)។"""
     last = ""
@@ -4964,6 +5094,16 @@ def download_area(job):
     st.caption("📱 iPhone: ចុចប៊ូតុងទាញយក → ចុច «Download» → បើក Safari បង្ហាញរូបព្រួញ ⬇️ ខាងលើ ចុចវា → ជ្រើសវីដេអូ → Share → Save Video។ សូមប្រើ Safari។")
     for i, it in done:
         with st.container(border=True):
+            if getattr(job, "text_only", False):
+                st.markdown(f"**🎬 {it['name']}**")
+                _vp0 = it.get("video_path")
+                if _vp0 and os.path.isfile(_vp0):
+                    with open(_vp0, "rb") as _vf0:
+                        dl_button("⬇️ ទាញយកវីដេអូ", _vf0, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4",
+                                  key=f"dl_{job.id}_{i}", use_container_width=True)
+                for text in it["captions"]:
+                    st.write(text)
+                continue
             vp = it.get("video_path")
             if vp and os.path.isfile(vp):
                 fname = f"{safe_filename(it['name'])}_khmer.mp4"
@@ -4999,6 +5139,10 @@ def download_area(job):
                     for key, value in it["debug"].items():
                         st.text(f"{key}: {value}")
                     st.text("\\n".join(it["log"][-30:]))
+    if getattr(job, "text_only", False) and done:
+        _all_txt = "\n\n".join(f"== {_it['name']} ==\n" + "\n".join(_it["captions"]) for _i, _it in done)
+        dl_button("📝 ទាញយកអក្សរបកប្រែទាំងអស់ (.txt)", _all_txt.encode("utf-8"), "khmer_text.txt", "text/plain",
+                  key=f"txt_{job.id}", use_container_width=True)
     if job.zip and os.path.isfile(job.zip):
         with open(job.zip, "rb") as zf:
             dl_button("📦 ទាញយកទាំងអស់ (ZIP)", zf, "khmer_videos.zip", "application/zip", key=f"zip_{job.id}", use_container_width=True)
@@ -5186,6 +5330,8 @@ tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
 )
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
+ep1_mode = False
+link_limit = MAX_VIDEOS
 with tab_vid:
     with st.container(border=True):
         mode = st.radio("វិធីបញ្ចូលវីដេអូ", ["📁 Upload", "🔗 Link"], horizontal=True,
@@ -5199,16 +5345,36 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
+            ep1_mode = st.toggle("🎞 ដាក់តែតំណភាគទី ១ ហើយរកគ្រប់ភាគស្វ័យប្រវត្តិ", value=False, key="ep1_mode_toggle")
+            if ep1_mode:
+                link_limit = MAX_EPISODES
+                _ep1 = st.text_input("តំណភាគទី ១", key="ep1_url_input", placeholder="https://.../episode-1")
+                _ep_max = st.number_input("ចំនួនភាគអតិបរមា", min_value=2, max_value=max(2, MAX_EPISODES),
+                                          value=min(20, max(2, MAX_EPISODES)), step=1, key="ep1_max")
+                if st.button("🔎 រកតំណគ្រប់ភាគ", type="primary", use_container_width=True,
+                             key="ep1_find_btn", disabled=not (_ep1 or "").strip()):
+                    try:
+                        with st.spinner("កំពុងរកភាគផ្សេងៗ..."):
+                            _found = discover_episodes(_ep1.strip(), int(_ep_max))
+                        st.session_state["ep_numbers"] = {u: n for n, u in _found}
+                        st.session_state["link_text_area"] = "\n".join(u for _n, u in _found)
+                        st.session_state["link_searched"] = [u for _n, u in _found][:link_limit]
+                        if len(_found) < 2:
+                            st.warning("រកឃើញតែភាគទី ១។ ម្ចាស់គេហទំព័រអាចបិទមិនឱ្យសាក ឬទម្រង់តំណខុសគ្នា។ សូមបន្ថែមតំណភាគផ្សេងដោយដៃក្នុងប្រអប់ខាងក្រោម។")
+                        else:
+                            st.success(f"✅ រកឃើញ {len(_found)} ភាគ — តំណទាំងអស់នៅប្រអប់ខាងក្រោម (កែ ឬលុបបាន)")
+                    except Exception as _e:
+                        st.error(str(_e) if isinstance(_e, UserError) else "រកភាគមិនបានទេ។ សូមសាកម្តងទៀត។")
             link_text = st.text_area(
                 "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
                 key="link_text_area",
                 placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
                 height=170)
             _all_links = extract_links(link_text)
-            _link_lines = _all_links[:MAX_VIDEOS]
+            _link_lines = _all_links[:link_limit]
             if _all_links:
                 st.caption(f"🔗 រកឃើញ {len(_all_links)} តំណ"
-                           + (f" · ធ្វើបាន {MAX_VIDEOS} តំណដំបូង" if len(_all_links) > MAX_VIDEOS else ""))
+                           + (f" · ធ្វើបាន {link_limit} តំណដំបូង" if len(_all_links) > link_limit else ""))
             _search_label = "🔍 ស្វែងរក" + (f" ({len(_link_lines)} តំណ)" if len(_link_lines) > 1 else "")
             if st.button(_search_label, type="primary", use_container_width=True, key="link_search_btn",
                          disabled=(not _link_lines)):
@@ -5230,8 +5396,10 @@ with tab_vid:
             _multi = len(_link_lines) > 1
             for _n, _u in enumerate(_link_lines, start=1):
                 _ent = fetch_link_preview(_u)
-                _box = (st.expander(f"🎬 វីដេអូទី {_n}", expanded=(_n == 1)) if _multi else st.container())
+                _box = (st.expander(_ep_label(_u, _n), expanded=(_n == 1)) if (_multi and not ep1_mode) else st.container())
                 with _box:
+                    if ep1_mode:
+                        st.markdown(f"**{_ep_label(_u, _n)}**")
                     if _ent["ok"] and _ent["path"] and os.path.isfile(_ent["path"]):
                         _n_ok += 1
                         _mb = os.path.getsize(_ent["path"]) / (1024 * 1024)
@@ -5246,12 +5414,12 @@ with tab_vid:
                         except Exception:
                             pass
                         st.caption(_info)
-                        if _mb <= PREVIEW_MAX_MB:
+                        if _mb <= PREVIEW_MAX_MB and not ep1_mode:
                             try:
                                 st.video(_ent["path"])
                             except Exception:
                                 pass
-                        if _mb <= 300:
+                        if _mb <= 300 and not ep1_mode:
                             with open(_ent["path"], "rb") as _fh:
                                 dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _fh, f"video_{_n}.mp4", "video/mp4",
                                           key=f"dl_link_{_n}", use_container_width=True)
@@ -5803,7 +5971,7 @@ else:
     lines = [u for u in lines if _cache.get(u, {}).get("ok")]
     too_many = len(lines) > MAX_VIDEOS
     for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
-        items.append({"name": f"វីដេអូទី {i}", "file": None, "url": url, "cached": _cache[url]["path"]})
+        items.append({"name": (_ep_label(url, i, plain=True) if ep1_mode else f"វីដេអូទី {i}"), "file": None, "url": url, "cached": _cache[url]["path"]})
 
 # ផ្នែកដែលបានកាត់ពីផ្ទាំង «✂️ កាត់» ហើយបានចុច «បកប្រែ» → ជំនួសបញ្ជីវីដេអូ
 _sq = st.session_state.get("_split_queue")
@@ -5826,7 +5994,7 @@ with start_slot:
             label += f" ({len(items)})"
         run = st.button(label, type="primary", use_container_width=True)
     if too_many:
-        st.caption(f"⚠️ ធ្វើបានត្រឹម {MAX_VIDEOS} វីដេអូដំបូង។")
+        st.caption(f"⚠️ ធ្វើបានត្រឹម {link_limit} វីដេអូដំបូង។")
 
 if link_translate and items and not busy:
     run = True
@@ -5923,6 +6091,7 @@ if run:
     for _k, _it in enumerate(job_items):
         _it["seq"] = _k
     job = Job(job_items, job_folder)
+    job.text_only = bool(ep1_mode)
     st.session_state["job"] = job
     for item in job.items:
         threading.Thread(target=run_worker, args=(job, item, settings, fonts_data), daemon=True).start()
