@@ -3725,169 +3725,6 @@ def emotion_prosody(label, intensity, use_pitch=True):
 
 
 
-# =====================================================================
-#  ក្លូនសំឡេងឥតគិតថ្លៃ ដោយ OpenVoice V2 (រត់លើម៉ាស៊ីនខ្លួនឯង គ្មាន API គ្មានថ្លៃ)
-#  edge-tts អានខ្មែរ → OpenVoice ប្តូរពណ៌សំឡេងទៅតាមសំឡេងគំរូ
-#  បើមិនទាន់ដំឡើង ឬមានបញ្ហា កម្មវិធីប្រើសំឡេង edge-tts ធម្មតាដដែល
-# =====================================================================
-OV_HF_REPO = "myshell-ai/OpenVoiceV2"
-OV_ZIP_URL = "https://myshell-public-repo-host.s3.amazonaws.com/openvoice/checkpoints_v2_0417.zip"
-OV_CACHE = os.path.join(os.path.expanduser("~"), ".cache", "kac_openvoice")
-OV_SRC_TEXT = ("សួស្តី ខ្ញុំជាសំឡេងសាកល្បងសម្រាប់ប្រព័ន្ធបកប្រែវីដេអូ។ "
-               "សូមស្តាប់ឱ្យបានច្បាស់ ហើយបន្តទស្សនាវីដេអូនេះរហូតដល់ចប់។ "
-               "សូមអរគុណច្រើនដែលបានចូលមកមើល។")
-_OV = {"conv": None, "src_se": {}}
-_OV_LOCK = threading.RLock()
-_OV_RUN = threading.Semaphore(1)   # បំប្លែងម្តងមួយឃ្លា ដើម្បីកុំឱ្យអស់ RAM/CPU
-
-
-def openvoice_installed():
-    try:
-        import importlib.util
-        return all(importlib.util.find_spec(m) is not None for m in ("torch", "openvoice"))
-    except Exception:
-        return False
-
-
-def _ov_put_ffmpeg_on_path():
-    """OpenVoice ហៅ `ffmpeg` តាម PATH — ដាក់ ffmpeg របស់កម្មវិធីចូល PATH។"""
-    try:
-        exe = imageio_ffmpeg.get_ffmpeg_exe()
-        folder = os.path.join(tempfile.gettempdir(), "kac_bin")
-        os.makedirs(folder, exist_ok=True)
-        link = os.path.join(folder, "ffmpeg.exe" if os.name == "nt" else "ffmpeg")
-        if not os.path.exists(link):
-            try:
-                os.symlink(exe, link)
-            except OSError:
-                shutil.copyfile(exe, link)
-                os.chmod(link, 0o755)
-        if folder not in os.environ.get("PATH", ""):
-            os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")
-    except Exception:
-        pass
-
-
-def _ov_ckpt_ok(d):
-    return (os.path.isfile(os.path.join(d, "converter", "config.json"))
-            and os.path.isfile(os.path.join(d, "converter", "checkpoint.pth")))
-
-
-def _ov_find_converter_dir():
-    """រក folder ដែលមាន converter/config.json + checkpoint.pth (cache → Hugging Face → S3 zip)។"""
-    os.makedirs(OV_CACHE, exist_ok=True)
-    for d in (OV_CACHE, os.path.join(OV_CACHE, "checkpoints_v2")):
-        if _ov_ckpt_ok(d):
-            return d
-    try:
-        from huggingface_hub import snapshot_download
-        d = snapshot_download(repo_id=OV_HF_REPO, allow_patterns=["converter/*"])
-        if _ov_ckpt_ok(d):
-            return d
-    except Exception:
-        pass
-    zpath = os.path.join(OV_CACHE, "checkpoints_v2.zip")
-    req = urllib.request.Request(OV_ZIP_URL, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=180) as r, open(zpath, "wb") as f:
-        shutil.copyfileobj(r, f)
-    with zipfile.ZipFile(zpath) as z:
-        z.extractall(OV_CACHE)
-    try:
-        os.remove(zpath)
-    except OSError:
-        pass
-    for d in (OV_CACHE, os.path.join(OV_CACHE, "checkpoints_v2")):
-        if _ov_ckpt_ok(d):
-            return d
-    raise RuntimeError("រកឯកសារម៉ូដែល OpenVoice មិនឃើញ (ទាញយកមិនបាន)")
-
-
-def openvoice_load():
-    """ផ្ទុកម៉ូដែល OpenVoice ម្តងគត់ (ទាញយកលើកដំបូងប្រហែល ១០០MB)។"""
-    with _OV_LOCK:
-        if _OV["conv"] is not None:
-            return _OV["conv"]
-        if not openvoice_installed():
-            raise RuntimeError("មិនទាន់ដំឡើង OpenVoice (ត្រូវការ torch + openvoice)")
-        _ov_put_ffmpeg_on_path()
-        import torch
-        from openvoice.api import ToneColorConverter
-        d = _ov_find_converter_dir()
-        device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        cfg = os.path.join(d, "converter", "config.json")
-        try:
-            conv = ToneColorConverter(cfg, device=device, enable_watermark=False)
-        except TypeError:
-            conv = ToneColorConverter(cfg, device=device)
-        conv.load_ckpt(os.path.join(d, "converter", "checkpoint.pth"))
-        _OV["conv"] = conv
-        return conv
-
-
-def _ov_get_se(audio_path, conv):
-    """ទាញ speaker embedding ពីសំឡេង។"""
-    from openvoice import se_extractor
-    target = os.path.join(OV_CACHE, "processed")
-    last = None
-    for vad in (True, False):
-        for kw in ({"target_dir": target}, {}):
-            try:
-                se, _ = se_extractor.get_se(audio_path, conv, vad=vad, **kw)
-                return se
-            except TypeError as e:
-                last = e
-                continue
-            except Exception as e:
-                last = e
-                break
-    raise last
-
-
-def _ov_source_se(voice, conv, folder):
-    """ពណ៌សំឡេងដើមរបស់ edge-tts (ប្រុស/ស្រី) ទុកក្នុង cache។"""
-    with _OV_LOCK:
-        if voice in _OV["src_se"]:
-            return _OV["src_se"][voice]
-        tag = re.sub(r"[^A-Za-z0-9]+", "_", voice)
-        mp3 = os.path.join(folder, f"ov_src_{tag}.mp3")
-        wav = os.path.join(folder, f"ov_src_{tag}.wav")
-        if not tts_retry(OV_SRC_TEXT, voice, mp3, None, tries=3):
-            raise RuntimeError("បង្កើតសំឡេងគំរូ edge-tts មិនបាន")
-        run_ffmpeg(["-i", mp3, "-ac", "1", "-ar", "16000", wav])
-        se = _ov_get_se(wav, conv)
-        _OV["src_se"][voice] = se
-        return se
-
-
-def openvoice_prepare(sample_wav_bytes, folder):
-    """ត្រឡប់ (converter, target_se) ពីសំឡេងគំរូ។ បោះ exception បើមិនបាន។"""
-    conv = openvoice_load()
-    ref = os.path.join(folder, "ov_ref.wav")
-    with open(ref, "wb") as f:
-        f.write(sample_wav_bytes)
-    return conv, _ov_get_se(ref, conv)
-
-
-def openvoice_convert_file(path, voice, tgt_se, conv, folder):
-    """ប្តូរពណ៌សំឡេងក្នុងឯកសារ mp3 ដែលមានស្រាប់ (សរសេរជំនួសឯកសារដើម)។"""
-    src_se = _ov_source_se(voice, conv, folder)
-    base = os.path.splitext(path)[0]
-    wav_in, wav_out, mp3_out = base + "_ovin.wav", base + "_ovout.wav", base + "_ov.mp3"
-    run_ffmpeg(["-i", path, "-ac", "1", "-ar", "22050", wav_in])
-    with _OV_RUN:
-        conv.convert(audio_src_path=wav_in, src_se=src_se, tgt_se=tgt_se, output_path=wav_out)
-    ok = os.path.exists(wav_out) and os.path.getsize(wav_out) > 1000
-    if ok:
-        run_ffmpeg(["-i", wav_out, "-ac", "1", "-ar", "24000", "-b:a", "96k", mp3_out])
-        shutil.move(mp3_out, path)
-    for p in (wav_in, wav_out, mp3_out):
-        try:
-            os.remove(p)
-        except OSError:
-            pass
-    return ok
-
-
 EQ_CENTERS = [150, 250, 400, 630, 1000, 1600, 2500, 4000, 6300]
 
 
@@ -4027,7 +3864,7 @@ VOICE_POLISH = ("highpass=f=70,"
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             ref_bands=None, ov_conv=None, ov_tgt_se=None, offset=0.0, tight=True, bg_vol=0.08):
+             ref_bands=None, offset=0.0, tight=True, bg_vol=0.08):
     inputs, filters = [], []
     n = 0
     if keep_bg:
@@ -4044,8 +3881,6 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             label, inten = emotions[i]
             p = emotion_prosody(label, inten, use_pitch=(targets is None))
         pros.append(p)
-
-    clone_stats = {"ok": 0, "fail": 0, "err": ""}
 
     def gen(i):
         s_, e_, t_ = segments[i]
@@ -4107,21 +3942,11 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                             shutil.move(path3_, path_)
                             d_ = d3_
                             d_, p_cur_ = _fit_rate(short_, d_, p_cur_)
-            if ov_conv is not None and ov_tgt_se is not None:
-                try:
-                    if openvoice_convert_file(path_, voices_[i], ov_tgt_se, ov_conv, folder):
-                        d_, _, _ = probe_media(path_)
-                        clone_stats["ok"] += 1
-                    else:
-                        clone_stats["fail"] += 1
-                except Exception as ce:
-                    clone_stats["fail"] += 1
-                    clone_stats["err"] = str(ce)[:160]
             f0_ = None
             if targets is not None and i < len(targets) and targets[i]:
                 f0_ = tts_median_pitch(path_)
             tb_ = None
-            if ref_bands and ov_conv is None:
+            if ref_bands:
                 try:
                     tb_ = band_levels(load_pcm(path_))
                 except Exception:
@@ -4134,7 +3959,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         results = list(pool.map(gen, range(n_seg)))
 
     voice_eq = {}
-    if ref_bands and ov_conv is None:
+    if ref_bands:
         import numpy as np
         for v_ in set(voices_):
             arrs = [r_[2] for k_, r_ in enumerate(results) if r_ and r_[2] and voices_[k_] == v_]
@@ -4144,9 +3969,6 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                     voice_eq[v_] = eqs
         if notes is not None and voice_eq:
             notes.append("🎚 ផ្គូផ្គងពណ៌សំឡេងស្រដៀងសំឡេងគំរូ")
-    if notes is not None and ov_conv is not None:
-        notes.append(f"🎤 ក្លូនសំឡេងបាន {clone_stats['ok']}/{n_seg} ឃ្លា (OpenVoice)"
-                     + (f" · បរាជ័យ {clone_stats['fail']}: {clone_stats['err']}" if clone_stats["fail"] else ""))
     cursor = 0.0
     plan = []
     skipped = 0
@@ -4570,6 +4392,7 @@ def run_worker(job, item, settings, fonts_data):
                     pitch_inf = None
                     runs_ = None
                     ref_bands = None
+                    sample_f0 = None
                     need_audio = (settings["auto_gender"] or settings["voice_match"] or settings["emotion"] or settings.get("timbre"))
                     if need_audio:
                         try:
@@ -4587,6 +4410,14 @@ def run_worker(job, item, settings, fonts_data):
                                     with open(sp, "wb") as f:
                                         f.write(settings["timbre_sample"])
                                     ref_pcm = load_pcm(sp)
+                                    try:
+                                        import numpy as np
+                                        _ts, f_s, _rs = pitch_track(ref_pcm)
+                                        v_s = f_s[f_s > 0]
+                                        if len(v_s) >= 25:
+                                            sample_f0 = float(np.median(v_s))
+                                    except Exception:
+                                        sample_f0 = None
                                 ref_bands = band_levels(ref_pcm)
                             if settings["auto_gender"]:
                                 try:
@@ -4599,6 +4430,12 @@ def run_worker(job, item, settings, fonts_data):
                                     runs_ = None
                             if settings["voice_match"]:
                                 targets = compute_targets(dub_segments, seg_voices, pitch_inf, runs_)
+                            if sample_f0:
+                                _v = VOICE_FEMALE if sample_f0 >= 165 else VOICE_MALE
+                                seg_voices = [_v] * len(dub_segments)
+                                targets = [sample_f0] * len(dub_segments)
+                                voice_notes = voice_notes + [
+                                    f"🎤 សំឡេងគំរូ ~{int(sample_f0)}Hz → ប្រើសំឡេង{'ស្រី' if _v == VOICE_FEMALE else 'ប្រុស'}"]
                             pcm = None
                             ref_pcm = None
                             tracks = None
@@ -4619,18 +4456,9 @@ def run_worker(job, item, settings, fonts_data):
                         except Exception:
                             emotions = None
                             item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
-                    ov_conv = ov_tgt = None
-                    if settings.get("clone_sample"):
-                        try:
-                            rep.write("🎤 កំពុងរៀបចំក្លូនសំឡេងគំរូ (OpenVoice)...")
-                            ov_conv, ov_tgt = openvoice_prepare(settings["clone_sample"], folder)
-                            targets = None
-                        except Exception as ce:
-                            ov_conv = ov_tgt = None
-                            item["warn"].append("ក្លូនសំឡេងមិនបាន ប្រើសំឡេង AI ធម្មតា។ មូលហេតុ: " + str(ce)[:200])
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
-                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, ov_conv=ov_conv, ov_tgt_se=ov_tgt, offset=0.0, tight=True, bg_vol=settings.get("bg_vol", 0.08))
+                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=0.0, tight=True, bg_vol=settings.get("bg_vol", 0.08))
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
@@ -5703,21 +5531,19 @@ with tab_voice:
             bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick")
 
     with st.container(border=True):
-        st.markdown("**🎤 ក្លូនសំឡេង (ឥតគិតថ្លៃ — OpenVoice V2)**")
-        clone_on = st.toggle("ប្រើសំឡេងគំរូ ជំនួសពណ៌សំឡេង AI ធម្មតា", value=False, key="clone_toggle")
+        st.markdown("**🎤 ផ្គូផ្គងសំឡេងគំរូ (ឥតគិតថ្លៃ គ្មានការដំឡើងបន្ថែម)**")
+        clone_on = st.toggle("ប្រើសំឡេងគំរូ ឱ្យសំឡេងអានស្រដៀងសំឡេងរបស់ខ្ញុំ", value=False, key="clone_toggle")
         if clone_on:
-            if not openvoice_installed():
-                st.warning("មិនទាន់ដំឡើង OpenVoice លើម៉ាស៊ីននេះទេ (ត្រូវការ torch + openvoice)។ វីដេអូនឹងប្រើសំឡេង AI ធម្មតា។ មើលឯកសារ requirements_clone.txt។")
             clone_file = st.file_uploader(
                 "សំឡេងគំរូ (mp3 / wav / m4a / mp4)", type=["mp3", "wav", "m4a", "mp4", "ogg", "flac"],
                 key="clone_upl")
             st.caption("💡 ប្រើសំឡេងគំរូដែលនិយាយតែម្នាក់ ច្បាស់ ១០ វិនាទីឡើង គ្មានភ្លេង ឬសំឡេងរំខាន។ "
-                       "OpenVoice មិនបានបណ្តុះបណ្តាលលើភាសាខ្មែរទេ ដូច្នេះគុណភាពអាចប្រែប្រួល។ "
-                       "ដំណើរការលើ CPU យឺតជាងធម្មតា។ បើមានបញ្ហា កម្មវិធីប្រើសំឡេង AI ធម្មតាដោយស្វ័យប្រវត្តិ។")
+                       "វាជ្រើសសំឡេងប្រុស/ស្រីតាមសំឡេងគំរូ រួចកែកម្រិតសំឡេង (pitch) និងពណ៌សំឡេង (EQ) ឱ្យជិតសំឡេងគំរូ។ "
+                       "នេះមិនមែនក្លូនសំឡេងពិតទេ គ្រាន់តែស្រដៀងបន្តិច។")
 
 
 def clone_sample_bytes(upload):
-    """បម្លែងសំឡេងគំរូជា wav 16kHz mono (ត្រឹម ៩០ វិនាទី) សម្រាប់ OpenVoice។ ត្រឡប់ None បើមិនបាន។"""
+    """បម្លែងសំឡេងគំរូជា wav 16kHz mono (ត្រឹម ៩០ វិនាទី)។ ត្រឡប់ None បើមិនបាន។"""
     if upload is None:
         return None
     raw = upload.getvalue()
@@ -6018,6 +5844,7 @@ if run:
         st.stop()
     prepare_home_font(fonts_data)
     fonts_data = sorted(fonts_data, key=lambda f: 0 if f[2] == font_name else 1)
+    clone_sample = clone_sample_bytes(clone_file) if (clone_on and clone_file is not None) else None
     settings = {
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
         "gemini_key": effective_gemini_key(), "groq_key": effective_groq_key(), "fx": fx_settings,
@@ -6026,8 +5853,7 @@ if run:
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
         "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
         "voice_match": False, "emotion": emotion_on,
-        "clone_sample": (clone_sample_bytes(clone_file) if (clone_on and clone_file is not None and openvoice_installed()) else None),
-        "timbre": False, "timbre_sample": None,
+        "timbre": bool(clone_sample), "timbre_sample": clone_sample,
         "font_size": font_size, "outline_size": outline_size,
         "color": COLOR_OPTIONS[color_pick][0],
         "sub_on": sub_on, "srt_on": srt_on,
