@@ -2053,20 +2053,47 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
 
 # =====================================================================
 #  CodeCraft API (OpenAI-compatible) — ម៉ាស៊ីនបម្រុងបន្ថែម
-#  ដាក់ក្នុង Secrets: CODECRAFT_API_KEY, CODECRAFT_BASE_URL, CODECRAFT_MODEL
+#  Secrets: CODECRAFT_API_KEY (ចាំបាច់), CODECRAFT_BASE_URL និង CODECRAFT_MODEL (អាចទុកលំនាំដើម)
 #  ប្រើតែពេល Groq/Gemini បរាជ័យ (អស់កូតា) ប៉ុណ្ណោះ
 # =====================================================================
 OAI_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
-OAI_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
-OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
+# CodeCraft official OpenAI-compatible endpoint; allow overrides in Streamlit Secrets.
+OAI_BASE = (get_secret("CODECRAFT_BASE_URL", "").strip() or "https://www.codecraftapi.com/v1").rstrip("/")
+OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip() or "claude-opus-4.8"
 
 
-OAI_USER_CFG = {}   # Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ដាក់ពេលចុច «ចាប់ផ្តើម» ក្នុងរបៀបនេះ មិនលាយជាមួយអ្នកដទៃ)
+OAI_USER_CFG = {}   # ការកំណត់ CodeCraft សម្រាប់ job ដែលកំពុងដំណើរការ
 
 
 def oai_cfg():
     c = OAI_USER_CFG
-    return ((c.get("key") or OAI_KEY), (c.get("base") or OAI_BASE).rstrip("/"), (c.get("model") or OAI_MODEL))
+    return (
+        (c.get("key") or OAI_KEY),
+        (c.get("base") or OAI_BASE or "https://www.codecraftapi.com/v1").rstrip("/"),
+        (c.get("model") or OAI_MODEL or "claude-opus-4.8"),
+    )
+
+
+def oai_list_models(key, base):
+    """ទាញយក Model IDs ពិតប្រាកដពី CodeCraft /v1/models។"""
+    key = str(key or "").strip()
+    base = (str(base or "https://www.codecraftapi.com/v1").strip().rstrip("/"))
+    if not key:
+        raise ValueError("សូមដាក់ CodeCraft API Key ជាមុន។")
+    req = urllib.request.Request(
+        base + "/models", method="GET",
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json", "User-Agent": "Mozilla/5.0"},
+    )
+    with urllib.request.urlopen(req, timeout=25) as response:
+        data = json.loads(response.read().decode("utf-8", "ignore"))
+    models = []
+    for item in data.get("data", []) if isinstance(data, dict) else []:
+        mid = str(item.get("id", "")).strip() if isinstance(item, dict) else ""
+        if mid and mid not in models:
+            models.append(mid)
+    if not models:
+        raise RuntimeError("CodeCraft មិនបានផ្ញើបញ្ជីម៉ូដែលមកទេ។")
+    return sorted(models)
 
 
 def oai_enabled():
@@ -5286,11 +5313,32 @@ def user_key_box():
                               key="user_key_input")
         oai_base_in = oai_model_in = ""
         if provider == "CodeCraft":
-            oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://codecraftapi.com/v1"),
-                                        key="user_oai_base_input")
-            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"),
-                                         key="user_oai_model_input")
-            st.caption("CodeCraft ធ្វើការងារអត្ថបទទាំងអស់មុន (បកប្រែ កែសម្រួល ជ្រើសល្អបំផុត អារម្មណ៍ បង្រួមឃ្លា) ដើម្បីសន្សំ Groq/Gemini បើវាបរាជ័យ ទើបប្តូរទៅ Groq/Gemini។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq ឬ Gemini។")
+            oai_base_in = st.text_input(
+                "Base URL", value=st.session_state.get("user_oai_base", "https://www.codecraftapi.com/v1"),
+                key="user_oai_base_input",
+            ).strip().rstrip("/")
+            if st.button("📋 ទាញយកបញ្ជីម៉ូដែល CodeCraft", key="user_oai_fetch_models", use_container_width=True):
+                try:
+                    found_models = oai_list_models(typed, oai_base_in)
+                    st.session_state["user_oai_models"] = found_models
+                    st.success(f"រកឃើញ {len(found_models)} ម៉ូដែល។ សូមជ្រើសរើសម៉ូដែលខាងក្រោម។")
+                except Exception as e:
+                    st.error("ទាញយកម៉ូដែលមិនបាន៖ " + str(e)[:220])
+            available_models = st.session_state.get("user_oai_models", [])
+            previous_model = st.session_state.get("user_oai_model", "claude-opus-4.8")
+            if available_models:
+                default_index = available_models.index(previous_model) if previous_model in available_models else 0
+                oai_model_in = st.selectbox(
+                    "ជ្រើសរើសម៉ូដែល (ពី CodeCraft)", available_models,
+                    index=default_index, key="user_oai_model_select",
+                )
+            else:
+                oai_model_in = st.text_input(
+                    "ឈ្មោះម៉ូដែល", value=previous_model,
+                    placeholder="ឧ. claude-opus-4.8 (ឬ Model ID ពី /v1/models)",
+                    key="user_oai_model_input",
+                ).strip()
+            st.caption("CodeCraft នឹងប្រើសម្រាប់ការងារអត្ថបទ AI ក្នុងកម្មវិធី ដូចជា បកប្រែ កែសម្រួល និងបង្រួមឃ្លា។ សម្រាប់ការស្តាប់/ចម្លងសំឡេងវីដេអូ កម្មវិធីនៅតែត្រូវការ Gemini ឬ Groq ព្រោះ CodeCraft Chat API មិនមែនជា Audio Transcription API ទេ។")
         st.caption("🔒 Key ប្រើតែក្នុងទំព័រនេះ មិនត្រូវបានរក្សាទុកទេ ហើយបាត់ពេលអ្នកបិទទំព័រ ឬឈប់ប្រើ។")
         if st.button("✅ ពិនិត្យ និងប្រើ Key នេះ", key="user_key_save", use_container_width=True):
             if provider == "CodeCraft":
@@ -5315,8 +5363,8 @@ GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
 
-if not GEMINI_KEY and not GROQ_KEY and not st.session_state.get("user_groq_key") and not st.session_state.get("user_gemini_key"):
-    st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
+if not GEMINI_KEY and not GROQ_KEY and not OAI_KEY and not st.session_state.get("user_oai_key") and not st.session_state.get("user_groq_key") and not st.session_state.get("user_gemini_key"):
+    st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ CodeCraft, Groq ឬ Gemini API Key នៅផ្ទាំង «🌐 បកប្រែ» ឬក្នុង Streamlit Secrets។")
 
 ENGINE_FREE = "⭐ គម្រោង VIP"
 ENGINE_GEMINI = "✨ Gemini (ទាញអត្ថបទ)"
