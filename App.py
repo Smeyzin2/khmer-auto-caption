@@ -1984,6 +1984,8 @@ TRANS_SYSTEM = (
     "Keep each speaker's pronouns, politeness level and vocabulary consistent across all lines of the video. "
     "(14) ACCURACY: before answering each line, check who does what to whom, when, how many and why; keep every negation, question, condition and number exactly. "
     "Chinese/foreign personal names: transliterate by SOUND the same way every time across all lines, never translate their meaning. Kinship words (older brother, aunt, boss, teacher) must match the real relationship. "
+    "Chinese address terms depend on the relationship: 哥/大哥/姐 = បង, 弟/妹 = ប្អូន, 老板 = ថៅកែ, 老公 = ប្តី, 老婆 = ប្រពន្ធ, 妈 = ម៉ែ/ម៉ាក់, 爸 = ប៉ា/ឪពុក, 少爷/小姐 = ប្រើតាមបរិបទ; choose the Khmer word a real family or friend would use, never a stiff dictionary word. "
+    "Preserve the feeling: crying, pleading, shouting, laughing and sighing lines must sound emotional in Khmer (short broken sentences for panic, soft long sentences for sadness) while still being one clean grammatical sentence. "
     "If an English hint and the original disagree, the original wins. If a word is unclear choose the most common meaning that fits the scene, never invent or censor content, and never output nonsense words. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
@@ -2994,8 +2996,8 @@ def tts_segment(text, voice, path, prosody=None):
         # Natural, slightly slower Khmer delivery by default.
         # Emotion-specific prosody still takes precedence when supplied.
         # ផ្លាស់ប្តូររបៀបអានបន្តិចបន្តួចតាមអត្ថបទ ដើម្បីកុំឱ្យស្តាប់ដូចម៉ាស៊ីនអានដដែលៗ
-        _h = sum(ord(c) for c in str(text)) if text else 0
-        kw = {"rate": f"{-4 + (_h % 5) - 2:+d}%", "pitch": f"{(_h // 5) % 7 - 3:+d}Hz"}
+        # ល្បឿន/កម្រិតសំឡេងថេរ ស្រាលៗ ដើម្បីឱ្យច្បាស់ និងមិនប្រែប្រួលចៃដន្យ
+        kw = {"rate": "-2%", "pitch": "+0Hz"}
         if p:
             kw = {"rate": p["rate"], "volume": p["volume"], "pitch": p["pitch"]}
         await edge_tts.Communicate(tts_clean(text), voice, **kw).save(path)
@@ -3608,9 +3610,9 @@ def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
 def emotion_prosody(label, intensity, use_pitch=True):
     rate, pitch, vol = EMO_PRESETS.get(label, (0, 0, 0))
     k = max(0.0, float(intensity))
-    rate = int(max(-22, min(22, rate * k)))
-    pitch = int(max(-16, min(16, pitch * k * 0.8))) if use_pitch else 0
-    vol = int(max(-35, min(30, vol * k * 0.7)))
+    rate = int(max(-26, min(26, rate * k * 1.1)))
+    pitch = int(max(-20, min(20, pitch * k * 0.95))) if use_pitch else 0
+    vol = int(max(-35, min(35, vol * k * 0.8)))
     if rate == 0 and pitch == 0 and vol == 0:
         return None
     return {"rate": f"{rate:+d}%", "pitch": f"{pitch:+d}Hz", "volume": f"{vol:+d}%"}
@@ -3898,8 +3900,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 return d_cur, p_cur
 
             p_cur_ = pros[i]
-            if not clone_voice:
-                d_, p_cur_ = _fit_rate(t_, d_, p_cur_)
+            d_, p_cur_ = _fit_rate(t_, d_, p_cur_)
             # នៅតែវែងពេក៖ បង្រួមឃ្លាបន្តិច (រក្សាអត្ថន័យ) រួចតម្រឹមល្បឿនម្តងទៀត
             if (not clone_voice) and d_ > slot0 * 1.6 and len(t_) > 30:
                 short_ = condense_for_slot(t_, slot0, client, model, groq_key)
@@ -4344,6 +4345,10 @@ def run_worker(job, item, settings, fonts_data):
                 item["warn"].append("ផ្នែកខ្លះនៃវីដេអូមិនអាចបកប្រែបាន។ សូមសាកម្តងទៀតពេលក្រោយ។")
             item["pct"] = 0.55
             segments = snap_segments(segments, speech, duration)
+            if settings.get("review_on"):
+                item["pct"] = 0.56
+                segments = review_segments_wait(item, segments)
+                rep.write("កំពុងបន្តជាមួយអក្សរដែលអ្នកបានកែ...")
             captions, sync_mode = build_captions(segments, duration)
             if not captions:
                 raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
@@ -4488,6 +4493,34 @@ def run_worker(job, item, settings, fonts_data):
             pass
         _PIPELINE_SLOTS.release()
         gc.collect()
+
+
+def review_segments_wait(item, segments, timeout=900):
+    """ផ្អាកដើម្បីឱ្យអ្នកប្រើកែអក្សរ Subtitle (ខ្មែរ) មុនបង្កើតសំឡេង និងដាក់ចូលវីដេអូ។"""
+    ev = threading.Event()
+    item["review_final"] = None
+    item["review_segments"] = [[float(a), float(b), str(t)] for a, b, t in segments]
+    item["review_event"] = ev
+    item["stage"] = "✏️ រង់ចាំអ្នកពិនិត្យ និងកែអក្សរ..."
+    item["state"] = "review"
+    _PIPELINE_SLOTS.release()   # ដោះជួរ ឱ្យវីដេអូផ្សេងធ្វើបានពេលរង់ចាំ
+    try:
+        got = ev.wait(timeout=timeout)
+    finally:
+        _PIPELINE_SLOTS.acquire()
+    final = item.get("review_final")
+    item["review_segments"] = None
+    item["review_event"] = None
+    item["review_final"] = None
+    item["state"] = "running"
+    if not got or not final:
+        return segments
+    out = []
+    for a, b, t in final:
+        t = fix_khmer(t)
+        if t:
+            out.append((float(a), float(b), t))
+    return out or segments
 
 
 def build_zip(items, folder):
@@ -4800,6 +4833,26 @@ def work_area(job, was_running, reviewing=False):
                 st.info("💡 បើបញ្ហាដោយសារ API អស់កូតា សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» រួចសាកម្តងទៀត។")
                 if DEBUG and it["raw_error"]:
                     st.text(it["raw_error"])
+            elif it["state"] == "review" and it.get("review_segments") is not None:
+                st.info("✏️ ពិនិត្យ និងកែអក្សរខ្មែរ រួចចុច «បន្ត» ដើម្បីបង្កើតសំឡេង និងដាក់អក្សរចូលវីដេអូ។ លុបអក្សរឃ្លាណាឱ្យទទេ ដើម្បីរំលងឃ្លានោះ។")
+                with st.form(key=f"rvform_{job.id}_{i}"):
+                    _edited = []
+                    for _k, (_a, _b, _t) in enumerate(it["review_segments"]):
+                        _new = st.text_area(f"{_k + 1}. {fmt_clock(_a)} → {fmt_clock(_b)}", value=_t,
+                                            key=f"rv_{job.id}_{i}_{_k}", height=80)
+                        _edited.append((_a, _b, _new))
+                    _fc1, _fc2 = st.columns(2)
+                    _go = _fc1.form_submit_button("✅ បន្ត (ប្រើអក្សរដែលកែ)", type="primary", use_container_width=True)
+                    _skip = _fc2.form_submit_button("⏭ បន្តដោយមិនកែ", use_container_width=True)
+                if _go or _skip:
+                    it["review_final"] = _edited if _go else None
+                    it["state"] = "running"
+                    it["stage"] = "កំពុងបន្តជាមួយអក្សរដែលបានកែ..."
+                    _ev = it.get("review_event")
+                    if _ev is not None:
+                        _ev.set()
+                    time.sleep(0.5)
+                    st.rerun()
             else:
                 st.progress(max(0.0, min(1.0, it["pct"])), text=it["stage"])
             for w in it["warn"]:
@@ -5440,10 +5493,45 @@ with tab_voice:
         bg_level = 8
         if keep_bg:
             bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick")
+    with st.container(border=True):
+        st.markdown("**🧑‍🎤 ក្លូនសំឡេង (ប្រើសំឡេងគំរូរបស់អ្នក)**")
+        clone_on = st.toggle("ប្រើសំឡេងគំរូ ជំនួសសំឡេង AI ធម្មតា", value=False, key="clone_toggle")
+        if clone_on:
+            clone_file = st.file_uploader(
+                "សំឡេងគំរូ (mp3 / wav / m4a / mp4)", type=["mp3", "wav", "m4a", "mp4", "ogg", "flac"],
+                key="clone_upl")
+            if not ELEVEN_KEY:
+                st.text_input("ElevenLabs API Key", type="password", key="eleven_user_key",
+                              placeholder="sk_...")
+            st.caption("💡 ប្រើសំឡេងគំរូដែលនិយាយតែម្នាក់ច្បាស់ ១–៣ នាទី គ្មានភ្លេង/សំឡេងរំខាន។ ត្រូវការគណនី ElevenLabs ដែលអាចក្លូនសំឡេងបាន។ អារម្មណ៍ និងល្បឿននិយាយនៅតែតាមដដែល។")
+ELEVEN_KEY_EFF = ELEVEN_KEY or str(st.session_state.get("eleven_user_key", "") or "").strip()
+
+
+def clone_sample_bytes(upload):
+    """បម្លែងសំឡេងគំរូជា mp3 (ត្រឹម ៥ នាទី) ដើម្បីឱ្យ ElevenLabs ទទួលបានគ្រប់ទ្រង់ទ្រាយ។"""
+    if upload is None:
+        return None
+    raw = upload.getvalue()
+    tmp = tempfile.mkdtemp(prefix="kclone_")
+    try:
+        src = os.path.join(tmp, "in.bin")
+        dst = os.path.join(tmp, "out.mp3")
+        with open(src, "wb") as fh:
+            fh.write(raw)
+        run_ffmpeg(["-i", src, "-vn", "-ac", "1", "-ar", "44100", "-b:a", "128k", "-t", "300", dst])
+        with open(dst, "rb") as fh:
+            return fh.read()
+    except Exception:
+        return raw
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 # ============================ ផ្ទាំង ៤: អក្សរ ============================
 with tab_text:
     prev_slot = st.container()
+    with st.container(border=True):
+        review_on = st.toggle("✏️ ពិនិត្យ និងកែអក្សរ Subtitle មុនបង្កើតសំឡេង", value=False, key="review_toggle")
+        st.caption("បើបើក កម្មវិធីនឹងផ្អាកបង្ហាញអក្សរខ្មែរនៅផ្ទាំង «⬇️ ទាញយក» ឱ្យអ្នកកែ រួចសំឡេង និងអក្សរក្នុងវីដេអូនឹងប្រើអក្សរដែលអ្នកបានកែ។")
     with st.container(border=True):
         a1, a2 = st.columns(2)
         with a1:
@@ -5648,13 +5736,13 @@ if run:
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
         "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
         "voice_match": False, "emotion": emotion_on,
-        "clone_sample": None,
-        "eleven_key": ELEVEN_KEY,
+        "clone_sample": (clone_sample_bytes(clone_file) if (clone_on and clone_file is not None) else None),
+        "eleven_key": ELEVEN_KEY_EFF,
         "timbre": False, "timbre_sample": None,
         "font_size": font_size, "outline_size": outline_size,
         "color": COLOR_OPTIONS[color_pick][0],
         "sub_on": sub_on, "srt_on": srt_on,
-        "narrate_on": False, "review_on": False,
+        "narrate_on": False, "review_on": review_on,
         "style": {"align": POS_MAP[pos_pick], "bold": bold_, "italic": italic_, "box": BOX_OPTIONS[box_pick]},
     }
     st.session_state["_run_split"] = False
