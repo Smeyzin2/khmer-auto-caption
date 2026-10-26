@@ -4673,13 +4673,39 @@ def _url_alive(url, pat, timeout=15):
         return None
 
 
+_TT_PROXY = os.environ.get("TIKTOK_PROXY", "").strip()   # ឧ. http://user:pass@host:port (ជម្រើស)
+_TT_UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
+          "Chrome/124.0.0.0 Mobile Safari/537.36")
+
+
+def _tt_open(req, timeout=30):
+    if _TT_PROXY:
+        op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": _TT_PROXY, "https": _TT_PROXY}))
+        return op.open(req, timeout=timeout)
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
 def _tikwm_call(path, params, timeout=30):
-    body = urllib.parse.urlencode(params).encode("utf-8")
-    req = urllib.request.Request(
-        "https://www.tikwm.com/api/" + path, data=body, method="POST",
-        headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return json.loads(r.read().decode("utf-8", "ignore"))
+    base = "https://www.tikwm.com/api/" + path
+    qs = urllib.parse.urlencode(params)
+    hdr = {"User-Agent": _TT_UA, "Accept": "application/json, text/javascript, */*; q=0.01",
+           "Referer": "https://www.tikwm.com/", "Origin": "https://www.tikwm.com",
+           "X-Requested-With": "XMLHttpRequest", "Cookie": "current_language=en"}
+    last = None
+    for method in ("POST", "GET"):
+        try:
+            if method == "POST":
+                req = urllib.request.Request(
+                    base, data=qs.encode("utf-8"), method="POST",
+                    headers={**hdr, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+            else:
+                req = urllib.request.Request(base + "?" + qs, headers=hdr)
+            with _tt_open(req, timeout) as r:
+                return json.loads(r.read().decode("utf-8", "ignore"))
+        except Exception as e:
+            last = e
+            time.sleep(1.0)
+    raise last
 
 
 def _discover_tiktok(first_url, max_eps):
@@ -4688,8 +4714,8 @@ def _discover_tiktok(first_url, max_eps):
     errs = []
     final = first_url
     try:
-        req = urllib.request.Request(first_url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=20) as r:
+        req = urllib.request.Request(first_url, headers={"User-Agent": _TT_UA})
+        with _tt_open(req, 20) as r:
             final = r.geturl()
     except Exception as e:
         errs.append("redirect: " + str(e)[:80])
@@ -4712,6 +4738,8 @@ def _discover_tiktok(first_url, max_eps):
         import yt_dlp
         opts = {"extract_flat": True, "quiet": True, "no_warnings": True, "skip_download": True,
                 "playlistend": 400, "socket_timeout": 30}
+        if _TT_PROXY:
+            opts["proxy"] = _TT_PROXY
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(f"https://www.tiktok.com/@{user}", download=False)
         for e in (info or {}).get("entries") or []:
@@ -4745,7 +4773,8 @@ def _discover_tiktok(first_url, max_eps):
             errs.append("tikwm: " + str(e)[:120])
     later = sorted(i for i in ids if i >= vid)[:max_eps]
     if len(later) < 2 and errs:
-        raise UserError("ទាញបញ្ជីវីដេអូរបស់ឆានែលមិនបានទេ។ សូមដាក់តំណម្តងមួយៗ។ (" + " | ".join(errs) + ")")
+        raise UserError("ទាញបញ្ជីវីដេអូរបស់ឆានែលមិនបានទេ ព្រោះ TikTok រារាំងម៉ាស៊ីនមេនេះ ឬឆានែលនេះលាក់វីដេអូ។ "
+                        "សូមដាក់តំណម្តងមួយៗ ឬដាក់ TIKTOK_PROXY ក្នុង Secrets ឬរត់កម្មវិធីលើម៉ាស៊ីនផ្ទាល់ខ្លួន។ (" + " | ".join(errs) + ")")
     return [(k, f"https://www.tiktok.com/@{user}/video/{i}") for k, i in enumerate(later, 1)]
 
 
