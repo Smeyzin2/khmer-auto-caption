@@ -4,3 +4,10 @@ imageio-ffmpeg
 fonttools
 edge-tts
 numpy
+# ស្រេចចិត្ត: ដំឡើងតែបើចង់ប្រើក្លូនសំឡេង (OpenVoice V2 ឥតគិតថ្លៃ)
+# ត្រូវការ RAM យ៉ាងតិច ៤GB មិនសមនឹង Streamlit Cloud ឥតគិតថ្លៃ
+# ណែនាំ Python 3.9-3.10 ក្នុង virtualenv ដាច់ដោយឡែក (OpenVoice ភ្ជាប់ជាមួយកញ្ចប់ជំនាន់ចាស់)
+torch
+torchaudio
+huggingface_hub
+git+https://github.com/myshell-ai/OpenVoice.git
