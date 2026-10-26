@@ -2052,26 +2052,40 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
 
 
 # =====================================================================
-#  CodeCraft API (OpenAI-compatible) — ម៉ាស៊ីនបម្រុងបន្ថែម
+#  CodeCraft API (OpenAI-compatible) — provider ចម្បងសម្រាប់ការងារអត្ថបទ
 #  Secrets: CODECRAFT_API_KEY (ចាំបាច់), CODECRAFT_BASE_URL និង CODECRAFT_MODEL (អាចទុកលំនាំដើម)
 #  ប្រើតែពេល Groq/Gemini បរាជ័យ (អស់កូតា) ប៉ុណ្ណោះ
 # =====================================================================
-OAI_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
-# CodeCraft official OpenAI-compatible endpoint; allow overrides in Streamlit Secrets.
-OAI_BASE = (get_secret("CODECRAFT_BASE_URL", "").strip() or "https://www.codecraftapi.com/v1").rstrip("/")
-OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip() or "claude-opus-4.8"
-
-
+# CodeCraft ជា provider ចម្បងសម្រាប់ការងារអត្ថបទ AI។
+# Secrets អាចប្រើ CODECRAFT_API_KEY តែមួយ ឬ CODECRAFT_API_KEYS ជាបញ្ជី/អត្ថបទច្រើន key។
+_CODECRAFT_SECRET_KEYS = split_keys(get_secret("CODECRAFT_API_KEYS", ""))
+_CODECRAFT_SINGLE_KEY = str(get_secret("CODECRAFT_API_KEY", "") or "").strip()
+if _CODECRAFT_SINGLE_KEY and _CODECRAFT_SINGLE_KEY not in _CODECRAFT_SECRET_KEYS:
+    _CODECRAFT_SECRET_KEYS.insert(0, _CODECRAFT_SINGLE_KEY)
+OAI_KEY = _CODECRAFT_SINGLE_KEY
+OAI_BASE = (str(get_secret("CODECRAFT_BASE_URL", "") or "").strip() or "https://www.codecraftapi.com/v1").rstrip("/")
+OAI_MODEL = str(get_secret("CODECRAFT_MODEL", "") or "").strip() or "claude-opus-4.8"
 OAI_USER_CFG = {}   # ការកំណត់ CodeCraft សម្រាប់ job ដែលកំពុងដំណើរការ
+_OAI_KEY_LOCK = threading.Lock()
+_OAI_KEY_STATE = {"next": 0, "cooldown": {}}
 
 
 def oai_cfg():
     c = OAI_USER_CFG
-    return (
-        (c.get("key") or OAI_KEY),
-        (c.get("base") or OAI_BASE or "https://www.codecraftapi.com/v1").rstrip("/"),
-        (c.get("model") or OAI_MODEL or "claude-opus-4.8"),
-    )
+    key = str(c.get("key") or OAI_KEY or "").strip()
+    base = str(c.get("base") or OAI_BASE or "https://www.codecraftapi.com/v1").rstrip("/")
+    model = str(c.get("model") or OAI_MODEL or "claude-opus-4.8").strip()
+    return key, base, model
+
+
+def oai_key_candidates():
+    user_key = str(OAI_USER_CFG.get("key") or "").strip()
+    keys = ([user_key] if user_key else []) + list(_CODECRAFT_SECRET_KEYS)
+    out = []
+    for key in keys:
+        if key and key not in out:
+            out.append(key)
+    return out
 
 
 def oai_list_models(key, base):
@@ -2097,8 +2111,8 @@ def oai_list_models(key, base):
 
 
 def oai_enabled():
-    k, b, m = oai_cfg()
-    return bool(k and b and m)
+    _, b, m = oai_cfg()
+    return bool(oai_key_candidates() and b and m)
 
 
 def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
@@ -2192,18 +2206,36 @@ _OAI_COOL = {"until": 0.0}
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """សាក CodeCraft មុនគេ។ ត្រឡប់បញ្ជី ឬ None (មិនបានកំណត់ / កំពុងសម្រាក / បរាជ័យ)
-    ដើម្បីឱ្យអ្នកហៅប្តូរទៅ Groq/Gemini ជាបម្រុង។"""
+    """ប្រើ CodeCraft ជាចម្បង; ប្ដូរ key ពេល key មួយអស់កូតា ឬមានបញ្ហា។"""
     if not oai_enabled() or _OAI_COOL.get("until", 0) > time.time():
         return None
-    for attempt in range(2):
+    _, base, model = oai_cfg()
+    keys = oai_key_candidates()
+    if not keys:
+        return None
+    last_error = None
+    now = time.time()
+    with _OAI_KEY_LOCK:
+        start_at = _OAI_KEY_STATE["next"] % len(keys)
+        ordered = keys[start_at:] + keys[:start_at]
+        ready = [k for k in ordered if _OAI_KEY_STATE["cooldown"].get(k, 0) <= now]
+        cooling = [k for k in ordered if _OAI_KEY_STATE["cooldown"].get(k, 0) > now]
+        ordered = ready + cooling
+    for key in ordered:
         try:
-            return oai_translate_chunk(texts, budgets, system, to_english, raw=raw)
+            result = oai_translate_chunk(texts, budgets, system, to_english, cfg=(key, base, model), raw=raw)
+            with _OAI_KEY_LOCK:
+                _OAI_KEY_STATE["next"] = (keys.index(key) + 1) % len(keys)
+                _OAI_KEY_STATE["cooldown"].pop(key, None)
+            return result
         except Exception as e:
-            if "ចំនួនបន្ទាត់" in str(e):
-                continue   # ម៉ូដែលឆ្លើយខុសចំនួនបន្ទាត់ → សាកម្តងទៀត មិនសម្រាកទាំងមូល
-            _OAI_COOL["until"] = time.time() + 60   # server/បណ្តាញមានបញ្ហា → សម្រាក ១ នាទី
-            return None
+            last_error = str(e)
+            low = last_error.lower()
+            with _OAI_KEY_LOCK:
+                _OAI_KEY_STATE["cooldown"][key] = time.time() + (
+                    60 if any(x in low for x in ("429", "quota", "rate limit", "resource_exhausted")) else 20
+                )
+    _OAI_COOL["until"] = time.time() + 30
     return None
 
 
