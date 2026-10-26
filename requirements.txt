@@ -4,3 +4,6 @@ imageio-ffmpeg
 fonttools
 edge-tts
 numpy
+Pillow
+requests
+yt-dlp
