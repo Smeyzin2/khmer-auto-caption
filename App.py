@@ -3870,9 +3870,62 @@ VOICE_POLISH = ("highpass=f=70,"
                 "aecho=0.85:0.9:28:0.10")
 
 
+def assign_characters(dub_segments, chars, info):
+    """បែងចែកអ្នកនិយាយក្នុងវីដេអូតាម pitch ហើយផ្គូផ្គងទៅសំឡេងគំរូ (ទាប→ខ្ពស់)។
+    ត្រឡប់ (seg_voices, targets, seg_char, char_bands, notes)។"""
+    import numpy as np
+    k = len(chars)
+    n = len(dub_segments)
+    order = sorted(range(k), key=lambda i: chars[i]["f0"])
+    own = [median_pitch(info, sg[0], sg[1]) if info else None for sg in dub_segments]
+    idx = [i for i, o in enumerate(own) if o]
+    label = [None] * n
+    if k == 1 or len(idx) < 2:
+        label = [0] * n
+    else:
+        x = np.log2(np.array([own[i] for i in idx]))
+        cen = np.percentile(x, np.linspace(10, 90, k))
+        for _ in range(30):
+            lab = np.argmin(np.abs(x[:, None] - cen[None, :]), axis=1)
+            new = np.array([x[lab == c].mean() if np.any(lab == c) else cen[c] for c in range(k)])
+            if np.allclose(new, cen, atol=1e-4):
+                break
+            cen = new
+        rank = {int(c): r for r, c in enumerate(np.argsort(cen))}
+        lab = np.argmin(np.abs(x[:, None] - cen[None, :]), axis=1)
+        for i, l_ in zip(idx, lab):
+            label[i] = rank[int(l_)]
+        last = None
+        for i in range(n):
+            if label[i] is None:
+                label[i] = last
+            else:
+                last = label[i]
+        nxt = None
+        for i in range(n - 1, -1, -1):
+            if label[i] is None:
+                label[i] = nxt if nxt is not None else 0
+            else:
+                nxt = label[i]
+    seg_voices, targets, seg_char = [], [], []
+    for l_ in label:
+        ci = order[min(int(l_), k - 1)]
+        c = chars[ci]
+        seg_voices.append(VOICE_FEMALE if c["f0"] >= 165 else VOICE_MALE)
+        targets.append(c["f0"])
+        seg_char.append(ci)
+    notes = []
+    for ci, c in enumerate(chars):
+        cnt = sum(1 for v in seg_char if v == ci)
+        who = "ស្រី" if c["f0"] >= 165 else "ប្រុស"
+        notes.append(f"🎤 តួអង្គទី {c['n']}: ~{int(c['f0'])}Hz → សំឡេង{who} ({cnt} ឃ្លា)")
+    return seg_voices, targets, seg_char, [c["bands"] for c in chars], notes
+
+
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             ref_bands=None, offset=0.0, tight=True, bg_vol=0.08):
+             ref_bands=None, offset=0.0, tight=True, bg_vol=0.08,
+             seg_char=None, char_bands=None):
     inputs, filters = [], []
     n = 0
     if keep_bg:
@@ -3954,7 +4007,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             if targets is not None and i < len(targets) and targets[i]:
                 f0_ = tts_median_pitch(path_)
             tb_ = None
-            if ref_bands:
+            if ref_bands or char_bands:
                 try:
                     tb_ = band_levels(load_pcm(path_))
                 except Exception:
@@ -3977,6 +4030,18 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                     voice_eq[v_] = eqs
         if notes is not None and voice_eq:
             notes.append("🎚 ផ្គូផ្គងពណ៌សំឡេងស្រដៀងសំឡេងគំរូ")
+    char_eq = {}
+    if char_bands and seg_char:
+        import numpy as np
+        for c_ in set(seg_char):
+            arrs = [r_[2] for k_, r_ in enumerate(results)
+                    if r_ and r_[2] and k_ < len(seg_char) and seg_char[k_] == c_]
+            if arrs and char_bands[c_]:
+                eqs = eq_filters(char_bands[c_], np.mean(arrs, axis=0).tolist())
+                if eqs:
+                    char_eq[c_] = eqs
+        if notes is not None and char_eq:
+            notes.append("🎚 ផ្គូផ្គងពណ៌សំឡេងតាមតួអង្គនីមួយៗ")
     cursor = 0.0
     plan = []
     skipped = 0
@@ -4011,7 +4076,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
-                     "eq": voice_eq.get(voices_[i], "")})
+                     "eq": (char_eq.get(seg_char[i], "") if (seg_char and i < len(seg_char)) else voice_eq.get(voices_[i], ""))})
     if notes is not None and skipped:
         notes.append(f"⚠️ មិនអាចបង្កើតសំឡេង {skipped} ឃ្លា")
     if not plan:
@@ -4400,7 +4465,8 @@ def run_worker(job, item, settings, fonts_data):
                     pitch_inf = None
                     runs_ = None
                     ref_bands = None
-                    sample_f0 = None
+                    seg_char = None
+                    char_bands = None
                     need_audio = (settings["auto_gender"] or settings["voice_match"] or settings["emotion"] or settings.get("timbre"))
                     if need_audio:
                         try:
@@ -4411,22 +4477,6 @@ def run_worker(job, item, settings, fonts_data):
                                 pcm = load_pcm(master_path)
                                 tracks = pitch_track(pcm)
                             pitch_inf = {"times": tracks[0], "f0": tracks[1], "rms": tracks[2]}
-                            if settings.get("timbre"):
-                                ref_pcm = pcm
-                                if settings.get("timbre_sample"):
-                                    sp = os.path.join(folder, "timbre_sample.bin")
-                                    with open(sp, "wb") as f:
-                                        f.write(settings["timbre_sample"])
-                                    ref_pcm = load_pcm(sp)
-                                    try:
-                                        import numpy as np
-                                        _ts, f_s, _rs = pitch_track(ref_pcm)
-                                        v_s = f_s[f_s > 0]
-                                        if len(v_s) >= 25:
-                                            sample_f0 = float(np.median(v_s))
-                                    except Exception:
-                                        sample_f0 = None
-                                ref_bands = band_levels(ref_pcm)
                             if settings["auto_gender"]:
                                 try:
                                     runs_, _info = gender_timeline(pcm, duration, settings["voice"], tracks=tracks)
@@ -4438,12 +4488,29 @@ def run_worker(job, item, settings, fonts_data):
                                     runs_ = None
                             if settings["voice_match"]:
                                 targets = compute_targets(dub_segments, seg_voices, pitch_inf, runs_)
-                            if sample_f0:
-                                _v = VOICE_FEMALE if sample_f0 >= 165 else VOICE_MALE
-                                seg_voices = [_v] * len(dub_segments)
-                                targets = [sample_f0] * len(dub_segments)
-                                voice_notes = voice_notes + [
-                                    f"🎤 សំឡេងគំរូ ~{int(sample_f0)}Hz → ប្រើសំឡេង{'ស្រី' if _v == VOICE_FEMALE else 'ប្រុស'}"]
+                            if settings.get("timbre_samples"):
+                                import numpy as np
+                                chars_ = []
+                                for _n_, _raw_ in enumerate(settings["timbre_samples"]):
+                                    try:
+                                        _sp = os.path.join(folder, f"timbre_{_n_}.bin")
+                                        with open(_sp, "wb") as _f:
+                                            _f.write(_raw_)
+                                        _pc = load_pcm(_sp)
+                                        _t_, _f0_, _r_ = pitch_track(_pc)
+                                        _vv = _f0_[_f0_ > 0]
+                                        _med = float(np.median(_vv)) if len(_vv) >= 25 else None
+                                        chars_.append({"f0": _med, "bands": band_levels(_pc), "n": _n_ + 1})
+                                    except Exception:
+                                        continue
+                                _pc = None
+                                _all_chars = len(chars_)
+                                chars_ = [c_ for c_ in chars_ if c_["f0"]]
+                                if len(chars_) < len(settings["timbre_samples"]):
+                                    item["warn"].append("សំឡេងគំរូខ្លះមិនអាចវាស់ pitch បាន (ខ្លី ឬមិនច្បាស់) ត្រូវបានរំលង។")
+                                if chars_:
+                                    seg_voices, targets, seg_char, char_bands, _cn = assign_characters(dub_segments, chars_, pitch_inf)
+                                    voice_notes = voice_notes + _cn
                             pcm = None
                             ref_pcm = None
                             tracks = None
@@ -4455,6 +4522,8 @@ def run_worker(job, item, settings, fonts_data):
                             voice_notes = []
                             pitch_inf = None
                             runs_ = None
+                            seg_char = None
+                            char_bands = None
                             item["warn"].append("វិភាគសំឡេងអ្នកនិយាយមិនបាន ប្រើសំឡេងតែមួយតាមដែលបានជ្រើស។")
                     if settings["emotion"]:
                         try:
@@ -4466,7 +4535,7 @@ def run_worker(job, item, settings, fonts_data):
                             item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
-                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=0.0, tight=True, bg_vol=settings.get("bg_vol", 0.08))
+                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=0.0, tight=True, bg_vol=settings.get("bg_vol", 0.08), seg_char=seg_char, char_bands=char_bands)
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
@@ -4587,233 +4656,6 @@ def extract_links(text):
 
 
 LINK_RETRIES = _env_int("LINK_RETRIES", 8)   # ចំនួនលើកព្យាយាមអតិបរមាក្នុងមួយតំណ
-
-
-MAX_EPISODES = _env_int("MAX_EPISODES", 30)   # ចំនួនភាគអតិបរមាក្នុងរបៀប «ដាក់តែតំណភាគ ១»
-
-
-def _http_get_text(url, timeout=25):
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", "Accept-Language": "en-US,en;q=0.9"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        raw = r.read(3 * 1024 * 1024)
-        enc = r.headers.get_content_charset() or "utf-8"
-    return raw.decode(enc, "ignore")
-
-
-def _ep_template(url):
-    """រកលេខភាគក្នុងតំណ → (prefix, number, suffix, width) ឬ None។"""
-    url = url.split("#", 1)[0]
-    p = urllib.parse.urlparse(url)
-    if not p.scheme or not p.netloc:
-        return None
-    head = f"{p.scheme}://{p.netloc}"
-    rest = url[len(head):]
-    best = None
-    for m in re.finditer(r"(?<!\d)\d{1,4}(?!\d)", rest):
-        prev = rest[max(0, m.start() - 12):m.start()].lower()
-        if re.search(r"(?<![a-z])(?:episode|ep|tap|part|chapter|chap|vol|no|e|ភាគ|第)[\s._=-]*$", prev):
-            score = 3
-        elif prev[-1:] in ("/", "-", "_", "="):
-            score = 1
-        else:
-            score = 0
-        if score < 3 and "?" in rest[:m.start()]:
-            score -= 1   # លេខក្នុង query (?q=720) មិនសូវជាលេខភាគ
-        if best is None or score >= best[0]:
-            best = (score, m)
-    if not best:
-        return None
-    m = best[1]
-    tok = m.group(0)
-    width = len(tok) if (len(tok) > 1 and tok.startswith("0")) else 0
-    return head + rest[:m.start()], int(tok), rest[m.end():], width
-
-
-def _ep_build(tpl, n):
-    prefix, _num, suffix, width = tpl
-    return prefix + (str(n).zfill(width) if width else str(n)) + suffix
-
-
-def _ep_pattern(tpl):
-    prefix, _num, suffix, _w = tpl
-    return re.compile("^" + re.escape(prefix) + r"(\d{1,4})" + re.escape(suffix) + "$")
-
-
-def _page_episode_numbers(html, page_url, pat):
-    """រកតំណភាគផ្សេងៗដែលមានក្នុងទំព័រ (ទម្រង់ដូចតំណភាគ ១)។"""
-    html = html.replace("\\/", "/").replace("&amp;", "&")
-    cands = re.findall(r"""(?:href|src|data-url|data-href|url)\s*[=:]\s*["']([^"'<>\s]+)["']""", html, flags=re.I)
-    cands += re.findall(r"https?://[^\s\"'<>\\]+", html)
-    nums = set()
-    for c in cands:
-        absu = urllib.parse.urljoin(page_url, c.strip()).split("#", 1)[0]
-        m = pat.match(absu)
-        if m:
-            nums.add(int(m.group(1)))
-    return nums
-
-
-def _nu(s):
-    return re.sub(r"^https?://(www\.)?", "", s).rstrip("/")
-
-
-def _url_alive(url, pat, timeout=15):
-    """True = មាន, False = គ្មាន (404...), None = មិនអាចដឹង (ត្រូវបានបិទ ឬមានបញ្ហា)។"""
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            final = r.geturl().split("#", 1)[0]
-            r.read(1024)
-        return _nu(final) == _nu(url) or bool(pat.match(final))
-    except urllib.error.HTTPError as e:
-        if e.code in (404, 410, 400):
-            return False
-        return None
-    except Exception:
-        return None
-
-
-_TT_PROXY = os.environ.get("TIKTOK_PROXY", "").strip()   # ឧ. http://user:pass@host:port (ជម្រើស)
-_TT_UA = ("Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) "
-          "Chrome/124.0.0.0 Mobile Safari/537.36")
-
-
-def _tt_open(req, timeout=30):
-    if _TT_PROXY:
-        op = urllib.request.build_opener(urllib.request.ProxyHandler({"http": _TT_PROXY, "https": _TT_PROXY}))
-        return op.open(req, timeout=timeout)
-    return urllib.request.urlopen(req, timeout=timeout)
-
-
-def _tikwm_call(path, params, timeout=30):
-    base = "https://www.tikwm.com/api/" + path
-    qs = urllib.parse.urlencode(params)
-    hdr = {"User-Agent": _TT_UA, "Accept": "application/json, text/javascript, */*; q=0.01",
-           "Referer": "https://www.tikwm.com/", "Origin": "https://www.tikwm.com",
-           "X-Requested-With": "XMLHttpRequest", "Cookie": "current_language=en"}
-    last = None
-    for method in ("POST", "GET"):
-        try:
-            if method == "POST":
-                req = urllib.request.Request(
-                    base, data=qs.encode("utf-8"), method="POST",
-                    headers={**hdr, "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
-            else:
-                req = urllib.request.Request(base + "?" + qs, headers=hdr)
-            with _tt_open(req, timeout) as r:
-                return json.loads(r.read().decode("utf-8", "ignore"))
-        except Exception as e:
-            last = e
-            time.sleep(1.0)
-    raise last
-
-
-def _discover_tiktok(first_url, max_eps):
-    """TikTok: ពីវីដេអូភាគ ១ → វីដេអូរបស់ម្ចាស់ឆានែលដដែល ដែលបង្ហោះក្រោយវា (តាមលំដាប់ពេលវេលា)។
-    ID វីដេអូ TikTok កើនតាមពេលវេលា ដូច្នេះតម្រៀប ID ពីតូចទៅធំ = លំដាប់បង្ហោះ។"""
-    errs = []
-    final = first_url
-    try:
-        req = urllib.request.Request(first_url, headers={"User-Agent": _TT_UA})
-        with _tt_open(req, 20) as r:
-            final = r.geturl()
-    except Exception as e:
-        errs.append("redirect: " + str(e)[:80])
-    m = re.search(r"tiktok\.com/@([^/?#]+)/video/(\d+)", final)
-    user = vid = None
-    if m:
-        user, vid = m.group(1), int(m.group(2))
-    else:
-        try:
-            d = (_tikwm_call("", {"url": first_url, "hd": 1}).get("data") or {})
-            user = (d.get("author") or {}).get("unique_id")
-            vid = int(d.get("id")) if str(d.get("id") or "").isdigit() else None
-        except Exception as e:
-            errs.append("tikwm-info: " + str(e)[:80])
-    if not user or not vid:
-        raise UserError("មិនអាចអានម្ចាស់វីដេអូពីតំណនេះទេ។ សូមសាកតំណពេញ (tiktok.com/@ឈ្មោះ/video/...) ឬដាក់តំណម្តងមួយៗ។ (" + " | ".join(errs) + ")")
-    ids = {vid}
-    # វិធីទី ១: yt-dlp
-    try:
-        import yt_dlp
-        opts = {"extract_flat": True, "quiet": True, "no_warnings": True, "skip_download": True,
-                "playlistend": 400, "socket_timeout": 30}
-        if _TT_PROXY:
-            opts["proxy"] = _TT_PROXY
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            info = ydl.extract_info(f"https://www.tiktok.com/@{user}", download=False)
-        for e in (info or {}).get("entries") or []:
-            s = str((e or {}).get("id") or "")
-            if s.isdigit():
-                ids.add(int(s))
-    except Exception as e:
-        errs.append("yt-dlp: " + str(e)[:120])
-    # វិធីទី ២ (បម្រុង): tikwm ទាញបញ្ជីវីដេអូម្ចាស់ឆានែលជាទំព័រៗ (ថ្មីទៅចាស់)
-    if not any(i > vid for i in ids):
-        try:
-            cursor = 0
-            for _page in range(15):
-                d = _tikwm_call("user/posts", {"unique_id": "@" + user, "count": 34, "cursor": cursor})
-                data = d.get("data") or {}
-                vids = data.get("videos") or []
-                if not vids:
-                    errs.append("tikwm: " + str(d.get("msg"))[:100])
-                    break
-                page_ids = []
-                for v in vids:
-                    s = str(v.get("video_id") or v.get("id") or "")
-                    if s.isdigit():
-                        page_ids.append(int(s))
-                ids.update(page_ids)
-                if not data.get("hasMore") or (page_ids and min(page_ids) < vid):
-                    break
-                cursor = data.get("cursor") or 0
-                time.sleep(1.2)
-        except Exception as e:
-            errs.append("tikwm: " + str(e)[:120])
-    later = sorted(i for i in ids if i >= vid)[:max_eps]
-    if len(later) < 2 and errs:
-        raise UserError("ទាញបញ្ជីវីដេអូរបស់ឆានែលមិនបានទេ ព្រោះ TikTok រារាំងម៉ាស៊ីនមេនេះ ឬឆានែលនេះលាក់វីដេអូ។ "
-                        "សូមដាក់តំណម្តងមួយៗ ឬដាក់ TIKTOK_PROXY ក្នុង Secrets ឬរត់កម្មវិធីលើម៉ាស៊ីនផ្ទាល់ខ្លួន។ (" + " | ".join(errs) + ")")
-    return [(k, f"https://www.tiktok.com/@{user}/video/{i}") for k, i in enumerate(later, 1)]
-
-
-def discover_episodes(first_url, max_eps=20):
-    """ពីតំណភាគទី ១ → បញ្ជី [(លេខភាគ, តំណ)] ទាំងអស់។"""
-    first_url = str(first_url or "").strip().split("#", 1)[0]
-    if not first_url.lower().startswith(("http://", "https://")):
-        raise UserError("សូមបិទភ្ជាប់តំណដែលចាប់ផ្តើមដោយ https://")
-    if is_social_link(first_url):
-        return _discover_tiktok(first_url, max_eps)
-    tpl = _ep_template(first_url)
-    if not tpl:
-        raise UserError("រកលេខភាគក្នុងតំណមិនឃើញ។ សូមដាក់តំណដែលមានលេខភាគ ឧទាហរណ៍ .../episode-1")
-    start = tpl[1]
-    pat = _ep_pattern(tpl)
-    nums = {start}
-    try:
-        nums |= {n for n in _page_episode_numbers(_http_get_text(first_url), first_url, pat) if n >= start}
-    except Exception:
-        pass
-    n = max(nums) + 1
-    fails = 0
-    while len(nums) < max_eps and n <= 9999 and fails < 2:
-        alive = _url_alive(_ep_build(tpl, n), pat)
-        if alive is None:
-            break
-        if alive:
-            nums.add(n)
-            fails = 0
-        else:
-            fails += 1
-        n += 1
-    return [(k, _ep_build(tpl, k)) for k in sorted(nums)[:max_eps]]
-
-
-def _ep_label(url, n, plain=False):
-    num = (st.session_state.get("ep_numbers") or {}).get(url)
-    base = f"ភាគ {num}" if num else f"វីដេអូទី {n}"
-    return base if plain else "🎬 " + base
 
 
 def _fetch_one(url, on_try=None):
@@ -5421,7 +5263,6 @@ review_on = False
 voice_match = False
 emotion = False
 clone_on = False
-clone_file = None
 timbre = False
 timbre_file = None
 dub_offset = 0.0
@@ -5435,7 +5276,6 @@ tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
 )
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
-ep1_mode = False
 link_limit = MAX_VIDEOS
 with tab_vid:
     with st.container(border=True):
@@ -5450,28 +5290,6 @@ with tab_vid:
                 accept_multiple_files=True) or []
         else:
             st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
-            ep1_mode = st.toggle("🎞 ដាក់តែតំណភាគទី ១ ហើយរកគ្រប់ភាគស្វ័យប្រវត្តិ", value=False, key="ep1_mode_toggle")
-            if ep1_mode:
-                link_limit = MAX_EPISODES
-                _ep1 = st.text_input("តំណភាគទី ១", key="ep1_url_input", placeholder="https://.../episode-1")
-                _ep_max = st.number_input("ចំនួនភាគអតិបរមា", min_value=2, max_value=max(2, MAX_EPISODES),
-                                          value=min(20, max(2, MAX_EPISODES)), step=1, key="ep1_max")
-                if st.button("🔎 រកតំណគ្រប់ភាគ", type="primary", use_container_width=True,
-                             key="ep1_find_btn", disabled=not (_ep1 or "").strip()):
-                    try:
-                        with st.spinner("កំពុងរកភាគផ្សេងៗ..."):
-                            _found = discover_episodes(_ep1.strip(), int(_ep_max))
-                        st.session_state["ep_numbers"] = {u: n for n, u in _found}
-                        st.session_state["link_text_area"] = "\n".join(u for _n, u in _found)
-                        st.session_state["link_searched"] = [u for _n, u in _found][:link_limit]
-                        if len(_found) < 2:
-                            st.warning("រកឃើញតែភាគទី ១។ ម្ចាស់គេហទំព័រអាចបិទមិនឱ្យសាក ឬទម្រង់តំណខុសគ្នា។ សូមបន្ថែមតំណភាគផ្សេងដោយដៃក្នុងប្រអប់ខាងក្រោម។")
-                        else:
-                            if is_social_link(_ep1):
-                                st.info("TikTok: កម្មវិធីយកវីដេអូរបស់ម្ចាស់ឆានែលដដែលដែលបង្ហោះបន្ទាប់ពីភាគ ១ តាមលំដាប់ពេល។ សូមពិនិត្យបញ្ជី ហើយលុបវីដេអូដែលមិនមែនជាភាគរឿង។")
-                            st.success(f"✅ រកឃើញ {len(_found)} ភាគ — តំណទាំងអស់នៅប្រអប់ខាងក្រោម (កែ ឬលុបបាន)")
-                    except Exception as _e:
-                        st.error(str(_e) if isinstance(_e, UserError) else "រកភាគមិនបានទេ។ សូមសាកម្តងទៀត។")
             link_text = st.text_area(
                 "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
                 key="link_text_area",
@@ -5503,10 +5321,8 @@ with tab_vid:
             _multi = len(_link_lines) > 1
             for _n, _u in enumerate(_link_lines, start=1):
                 _ent = fetch_link_preview(_u)
-                _box = (st.expander(_ep_label(_u, _n), expanded=(_n == 1)) if (_multi and not ep1_mode) else st.container())
+                _box = (st.expander(f"🎬 វីដេអូទី {_n}", expanded=(_n == 1)) if _multi else st.container())
                 with _box:
-                    if ep1_mode:
-                        st.markdown(f"**{_ep_label(_u, _n)}**")
                     if _ent["ok"] and _ent["path"] and os.path.isfile(_ent["path"]):
                         _n_ok += 1
                         _mb = os.path.getsize(_ent["path"]) / (1024 * 1024)
@@ -5521,12 +5337,12 @@ with tab_vid:
                         except Exception:
                             pass
                         st.caption(_info)
-                        if _mb <= PREVIEW_MAX_MB and not ep1_mode:
+                        if _mb <= PREVIEW_MAX_MB:
                             try:
                                 st.video(_ent["path"])
                             except Exception:
                                 pass
-                        if _mb <= 300 and not ep1_mode:
+                        if _mb <= 300:
                             with open(_ent["path"], "rb") as _fh:
                                 dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _fh, f"video_{_n}.mp4", "video/mp4",
                                           key=f"dl_link_{_n}", use_container_width=True)
@@ -5806,15 +5622,24 @@ with tab_voice:
             bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick")
 
     with st.container(border=True):
-        st.markdown("**🎤 ផ្គូផ្គងសំឡេងគំរូ (ឥតគិតថ្លៃ គ្មានការដំឡើងបន្ថែម)**")
-        clone_on = st.toggle("ប្រើសំឡេងគំរូ ឱ្យសំឡេងអានស្រដៀងសំឡេងរបស់ខ្ញុំ", value=False, key="clone_toggle")
+        st.markdown("**🎤 សំឡេងគំរូច្រើនតួអង្គ (ឥតគិតថ្លៃ គ្មានការដំឡើងបន្ថែម)**")
+        clone_on = st.toggle("ប្រើសំឡេងគំរូ ឱ្យសំឡេងអានស្រដៀងសំឡេងគំរូ", value=False, key="clone_toggle")
+        clone_files = []
         if clone_on:
-            clone_file = st.file_uploader(
-                "សំឡេងគំរូ (mp3 / wav / m4a / mp4)", type=["mp3", "wav", "m4a", "mp4", "ogg", "flac"],
-                key="clone_upl")
-            st.caption("💡 ប្រើសំឡេងគំរូដែលនិយាយតែម្នាក់ ច្បាស់ ១០ វិនាទីឡើង គ្មានភ្លេង ឬសំឡេងរំខាន។ "
-                       "វាជ្រើសសំឡេងប្រុស/ស្រីតាមសំឡេងគំរូ រួចកែកម្រិតសំឡេង (pitch) និងពណ៌សំឡេង (EQ) ឱ្យជិតសំឡេងគំរូ។ "
+            _n_chars = st.slider("ចំនួនតួអង្គ (សំឡេងគំរូ)", 1, 6, 2, key="clone_n")
+            for _ci in range(_n_chars):
+                _cf = st.file_uploader(
+                    f"🎭 សំឡេងគំរូតួអង្គទី {_ci + 1} (mp3 / wav / m4a / mp4)",
+                    type=["mp3", "wav", "m4a", "mp4", "ogg", "flac"], key=f"clone_upl_{_ci}")
+                if _cf is not None:
+                    clone_files.append(_cf)
+            st.caption("💡 សំឡេងគំរូនីមួយៗគួរជាអ្នកនិយាយតែម្នាក់ ច្បាស់ ១០ វិនាទីឡើង គ្មានភ្លេង។ "
+                       "កម្មវិធីបែងចែកអ្នកនិយាយក្នុងវីដេអូតាមកម្រិតសំឡេង (pitch) ហើយផ្គូផ្គងតាមលំដាប់ ទាប→ខ្ពស់ "
+                       "ទៅនឹងសំឡេងគំរូ (តួអង្គ pitch ទាបបំផុត ← អ្នកនិយាយ pitch ទាបបំផុត)។ "
+                       "ម្នាក់ៗទទួលសំឡេងប្រុស/ស្រី កម្រិត pitch និងពណ៌សំឡេង (EQ) ស្រដៀងសំឡេងគំរូរបស់ខ្លួន។ "
                        "នេះមិនមែនក្លូនសំឡេងពិតទេ គ្រាន់តែស្រដៀងបន្តិច។")
+            if len(clone_files) < _n_chars:
+                st.caption(f"បានដាក់ {len(clone_files)} / {_n_chars} សំឡេងគំរូ — ប្រើតែតួអង្គដែលបានដាក់ឯកសារ។")
 
 
 def clone_sample_bytes(upload):
@@ -6078,7 +5903,7 @@ else:
     lines = [u for u in lines if _cache.get(u, {}).get("ok")]
     too_many = len(lines) > MAX_VIDEOS
     for i, url in enumerate(lines[:MAX_VIDEOS], start=1):
-        items.append({"name": (_ep_label(url, i, plain=True) if ep1_mode else f"វីដេអូទី {i}"), "file": None, "url": url, "cached": _cache[url]["path"]})
+        items.append({"name": f"វីដេអូទី {i}", "file": None, "url": url, "cached": _cache[url]["path"]})
 
 # ផ្នែកដែលបានកាត់ពីផ្ទាំង «✂️ កាត់» ហើយបានចុច «បកប្រែ» → ជំនួសបញ្ជីវីដេអូ
 _sq = st.session_state.get("_split_queue")
@@ -6119,7 +5944,7 @@ if run:
         st.stop()
     prepare_home_font(fonts_data)
     fonts_data = sorted(fonts_data, key=lambda f: 0 if f[2] == font_name else 1)
-    clone_sample = clone_sample_bytes(clone_file) if (clone_on and clone_file is not None) else None
+    clone_samples = [b_ for b_ in (clone_sample_bytes(f_) for f_ in clone_files) if b_] if clone_on else []
     settings = {
         "engine": "free" if engine_label == ENGINE_FREE else "gemini",
         "gemini_key": effective_gemini_key(), "groq_key": effective_groq_key(), "fx": fx_settings,
@@ -6128,7 +5953,7 @@ if run:
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
         "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
         "voice_match": False, "emotion": emotion_on,
-        "timbre": bool(clone_sample), "timbre_sample": clone_sample,
+        "timbre": bool(clone_samples), "timbre_samples": clone_samples,
         "font_size": font_size, "outline_size": outline_size,
         "color": COLOR_OPTIONS[color_pick][0],
         "sub_on": sub_on, "srt_on": srt_on,
@@ -6198,7 +6023,6 @@ if run:
     for _k, _it in enumerate(job_items):
         _it["seq"] = _k
     job = Job(job_items, job_folder)
-    job.text_only = bool(ep1_mode)
     st.session_state["job"] = job
     for item in job.items:
         threading.Thread(target=run_worker, args=(job, item, settings, fonts_data), daemon=True).start()
