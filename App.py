@@ -1,21 +1,4 @@
-
 import os
-
-# =====================================================================
-#  ►►► ដាក់ API KEY របស់អ្នកនៅទីនេះ (ម្នាក់មួយបន្ទាត់ ក្នុងចន្លោះ """ និង """)
-#  លុប «ដាក់_key_ទីនេះ» ចេញ ហើយ paste key ពិតជំនួស។ បើមិនមាន Groq ទុកទទេបាន។
-# =====================================================================
-_MY_GEMINI_KEYS = """
-AQ.Ab8RN6LB7uBoKJeM8c29Hzh4YBZB1LLt6wOMT_ynazT-IseY_g
-"""
-_MY_GROQ_KEYS = """
-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
-"""
-for _name, _val in (("GEMINI_API_KEY", _MY_GEMINI_KEYS), ("GROQ_API_KEY", _MY_GROQ_KEYS)):
-    _clean = "\n".join(l.strip() for l in _val.splitlines() if l.strip() and "ដាក់_key_ទីនេះ" not in l)
-    if _clean and not os.environ.get(_name):
-        os.environ[_name] = _clean
-# =====================================================================
 import io
 import re
 import json
