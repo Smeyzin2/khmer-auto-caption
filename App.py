@@ -2143,16 +2143,24 @@ def oai_test(key, base, model):
 
 
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
-    """Groq មុន បើបរាជ័យ ហើយបានកំណត់ CodeCraft API នោះសាក CodeCraft បម្រុង។"""
-    try:
-        return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
-    except Exception as first_err:
-        if not oai_enabled():
-            raise
+    """បើបានកំណត់ CodeCraft API នោះប្រើ CodeCraft មុន (ម៉ាស៊ីនសំខាន់)។
+    បើវាបរាជ័យ (ឧ. 503 កំពុង upgrade) ទើបប្តូរទៅ Groq ជាបម្រុង ហើយសម្រាក CodeCraft ១ នាទី។"""
+    oai_err = None
+    if oai_enabled() and _OAI_COOL.get("until", 0) <= time.time():
         try:
             return oai_translate_chunk(texts, budgets, system, to_english)
-        except Exception as second_err:
-            raise RuntimeError(f"{str(first_err)[:150]} | {str(second_err)[:150]}")
+        except Exception as e:
+            oai_err = e
+            _OAI_COOL["until"] = time.time() + 60
+    try:
+        return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
+    except Exception as groq_err:
+        if oai_err is not None:
+            raise RuntimeError(f"{str(oai_err)[:150]} | {str(groq_err)[:150]}")
+        raise
+
+
+_OAI_COOL = {"until": 0.0}
 
 
 EN_SYSTEM = (
@@ -5216,7 +5224,7 @@ def user_key_box():
                                         key="user_oai_base_input")
             oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"),
                                          key="user_oai_model_input")
-            st.caption("CodeCraft ជាម៉ាស៊ីនបម្រុង ដំណើរការតែពេល Groq/Gemini បរាជ័យ។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq។")
+            st.caption("CodeCraft ប្រើជាម៉ាស៊ីនបកប្រែសំខាន់ (មុន) បើវាបរាជ័យ ទើបប្តូរទៅ Groq/Gemini។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq។")
         st.caption("🔒 Key ប្រើតែក្នុងទំព័រនេះ មិនត្រូវបានរក្សាទុកទេ ហើយបាត់ពេលអ្នកបិទទំព័រ ឬឈប់ប្រើ។")
         if st.button("✅ ពិនិត្យ និងប្រើ Key នេះ", key="user_key_save", use_container_width=True):
             if provider == "CodeCraft":
