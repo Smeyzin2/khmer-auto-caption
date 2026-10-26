@@ -2074,7 +2074,7 @@ def oai_enabled():
     return bool(k and b and m)
 
 
-def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None):
+def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
     _key, _base, _model = cfg if cfg else oai_cfg()
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
@@ -2106,6 +2106,8 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
                 m = re.search(r"\{.*\}", content, flags=re.S)
                 items = json.loads(m.group(0) if m else content).get("translations") or []
                 if len(items) == len(texts):
+                    if raw:
+                        return list(items)
                     return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
                 last = "CodeCraft: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
                 break
@@ -2146,12 +2148,11 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
     """បើបានកំណត់ CodeCraft API នោះប្រើ CodeCraft មុន (ម៉ាស៊ីនសំខាន់)។
     បើវាបរាជ័យ (ឧ. 503 កំពុង upgrade) ទើបប្តូរទៅ Groq ជាបម្រុង ហើយសម្រាក CodeCraft ១ នាទី។"""
     oai_err = None
-    if oai_enabled() and _OAI_COOL.get("until", 0) <= time.time():
-        try:
-            return oai_translate_chunk(texts, budgets, system, to_english)
-        except Exception as e:
-            oai_err = e
-            _OAI_COOL["until"] = time.time() + 60
+    _r = oai_try(texts, budgets, system, to_english)
+    if _r is not None:
+        return _r
+    if oai_enabled():
+        oai_err = "CodeCraft មិនបានលទ្ធផល"
     try:
         return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
     except Exception as groq_err:
@@ -2161,6 +2162,22 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
 
 
 _OAI_COOL = {"until": 0.0}
+
+
+def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
+    """សាក CodeCraft មុនគេ។ ត្រឡប់បញ្ជី ឬ None (មិនបានកំណត់ / កំពុងសម្រាក / បរាជ័យ)
+    ដើម្បីឱ្យអ្នកហៅប្តូរទៅ Groq/Gemini ជាបម្រុង។"""
+    if not oai_enabled() or _OAI_COOL.get("until", 0) > time.time():
+        return None
+    for attempt in range(2):
+        try:
+            return oai_translate_chunk(texts, budgets, system, to_english, raw=raw)
+        except Exception as e:
+            if "ចំនួនបន្ទាត់" in str(e):
+                continue   # ម៉ូដែលឆ្លើយខុសចំនួនបន្ទាត់ → សាកម្តងទៀត មិនសម្រាកទាំងមូល
+            _OAI_COOL["until"] = time.time() + 60   # server/បណ្តាញមានបញ្ហា → សម្រាក ១ នាទី
+            return None
+    return None
 
 
 EN_SYSTEM = (
@@ -2174,6 +2191,22 @@ EN_SYSTEM = (
 
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
+    # CodeCraft មុន (ដើម្បីសន្សំ token Gemini)
+    _rows = []
+    for _i, _t in enumerate(texts):
+        _r = str(_t)
+        if english and english[_i] and "[unclear]" not in str(english[_i]):
+            _r += f" (English meaning: {english[_i]})"
+        _rows.append(_r)
+    _sys = (TRANS_SYSTEM
+            + " Some lines include an English meaning in parentheses to help you understand; translate the true meaning "
+            "into Khmer and never output the English text or any tags."
+            + ((" STORY SO FAR (context only, do NOT translate): " + story) if story else ""))
+    _res = oai_try(_rows, budgets, _sys)
+    if _res is not None:
+        return _res
+    if not split_keys(api_key):
+        raise RuntimeError("CodeCraft មិនបានលទ្ធផល ហើយគ្មាន Gemini Key")
     client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
     _av = get_available_models(client)
     _av = [m for m in _av if "pro" in m.lower()] + [m for m in _av if "pro" not in m.lower()]
@@ -2257,6 +2290,9 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
     def work(idxs):
         rows = rows_for(idxs)
         story = story_for(idxs)
+        _r = oai_try(rows, None, REFINE_SYSTEM + " " + story)
+        if _r is not None:
+            return idxs, _r
         if gemini_key:
             try:
                 client = make_gemini_client(gemini_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
@@ -2338,6 +2374,9 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
             ctx += "PREVIOUS LINES (context only): " + " / ".join(prev) + " "
         if nxt:
             ctx += "NEXT LINES (context only): " + " / ".join(nxt)
+        _r = oai_try(rows, None, JUDGE_SYSTEM + " " + ctx)
+        if _r is not None:
+            return idxs, _r
         if gemini_key:
             try:
                 res = gemini_lines(gemini_key, JUDGE_SYSTEM + " " + ctx, rows)
@@ -2373,6 +2412,12 @@ def make_synopsis(english, texts, gemini_key, groq_key):
     body = " ".join((english[i] or str(texts[i])) for i in range(len(texts)))[:7000]
     ask = ("Read this video transcript. In under 120 words of English, state: the topic, who the speakers are and how they relate "
            "(gender, age, formal or casual), the mood, and any recurring names or terms. No translation.\n\n" + body)
+    _r = oai_try([body], None,
+                 "Read the video transcript line. In under 120 words of English, state: the topic, who the speakers are and how they relate "
+                 "(gender, age, formal or casual), the mood, and any recurring names or terms. No translation. "
+                 'Return JSON {"translations": ["<summary>"]}.', to_english=True)
+    if _r and _r[0]:
+        return str(_r[0])[:900]
     try:
         if gemini_key:
             client = make_gemini_client(gemini_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
@@ -2437,6 +2482,9 @@ def gemini_lines(api_key, system, rows, temperature=0.15, khmer=True):
 
 def llm_lines(rows, system, gemini_key=None, groq_key=None, khmer=True):
     """សាក Gemini មុន បើមិនបានសាក Groq (ឬបញ្ច្រាស់ពេលមានតែមួយ)។ ត្រឡប់ None បើទាំងពីរបរាជ័យ។"""
+    _r = oai_try(rows, None, system, to_english=(not khmer))
+    if _r is not None:
+        return _r
     if gemini_key:
         try:
             return gemini_lines(gemini_key, system, rows, khmer=khmer)
@@ -2506,7 +2554,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 pass
 
     # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (ធ្វើស្របគ្នា ៣ បាច់ក្នុងពេលតែមួយ)
-    if groq_key:
+    if groq_key or oai_enabled():
         def _en(idxs):
             rows_ = [str(texts[i]).strip() for i in idxs]
             try:
@@ -2530,14 +2578,14 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
     synopsis = ""
     if n > 2:
-        if groq_key:
+        if groq_key or oai_enabled():
             synopsis = make_synopsis(english, texts, None, groq_key)
         if not synopsis and gemini_key:
             synopsis = make_synopsis(english, texts, gemini_key, None)
     # ជំហាន ២: Gemini បកជាខ្មែរមុន (ល្អបំផុតសម្រាប់ខ្មែរ) ដោយមានបរិបទមុន/ក្រោយ
     missing = [i for i, o in enumerate(outs) if o is None]
     batches = [missing[k:k + 6] for k in range(0, len(missing), 6)]
-    if gemini_key and missing:
+    if (gemini_key or oai_enabled()) and missing:
         def _km(idxs):
             try:
                 prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
@@ -2613,7 +2661,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             outs[i] = o
     # ជំហាន ៣: សាកបកប្រែឡើងវិញសម្រាប់ឃ្លាដែលលទ្ធផលទទេ/មិនមានអក្សរខ្មែរ
     missing = [i for i, o in enumerate(outs) if not o or not has_khmer(str(o))]
-    if missing and gemini_key:
+    if missing and (gemini_key or oai_enabled()):
         for k in range(0, len(missing), 8):
             idxs = missing[k:k + 8]
             try:
@@ -2663,7 +2711,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             one = [str(texts[i]).strip()]
             bud = [budgets[i]] if budgets else None
             r = None
-            if gemini_key and dead["gemini"] < 2:
+            if (gemini_key or oai_enabled()) and dead["gemini"] < 2:
                 try:
                     r = gemini_translate_khmer(gemini_key, one, [english[i]], bud)[0]
                     dead["gemini"] = 0
@@ -2690,7 +2738,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     # ជំហានកែសម្រួលចុងក្រោយ: ពិនិត្យអត្ថន័យខ្មែរប្រៀបនឹងអត្ថបទដើម
     # ពិនិត្យ ២ ជុំ ដោយម៉ូដែលផ្សេងគ្នា លើគ្រប់ឃ្លា (ជុំទី២ ពិនិត្យអត្ថន័យ និងភាពស៊ីសង្វាក់ម្តងទៀត)
     allidx = list(range(n))
-    if allidx and (groq_key or gemini_key) and all(o and has_khmer(str(o)) for o in outs):
+    if allidx and (groq_key or gemini_key or oai_enabled()) and all(o and has_khmer(str(o)) for o in outs):
         try:
             cand_a = list(outs)
             cand_b = refine_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a,
@@ -3635,6 +3683,18 @@ def label_emotions(texts, groq_key, gemini_key):
     """ត្រឡប់បញ្ជី (label, intensity) ឬ None។ ប្រើ Gemini មុន (យល់ខ្មែរល្អជាង) រួច Groq ជាបម្រុង។"""
     if not texts:
         return None
+    if oai_enabled():
+        _esys = EMO_SYSTEM.replace('"emotions"', '"translations"')
+        _out = []
+        for _k in range(0, len(texts), 25):
+            _part = texts[_k:_k + 25]
+            _r = oai_try(_part, None, _esys, to_english=True, raw=True)
+            if _r is None or len(_r) != len(_part):
+                _out = None
+                break
+            _out.extend(parse_emo_item(x) for x in _r)
+        if _out:
+            return _out
     if gemini_key:
         try:
             out = gemini_emotion_labels(gemini_key, texts)
@@ -3857,6 +3917,12 @@ def shorten_groq(api_key, text, max_seconds):
 def condense_for_slot(text, slot, client, model, groq_key):
     """បង្រួមប្រយោគខ្មែរឱ្យខ្លី (រក្សាអត្ថន័យ) ពេលវែងជាងមាត់និយាយច្រើនពេក។ បើមិនបានលទ្ធផលល្អ ត្រឡប់អត្ថបទដើម។"""
     try:
+        _lim = max(6, int(slot * 11))
+        _r = oai_try([text], None, "Shorten the Khmer sentence to at most " + str(_lim)
+                     + " characters. Keep the meaning. Khmer script only. "
+                     'Return JSON {"translations": ["<sentence>"]}.')
+        if _r and _r[0] and has_khmer(_r[0]) and len(_r[0]) < len(text):
+            return _r[0]
         if client is not None and model:
             out = shorten_khmer(client, model, text, slot)
             if out and out != text and has_khmer(out) and len(out) < len(text):
@@ -5224,7 +5290,7 @@ def user_key_box():
                                         key="user_oai_base_input")
             oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"),
                                          key="user_oai_model_input")
-            st.caption("CodeCraft ប្រើជាម៉ាស៊ីនបកប្រែសំខាន់ (មុន) បើវាបរាជ័យ ទើបប្តូរទៅ Groq/Gemini។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq។")
+            st.caption("CodeCraft ធ្វើការងារអត្ថបទទាំងអស់មុន (បកប្រែ កែសម្រួល ជ្រើសល្អបំផុត អារម្មណ៍ បង្រួមឃ្លា) ដើម្បីសន្សំ Groq/Gemini បើវាបរាជ័យ ទើបប្តូរទៅ Groq/Gemini។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq ឬ Gemini។")
         st.caption("🔒 Key ប្រើតែក្នុងទំព័រនេះ មិនត្រូវបានរក្សាទុកទេ ហើយបាត់ពេលអ្នកបិទទំព័រ ឬឈប់ប្រើ។")
         if st.button("✅ ពិនិត្យ និងប្រើ Key នេះ", key="user_key_save", use_container_width=True):
             if provider == "CodeCraft":
