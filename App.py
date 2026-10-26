@@ -1992,7 +1992,7 @@ TRANS_SYSTEM = (
 )
 
 
-def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
+def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
@@ -2041,6 +2041,86 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
                 break
     _groq_chat_cache["models"] = None  # បញ្ជីម៉ូដែលអាចហួសសម័យ ទាញថ្មីលើកក្រោយ
     raise RuntimeError(last[:300])
+
+
+# =====================================================================
+#  CodeCraft API (OpenAI-compatible) — ម៉ាស៊ីនបម្រុងបន្ថែម
+#  ដាក់ក្នុង Secrets: CODECRAFT_API_KEY, CODECRAFT_BASE_URL, CODECRAFT_MODEL
+#  ប្រើតែពេល Groq/Gemini បរាជ័យ (អស់កូតា) ប៉ុណ្ណោះ
+# =====================================================================
+OAI_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
+OAI_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
+OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
+
+
+def oai_enabled():
+    return bool(OAI_KEY and OAI_BASE and OAI_MODEL)
+
+
+def oai_translate_chunk(texts, budgets=None, system=None, to_english=False):
+    numbered = "\n".join(
+        f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
+        for i, t in enumerate(texts)
+    )
+    last = "CodeCraft: មិនទាន់កំណត់"
+    for use_json_mode in (True, False):
+        payload = {
+            "model": OAI_MODEL, "temperature": 0.1,
+            "messages": [
+                {"role": "system", "content": system or TRANS_SYSTEM},
+                {"role": "user", "content": numbered},
+            ],
+        }
+        if use_json_mode:
+            payload["response_format"] = {"type": "json_object"}
+        body = json.dumps(payload).encode("utf-8")
+        for attempt in range(2):
+            request = urllib.request.Request(
+                OAI_BASE + "/chat/completions", data=body, method="POST",
+                headers={"Authorization": f"Bearer {OAI_KEY}", "Content-Type": "application/json",
+                         "User-Agent": "Mozilla/5.0"})
+            try:
+                with urllib.request.urlopen(request, timeout=90) as r:
+                    data = json.loads(r.read().decode("utf-8"))
+                content = data["choices"][0]["message"]["content"] or ""
+                content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+                content = re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=re.M).strip()
+                m = re.search(r"\{.*\}", content, flags=re.S)
+                items = json.loads(m.group(0) if m else content).get("translations") or []
+                if len(items) == len(texts):
+                    return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
+                last = "CodeCraft: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                break
+            except urllib.error.HTTPError as e:
+                detail = ""
+                try:
+                    detail = e.read().decode("utf-8", "ignore")[:160]
+                except Exception:
+                    pass
+                last = f"CodeCraft HTTP {e.code}: {detail}"
+                if e.code == 429 and attempt == 0:
+                    time.sleep(5)
+                    continue
+                if e.code in (400, 422) and use_json_mode:
+                    break   # ម៉ូដែលមិនគាំទ្រ json_object → សាកដោយគ្មាន
+                raise RuntimeError(last)
+            except Exception as e:
+                last = f"CodeCraft: {e}"
+                break
+    raise RuntimeError(last[:300])
+
+
+def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
+    """Groq មុន បើបរាជ័យ ហើយបានកំណត់ CodeCraft API នោះសាក CodeCraft បម្រុង។"""
+    try:
+        return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
+    except Exception as first_err:
+        if not oai_enabled():
+            raise
+        try:
+            return oai_translate_chunk(texts, budgets, system, to_english)
+        except Exception as second_err:
+            raise RuntimeError(f"{str(first_err)[:150]} | {str(second_err)[:150]}")
 
 
 EN_SYSTEM = (
