@@ -4673,37 +4673,79 @@ def _url_alive(url, pat, timeout=15):
         return None
 
 
+def _tikwm_call(path, params, timeout=30):
+    body = urllib.parse.urlencode(params).encode("utf-8")
+    req = urllib.request.Request(
+        "https://www.tikwm.com/api/" + path, data=body, method="POST",
+        headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8", "ignore"))
+
+
 def _discover_tiktok(first_url, max_eps):
     """TikTok: ពីវីដេអូភាគ ១ → វីដេអូរបស់ម្ចាស់ឆានែលដដែល ដែលបង្ហោះក្រោយវា (តាមលំដាប់ពេលវេលា)។
     ID វីដេអូ TikTok កើនតាមពេលវេលា ដូច្នេះតម្រៀប ID ពីតូចទៅធំ = លំដាប់បង្ហោះ។"""
+    errs = []
     final = first_url
     try:
         req = urllib.request.Request(first_url, headers={"User-Agent": "Mozilla/5.0"})
         with urllib.request.urlopen(req, timeout=20) as r:
             final = r.geturl()
-    except Exception:
-        pass
+    except Exception as e:
+        errs.append("redirect: " + str(e)[:80])
     m = re.search(r"tiktok\.com/@([^/?#]+)/video/(\d+)", final)
-    if not m:
-        raise UserError("មិនអាចអានម្ចាស់វីដេអូពីតំណនេះទេ។ សូមសាកតំណពេញ (tiktok.com/@ឈ្មោះ/video/...) ឬដាក់តំណម្តងមួយៗ។")
-    user, vid = m.group(1), int(m.group(2))
+    user = vid = None
+    if m:
+        user, vid = m.group(1), int(m.group(2))
+    else:
+        try:
+            d = (_tikwm_call("", {"url": first_url, "hd": 1}).get("data") or {})
+            user = (d.get("author") or {}).get("unique_id")
+            vid = int(d.get("id")) if str(d.get("id") or "").isdigit() else None
+        except Exception as e:
+            errs.append("tikwm-info: " + str(e)[:80])
+    if not user or not vid:
+        raise UserError("មិនអាចអានម្ចាស់វីដេអូពីតំណនេះទេ។ សូមសាកតំណពេញ (tiktok.com/@ឈ្មោះ/video/...) ឬដាក់តំណម្តងមួយៗ។ (" + " | ".join(errs) + ")")
+    ids = {vid}
+    # វិធីទី ១: yt-dlp
     try:
         import yt_dlp
-    except Exception:
-        raise UserError("yt-dlp មិនទាន់ដំឡើង")
-    opts = {"extract_flat": True, "quiet": True, "no_warnings": True, "skip_download": True,
-            "playlistend": 400, "socket_timeout": 30}
-    try:
+        opts = {"extract_flat": True, "quiet": True, "no_warnings": True, "skip_download": True,
+                "playlistend": 400, "socket_timeout": 30}
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(f"https://www.tiktok.com/@{user}", download=False)
-    except Exception:
-        raise UserError("ទាញបញ្ជីវីដេអូរបស់ឆានែលមិនបានទេ (TikTok អាចរារាំង)។ សូមដាក់តំណម្តងមួយៗ។")
-    ids = {vid}
-    for e in (info or {}).get("entries") or []:
-        s = str((e or {}).get("id") or "")
-        if s.isdigit():
-            ids.add(int(s))
+        for e in (info or {}).get("entries") or []:
+            s = str((e or {}).get("id") or "")
+            if s.isdigit():
+                ids.add(int(s))
+    except Exception as e:
+        errs.append("yt-dlp: " + str(e)[:120])
+    # វិធីទី ២ (បម្រុង): tikwm ទាញបញ្ជីវីដេអូម្ចាស់ឆានែលជាទំព័រៗ (ថ្មីទៅចាស់)
+    if not any(i > vid for i in ids):
+        try:
+            cursor = 0
+            for _page in range(15):
+                d = _tikwm_call("user/posts", {"unique_id": "@" + user, "count": 34, "cursor": cursor})
+                data = d.get("data") or {}
+                vids = data.get("videos") or []
+                if not vids:
+                    errs.append("tikwm: " + str(d.get("msg"))[:100])
+                    break
+                page_ids = []
+                for v in vids:
+                    s = str(v.get("video_id") or v.get("id") or "")
+                    if s.isdigit():
+                        page_ids.append(int(s))
+                ids.update(page_ids)
+                if not data.get("hasMore") or (page_ids and min(page_ids) < vid):
+                    break
+                cursor = data.get("cursor") or 0
+                time.sleep(1.2)
+        except Exception as e:
+            errs.append("tikwm: " + str(e)[:120])
     later = sorted(i for i in ids if i >= vid)[:max_eps]
+    if len(later) < 2 and errs:
+        raise UserError("ទាញបញ្ជីវីដេអូរបស់ឆានែលមិនបានទេ។ សូមដាក់តំណម្តងមួយៗ។ (" + " | ".join(errs) + ")")
     return [(k, f"https://www.tiktok.com/@{user}/video/{i}") for k, i in enumerate(later, 1)]
 
 
