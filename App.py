@@ -1222,9 +1222,15 @@ def split_keys(value):
 
 
 def _gem_retryable(err):
+    """កំហុសដែលគួរប្ដូរ Gemini API Key មុនសាកឡើងវិញ។"""
     low = str(err).lower()
-    return any(x in low for x in ("429", "resource_exhausted", "quota", "rate limit",
-                                  "api key not valid", "api_key_invalid", "permission_denied", "403"))
+    return any(x in low for x in (
+        "429", "resource_exhausted", "quota", "rate limit",
+        "503", "service unavailable", "unavailable", "high demand",
+        "overloaded", "server error", "temporarily unavailable",
+        "api key not valid", "api_key_invalid", "permission_denied", "403",
+        "timed out", "timeout", "connection reset", "connection error",
+    ))
 
 
 class _RotModels:
@@ -1247,10 +1253,14 @@ class _RotModels:
                 return getattr(client.models, name)(*args, **kwargs)
             except Exception as e:
                 last = e
-                if _gem_retryable(e) and n < len(order) - 1:
+                # បើ Gemini Busy/429/503 ឬ Key មានបញ្ហា សាក Key បន្ទាប់
+                # ដោយរក្សាម៉ូដែលដដែល។ ដាក់ cooldown សម្រាប់ Key ដែលបរាជ័យ
+                # ទោះជាវាជា Key ចុងក្រោយក៏ដោយ ដើម្បីឱ្យការសាកបន្ទាប់ចាប់ពី Key ផ្សេង។
+                if _gem_retryable(e):
                     with _GEM_LOCK:
                         _GEM_COOL[key] = time.time() + GEM_COOLDOWN
-                    continue
+                    if n < len(order) - 1:
+                        continue
                 raise
         raise last
 
@@ -1604,17 +1614,17 @@ def call_with_retry(client, model, prompt, audio_bytes, mime, config, status):
             return client.models.generate_content(**kwargs)
         except Exception as e:
             low = str(e).lower()
-            busy = any(x in low for x in ("503", "unavailable", "high demand", "overloaded", "timeout", "timed out"))
-            quota = "429" in low or "resource_exhausted" in low
+            busy = any(x in low for x in ("503", "unavailable", "high demand", "overloaded", "timeout", "timed out", "server error"))
+            quota = any(x in low for x in ("429", "resource_exhausted", "quota", "rate limit"))
             if busy and attempt < 2:
                 wait = 4 * (attempt + 1)
-                status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
-                dbg(status, f"[{model}] busy, wait {wait}s")
+                status.write("Gemini កំពុងរវល់។ កម្មវិធីបានសាក API Key ផ្សេងរួចហើយ ហើយកំពុងរង់ចាំមុនសាកម្ដងទៀត...")
+                dbg(status, f"[{model}] Gemini busy after key rotation; retry in {wait}s (attempt {attempt + 1}/3)")
                 time.sleep(wait)
                 continue
             if quota and attempt < 1:
-                status.write("ប្រព័ន្ធរវល់បន្តិច កំពុងសាកម្តងទៀត...")
-                dbg(status, f"[{model}] quota, wait 20s")
+                status.write("Gemini API មានកម្រិតកូតា។ កម្មវិធីកំពុងសាក API Key ផ្សេង/រង់ចាំ...")
+                dbg(status, f"[{model}] quota after key rotation; wait 20s")
                 time.sleep(20)
                 continue
             raise
