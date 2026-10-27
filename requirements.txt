@@ -7,3 +7,6 @@ numpy
 Pillow
 requests
 yt-dlp
+requests
+yt-dlp
+faster-whisper
