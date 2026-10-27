@@ -4542,7 +4542,7 @@ def run_worker(job, item, settings, fonts_data):
                     if engine == "free":
                         segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"], keep_failed=False)
                     else:
-                        segments, used_model, failed_chunks = transcribe_gemini_text(settings["gemini_key"], settings["groq_key"], master_path, duration, settings["language"], rep, speech=speech)
+                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], master_path, duration, settings["language"], rep, speech=speech, gemini_key=settings["gemini_key"])
                     used_engine = engine
                     break
                 except UserError:
