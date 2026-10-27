@@ -635,10 +635,15 @@ try:
 except Exception:
     ST_VER = (1, 0)
 
+# ម៉ូដែល Gemini ចម្បង៖ ជ្រើស Flash Lite ដែលមាន RPM ខ្ពស់ជាងតាម Rate Limit របស់អ្នក។
+# បើមិនមានទេ ទើបជ្រើសជម្រើសបម្រុងមួយ; មិនបង្វិលសាកម៉ូដែលច្រើនៗទេ។
 PREFERRED_MODELS = [
-    "gemini-3.8-flash", "gemini-3-flash", "gemini-flash-latest",
-    "gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-lite-latest",
+    "gemini-3.5-flash-lite",
     "gemini-2.5-flash-lite",
+    "gemini-3.1-flash-lite",
+    "gemini-3-flash",
+    "gemini-2.5-flash",
+    "gemini-3.8-flash",
 ]
 
 GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
@@ -1379,13 +1384,12 @@ def _get_available_models_uncached(client):
     rest = [m for m in found if m not in ordered]
     rest.sort(key=lambda m: ("lite" in m.lower(), "flash" not in m.lower()))
     ordered += rest
+    # យកម៉ូដែលដែលបានជ្រើសមួយគត់។ វាបញ្ឈប់ loop ដែលប្ដូរ Gemini ទៅម៉ូដែលផ្សេងៗ
+    # ពេលមានកំហុស; កម្មវិធីនឹងបង្ហាញកំហុសជំនួសការបង្វិលម៉ូដែលរហូត។
     ordered = (
-        [m for m in ordered if "lite" not in m.lower()]
-        + [m for m in ordered if "lite" in m.lower()]
+        [m for m in ordered if "lite" in m.lower()]
+        + [m for m in ordered if "lite" not in m.lower()]
     )
-    # FIX: return only one model. The previous code returned up to 6 models,
-    # which caused fallback loops to keep switching between Gemini models.
-    # Choose the first supported preferred model and keep it fixed for the run.
     return ordered[:1]
 
 
@@ -1742,10 +1746,13 @@ def is_empty_json(raw):
 
 def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_language, concise, status, original_only=False):
     prompt = build_prompt_original(clip_duration, source_language) if original_only else build_prompt(clip_duration, source_language, concise)
-    # Use one predictable request configuration. Avoid trying several configs
-    # for each Gemini model, which can multiply waiting time.
     configs = [
         types.GenerateContentConfig(temperature=0, response_mime_type="application/json"),
+        types.GenerateContentConfig(
+            temperature=0, response_mime_type="application/json",
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
+        ),
+        None,
     ]
     errors = []
     weak = None
