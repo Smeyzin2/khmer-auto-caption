@@ -1383,7 +1383,10 @@ def _get_available_models_uncached(client):
         [m for m in ordered if "lite" not in m.lower()]
         + [m for m in ordered if "lite" in m.lower()]
     )
-    return ordered[:6]
+    # FIX: return only one model. The previous code returned up to 6 models,
+    # which caused fallback loops to keep switching between Gemini models.
+    # Choose the first supported preferred model and keep it fixed for the run.
+    return ordered[:1]
 
 
 def parse_segments(raw, duration):
@@ -1739,13 +1742,10 @@ def is_empty_json(raw):
 
 def transcribe_clip(client, models, audio_bytes, mime, clip_duration, source_language, concise, status, original_only=False):
     prompt = build_prompt_original(clip_duration, source_language) if original_only else build_prompt(clip_duration, source_language, concise)
+    # Use one predictable request configuration. Avoid trying several configs
+    # for each Gemini model, which can multiply waiting time.
     configs = [
         types.GenerateContentConfig(temperature=0, response_mime_type="application/json"),
-        types.GenerateContentConfig(
-            temperature=0, response_mime_type="application/json",
-            thinking_config=types.ThinkingConfig(thinking_budget=0),
-        ),
-        None,
     ]
     errors = []
     weak = None
