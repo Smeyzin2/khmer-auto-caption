@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unicodedata
 from pathlib import Path
+from urllib.parse import urlparse
 
 import streamlit as st
 import imageio_ffmpeg
@@ -15,7 +16,10 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Battambang:wght@400;700&display=swap');
 html, body, [class*="css"] { font-family: 'Battambang', sans-serif; }
-.block-container {max-width: 900px; padding-top: 1.5rem;}
+.block-container {max-width: 900px; padding-top: 1.3rem;}
+div.stButton > button[kind="primary"] {border-radius: 12px; min-height: 3rem; font-weight: 700;}
+div[data-testid="stFileUploader"] {border-radius: 14px;}
+.link-panel {padding: 14px 16px; border: 1px solid rgba(120,120,120,.25); border-radius: 14px;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -76,11 +80,83 @@ def srt_content(segments, max_chars):
 def escape_ass(s):
     return fix_text(s).replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
-uploaded = st.file_uploader(
-    "ជ្រើសរើសវីដេអូ",
-    type=["mp4", "mov", "mkv", "avi", "webm"],
-    help="កំណត់ទំហំ upload របស់ Streamlit Cloud អាចមានកម្រិត។"
+st.subheader("📥 បញ្ចូលវីដេអូ")
+source_mode = st.radio(
+    "ជ្រើសរើសវិធីបញ្ចូល",
+    ["📱 Upload ពីទូរស័ព្ទ", "🔗 ស្វែងរក/ទាញយកតាមលីង"],
+    horizontal=False,
+    label_visibility="collapsed"
 )
+
+uploaded = None
+video_url = ""
+if source_mode == "📱 Upload ពីទូរស័ព្ទ":
+    uploaded = st.file_uploader(
+        "ជ្រើសរើសវីដេអូពីទូរស័ព្ទ",
+        type=["mp4", "mov", "mkv", "avi", "webm", "mpeg", "mpg"],
+        help="ទំហំ upload អាស្រ័យលើកម្រិត Streamlit Cloud។"
+    )
+else:
+    st.markdown('<div class="link-panel">🔗 ដាក់លីងវីដេអូខាងក្រោម</div>', unsafe_allow_html=True)
+    video_url = st.text_input(
+        "លីងវីដេអូ",
+        placeholder="https://www.youtube.com/watch?v=... ឬលីងវីដេអូផ្ទាល់",
+        help="គាំទ្រលីងសាធារណៈដែល yt-dlp អាចទាញយកបាន ឬ direct link ទៅឯកសារវីដេអូ។"
+    ).strip()
+    st.caption("ប្រើតែលីងសាធារណៈដែលអ្នកមានសិទ្ធិទាញយក។ លីងឯកជន ឬគេហទំព័រដែលទាមទារចូលគណនីអាចមិនដំណើរការ។")
+
+def download_video_from_url(url, destination, status_box):
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError("សូមបញ្ចូលលីងពេញដែលចាប់ផ្ដើមដោយ https:// ឬ http://")
+    # Direct video file URLs can be fetched without yt-dlp.
+    suffix = Path(parsed.path).suffix.lower()
+    if suffix in {".mp4", ".mov", ".mkv", ".avi", ".webm", ".mpeg", ".mpg"}:
+        import requests
+        with requests.get(url, stream=True, timeout=(15, 60), allow_redirects=True) as response:
+            response.raise_for_status()
+            total = int(response.headers.get("content-length", "0") or 0)
+            limit = 1024 * 1024 * 1024
+            if total and total > limit:
+                raise ValueError("វីដេអូលើស 1GB។ សូមប្រើវីដេអូតូចជាងនេះ។")
+            downloaded = 0
+            with open(destination, "wb") as file:
+                for chunk in response.iter_content(chunk_size=1024 * 1024):
+                    if chunk:
+                        downloaded += len(chunk)
+                        if downloaded > limit:
+                            raise ValueError("វីដេអូលើស 1GB។ សូមប្រើវីដេអូតូចជាងនេះ។")
+                        file.write(chunk)
+        return
+    try:
+        import yt_dlp
+    except ImportError as exc:
+        raise RuntimeError("មិនទាន់ដំឡើង yt-dlp ទេ។ សូមបន្ថែម yt-dlp ក្នុង requirements.txt។") from exc
+    status_box.info("កំពុងទាញយកវីដេអូពីលីង…")
+    opts = {
+        "format": "best[ext=mp4]/best",
+        "outtmpl": str(destination.with_suffix(".%(ext)s")),
+        "noplaylist": True,
+        "quiet": True,
+        "no_warnings": True,
+        "max_filesize": 1024 * 1024 * 1024,
+        "merge_output_format": "mp4",
+        "retries": 2,
+        "socket_timeout": 30,
+    }
+    with yt_dlp.YoutubeDL(opts) as ydl:
+        ydl.download([url])
+    # yt-dlp may choose a container extension depending on source.
+    candidates = [destination.with_suffix(ext) for ext in (".mp4", ".mkv", ".webm", ".mov", ".avi")]
+    found = next((candidate for candidate in candidates if candidate.exists() and candidate.stat().st_size), None)
+    if found is None:
+        # Some yt-dlp versions honor the full requested template differently.
+        matches = list(destination.parent.glob(destination.stem + ".*"))
+        found = next((candidate for candidate in matches if candidate.is_file() and candidate.stat().st_size), None)
+    if found is None:
+        raise RuntimeError("ទាញយកមិនបាន។ សូមពិនិត្យលីង ឬសាកល្បងលីងវីដេអូផ្ទាល់។")
+    if found != destination:
+        found.replace(destination)
 
 with st.expander("ការកំណត់ Subtitle", expanded=True):
     language = st.selectbox(
@@ -99,19 +175,60 @@ with st.expander("ការកំណត់ Subtitle", expanded=True):
     font_color = st.selectbox("ពណ៌អក្សរ", ["ស", "លឿង", "បៃតង", "ខៀវ"], index=0)
     max_chars = st.slider("ចំនួនតួអក្សរអតិបរមាក្នុងមួយបន្ទាត់", 20, 44, 32)
 
+with st.expander("🎙️ មុខងារ AI Dubbing", expanded=False):
+    make_dubbing = st.checkbox("បកប្រែសំឡេងចិនទៅខ្មែរ និងបង្កើតសំឡេងខ្មែរ", value=False)
+    keep_original_audio = st.checkbox("លាយសំឡេងដើមស្រាលៗក្រោមសំឡេងខ្មែរ", value=False)
+    st.caption("Dubbing ប្រើម៉ូដែលបកប្រែ និង TTS ដែលដំណើរការលើម៉ាស៊ីនមេ។ វាអាចយឺត ឬអស់ RAM លើ Streamlit Cloud។ សម្រាប់លទ្ធផលល្អ សាកល្បងវីដេអូខ្លីជាមុន។")
+
+def _nllb_translate(text, tokenizer, model, **kwargs):
+    import torch
+    encoded = tokenizer(text, return_tensors="pt", truncation=True, max_length=512)
+    with torch.no_grad():
+        generated = model.generate(
+            **encoded,
+            forced_bos_token_id=tokenizer.convert_tokens_to_ids("khm_Khmr"),
+            max_length=kwargs.get("max_length", 256),
+            num_beams=kwargs.get("num_beams", 2),
+        )
+    return [{"translation_text": tokenizer.batch_decode(generated, skip_special_tokens=True)[0]}]
+
+def translate_chinese_to_khmer(text, translator):
+    text = fix_text(text)
+    if not text:
+        return ""
+    result = translator(text, max_length=256, num_beams=2)
+    return fix_text(result[0]["translation_text"])
+
+def synthesize_khmer(text, tokenizer, tts_model, output_wav):
+    import torch
+    import numpy as np
+    import soundfile as sf
+    text = fix_text(text)
+    if not text:
+        return False
+    inputs = tokenizer(text, return_tensors="pt")
+    with torch.no_grad():
+        audio = tts_model(**inputs).waveform.squeeze().cpu().numpy()
+    audio = np.asarray(audio, dtype=np.float32)
+    sf.write(str(output_wav), audio, int(tts_model.config.sampling_rate))
+    return True
+
 color_map = {"ស": "&H00FFFFFF", "លឿង": "&H0000FFFF", "បៃតង": "&H0000FF00", "ខៀវ": "&H00FF0000"}
 
-if uploaded and st.button("🚀 បង្កើត Subtitle", type="primary", use_container_width=True):
+has_input = uploaded is not None if source_mode == "📱 Upload ពីទូរស័ព្ទ" else bool(video_url)
+if has_input and st.button("🚀 បង្កើត Subtitle", type="primary", use_container_width=True):
     temp_dir = Path(tempfile.mkdtemp(prefix="khmer_caption_"))
-    input_path = temp_dir / ("input_" + re.sub(r"[^A-Za-z0-9._-]", "_", uploaded.name))
+    input_path = temp_dir / "input_video.mp4"
     audio_path = temp_dir / "audio.wav"
     srt_path = temp_dir / "captions.srt"
     ass_path = temp_dir / "captions.ass"
     output_path = temp_dir / "captioned_video.mp4"
     try:
-        with open(input_path, "wb") as f:
-            f.write(uploaded.getbuffer())
-
+        if source_mode == "📱 Upload ពីទូរស័ព្ទ":
+            with open(input_path, "wb") as f:
+                f.write(uploaded.getbuffer())
+        else:
+            download_video_from_url(video_url, input_path, st)
         progress = st.progress(0, text="កំពុងដកសំឡេងចេញពីវីដេអូ…")
         run_ffmpeg(["-y", "-i", str(input_path), "-vn", "-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le", str(audio_path)])
         progress.progress(10, text="កំពុងរៀបចំ Whisper Local…")
@@ -136,6 +253,61 @@ if uploaded and st.button("🚀 បង្កើត Subtitle", type="primary", us
                 progress.progress(min(70, 10 + len(segments)), text=f"កំពុងស្ដាប់សំឡេង… បាន {len(segments)} ផ្នែក")
         if not segments:
             raise RuntimeError("Whisper មិនបានរកឃើញសំឡេងនិយាយទេ។ សូមពិនិត្យវីដេអូម្ដងទៀត។")
+
+        translated_segments = []
+        dubbed_audio_path = temp_dir / "khmer_dubbing.wav"
+        if make_dubbing:
+            if language not in ("ចិន", "ស្វ័យប្រវត្តិ"):
+                st.warning("Dubbing នេះរំពឹងថាសំឡេងដើមជាភាសាចិន។ សូមជ្រើសរើស 'ចិន' ឬ 'ស្វ័យប្រវត្តិ'។")
+            progress.progress(72, text="កំពុងផ្ទុកម៉ូដែលបកប្រែ និងសំឡេងខ្មែរ…")
+            import torch
+            import numpy as np
+            import soundfile as sf
+            from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, VitsModel
+
+            translation_name = "facebook/nllb-200-distilled-600M"
+            translator_tokenizer = AutoTokenizer.from_pretrained(translation_name, src_lang="zho_Hans")
+            translator_model = AutoModelForSeq2SeqLM.from_pretrained(translation_name)
+            translator_model.eval()
+            tokenizer = AutoTokenizer.from_pretrained("khmerttsopensource/khmer-tts")
+            tts_model = VitsModel.from_pretrained("khmerttsopensource/khmer-tts")
+            tts_model.eval()
+
+            tts_dir = temp_dir / "tts_parts"
+            tts_dir.mkdir()
+            audio_parts = []
+            translated_segments = []
+            total = max(1, len(segments))
+            for idx, seg in enumerate(segments):
+                translated = translate_chinese_to_khmer(
+                    seg.text,
+                    lambda text, **kwargs: _nllb_translate(text, translator_tokenizer, translator_model, **kwargs)
+                )
+                translated_segments.append((seg.start, seg.end, translated))
+                part = tts_dir / f"part_{idx:05d}.wav"
+                if translated:
+                    synthesize_khmer(translated, tokenizer, tts_model, part)
+                    audio_parts.append((float(seg.start), float(seg.end), part))
+                if idx % 3 == 0:
+                    progress.progress(72 + int(18 * (idx + 1) / total), text=f"កំពុងបង្កើតសំឡេងខ្មែរ… {idx + 1}/{total}")
+
+            # Place each spoken Khmer clip at the matching original segment start time.
+            # Mix clips on a silent timeline; optional original audio is mixed back later.
+            if not audio_parts:
+                raise RuntimeError("មិនអាចបង្កើតសំឡេងខ្មែរបានទេ។")
+            max_end = max(float(seg.end) for seg in segments)
+            inputs_ffmpeg = []
+            filters = []
+            for i, (start_sec, end_sec, part) in enumerate(audio_parts):
+                inputs_ffmpeg.extend(["-i", str(part)])
+                delay_ms = max(0, int(start_sec * 1000))
+                filters.append(f"[{i}:a]adelay={delay_ms}|{delay_ms},aresample=16000[a{i}]")
+            mix_inputs = "".join(f"[a{i}]" for i in range(len(audio_parts)))
+            filters.append(f"{mix_inputs}amix=inputs={len(audio_parts)}:duration=longest:normalize=0,atrim=0:{max_end + 0.5}[dub]")
+            run_ffmpeg(["-y", *inputs_ffmpeg, "-filter_complex", ";".join(filters), "-map", "[dub]", "-ac", "1", "-ar", "16000", str(dubbed_audio_path)])
+            del translator_model, translator_tokenizer, tts_model, tokenizer
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
         srt_path.write_text(srt_content(segments, max_chars), encoding="utf-8")
         progress.progress(75, text="កំពុងបង្កើត Subtitle style…")
@@ -162,24 +334,33 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
             s, cs = divmod(cs, 100)
             return f"{h}:{m:02}:{s:02}.{cs:02}"
         events = []
-        for seg in segments:
-            txt = escape_ass(wrap_caption(seg.text, max_chars))
+        caption_items = translated_segments if make_dubbing and translated_segments else [(seg.start, seg.end, seg.text) for seg in segments]
+        for start_time, end_time, caption_text in caption_items:
+            txt = escape_ass(wrap_caption(caption_text, max_chars))
             if txt:
-                events.append(f"Dialogue: 0,{ass_time(seg.start)},{ass_time(seg.end)},Default,,0,0,0,,{txt}")
+                events.append(f"Dialogue: 0,{ass_time(start_time)},{ass_time(end_time)},Default,,0,0,0,,{txt}")
         ass_path.write_text(header + "\n".join(events) + "\n", encoding="utf-8")
 
         progress.progress(82, text="កំពុងដាក់ Subtitle លើវីដេអូ…")
         # FFmpeg subtitle filter uses an absolute path; escape Windows/drive punctuation defensively.
         ass_filter_path = str(ass_path.resolve()).replace("\\", "/").replace(":", r"\:").replace("'", r"\'")
         run_ffmpeg(["-y", "-i", str(input_path), "-vf", f"ass='{ass_filter_path}'", "-c:v", "libx264", "-preset", "ultrafast", "-crf", "24", "-c:a", "copy", "-movflags", "+faststart", str(output_path)])
+        final_output = output_path
+        if make_dubbing and dubbed_audio_path.exists():
+            dubbed_output = temp_dir / "khmer_dubbed_video.mp4"
+            if keep_original_audio:
+                run_ffmpeg(["-y", "-i", str(output_path), "-i", str(dubbed_audio_path), "-filter_complex", "[0:a]volume=0.18[orig];[1:a]volume=1.0[dub];[orig][dub]amix=inputs=2:duration=first:normalize=0[mix]", "-map", "0:v:0", "-map", "[mix]", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest", str(dubbed_output)])
+            else:
+                run_ffmpeg(["-y", "-i", str(output_path), "-i", str(dubbed_audio_path), "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-c:a", "aac", "-b:a", "160k", "-shortest", str(dubbed_output)])
+            final_output = dubbed_output
         progress.progress(100, text="រួចរាល់!")
 
         st.success(f"បានបង្កើត Subtitle ចំនួន {len(segments)} ផ្នែក។ ភាសាដែល Whisper ស្គាល់៖ {info.language}")
-        st.video(str(output_path))
+        st.video(str(final_output))
         st.download_button(
-            "⬇️ ទាញយកវីដេអូមាន Subtitle",
-            data=output_path.read_bytes(),
-            file_name="khmer_auto_caption.mp4",
+            "⬇️ ទាញយកវីដេអូមាន Subtitle" + (" និងសំឡេងខ្មែរ" if make_dubbing else ""),
+            data=final_output.read_bytes(),
+            file_name="khmer_dubbed_video.mp4" if make_dubbing else "khmer_auto_caption.mp4",
             mime="video/mp4",
             use_container_width=True
         )
