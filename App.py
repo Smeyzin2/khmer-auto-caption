@@ -3096,6 +3096,43 @@ def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0):
     return out
 
 
+@st.cache_resource(show_spinner=False)
+def load_local_whisper():
+    """Whisper ក្នុងម៉ាស៊ីន៖ មិនប្រើ Groq API សម្រាប់សម្គាល់សំឡេងទេ។"""
+    from faster_whisper import WhisperModel
+    model_name = os.environ.get("WHISPER_MODEL_SIZE", "small")
+    # int8 កាត់បន្ថយ RAM សម្រាប់ CPU; ម៉ូដែលនឹងទាញយកពេលប្រើលើកដំបូង។
+    return WhisperModel(model_name, device="cpu", compute_type="int8")
+
+
+def local_whisper_transcribe(audio_path, source_language, status):
+    model = load_local_whisper()
+    lang = WHISPER_LANG.get(source_language) if source_language else None
+    status.write("កំពុងសម្គាល់សំឡេងដោយ Whisper ក្នុងម៉ាស៊ីន...")
+    segments, info = model.transcribe(
+        audio_path,
+        language=lang,
+        task="transcribe",
+        beam_size=3,
+        vad_filter=True,
+        word_timestamps=False,
+        condition_on_previous_text=True,
+    )
+    rows = []
+    for seg in segments:
+        text = str(seg.text or "").strip()
+        if text:
+            rows.append({
+                "start": float(seg.start),
+                "end": float(seg.end),
+                "text": text,
+                "no_speech_prob": float(getattr(seg, "no_speech_prob", 0) or 0),
+                "avg_logprob": float(getattr(seg, "avg_logprob", 0) or 0),
+                "compression_ratio": float(getattr(seg, "compression_ratio", 0) or 0),
+            })
+    return {"segments": rows, "language": getattr(info, "language", "") or ""}, f"Local Whisper {os.environ.get('WHISPER_MODEL_SIZE', 'small')}"
+
+
 def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False, gemini_key=None, keep_failed=False):
     code = WHISPER_LANG.get(source_language) if source_language else None
     if source_language == "Khmer" and khmer_ok:
@@ -3105,7 +3142,8 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             gs = []
         if gs:
             return gs, "Google Speech (km-KH)", 0
-    data, model = groq_transcribe(groq_key, audio_path, code, status)
+    # Local Whisper removes the Groq API quota dependency for speech recognition.
+    data, model = local_whisper_transcribe(audio_path, source_language, status)
     detected = str(data.get("language", "") or "").lower()
     keep = []
     for sg in data.get("segments") or []:
@@ -3140,11 +3178,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
                 segs = []
             if segs:
                 return segs, "Google Speech (km-KH)", 0
-        if not segs and duration > 12:
-            try:
-                segs = transcribe_khmer_chunks(groq_key, audio_path, duration, speech or [], status)
-            except Exception:
-                segs = []
+        # មិនហៅ Groq សម្រាប់ transcription ទៀតទេ; ប្រើលទ្ធផល Local Whisper ខាងលើ។
         if not segs:
             segs = [(s, e, fix_khmer(t)) for s, e, t in keep if has_khmer(t)]
             segs = retime_by_speech(segs, speech, duration)
@@ -3177,7 +3211,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
     if not segs:
         raise UserError("រកមិនឃើញអត្ថបទខ្មែរក្នុងសំឡេងនេះទេ។")
     segs.sort(key=lambda x: x[0])
-    return segs, f"Groq {model} + Translate", failed
+    return segs, f"{model} + Translate", failed
 
 
 def transcribe_gemini_text(gemini_key, groq_key, audio_path, duration, source_language, status, speech=None, keep_failed=False):
