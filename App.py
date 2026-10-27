@@ -80,6 +80,11 @@ def srt_content(segments, max_chars):
 def escape_ass(s):
     return fix_text(s).replace("\\", r"\\").replace("{", r"\{").replace("}", r"\}").replace("\n", r"\N")
 
+if "link_preview" not in st.session_state:
+    st.session_state.link_preview = None
+if "link_preview_url" not in st.session_state:
+    st.session_state.link_preview_url = ""
+
 st.subheader("📥 បញ្ចូលវីដេអូ")
 source_mode = st.radio(
     "ជ្រើសរើសវិធីបញ្ចូល",
@@ -97,13 +102,60 @@ if source_mode == "📱 Upload ពីទូរស័ព្ទ":
         help="ទំហំ upload អាស្រ័យលើកម្រិត Streamlit Cloud។"
     )
 else:
-    st.markdown('<div class="link-panel">🔗 ដាក់លីងវីដេអូខាងក្រោម</div>', unsafe_allow_html=True)
+    st.markdown('<div class="link-panel">🔗 ស្វែងរកវីដេអូដោយលីង</div>', unsafe_allow_html=True)
     video_url = st.text_input(
-        "លីងវីដេអូ",
-        placeholder="https://www.youtube.com/watch?v=... ឬលីងវីដេអូផ្ទាល់",
-        help="គាំទ្រលីងសាធារណៈដែល yt-dlp អាចទាញយកបាន ឬ direct link ទៅឯកសារវីដេអូ។"
+        "បញ្ចូល ឬបិទភ្ជាប់លីងវីដេអូ",
+        placeholder="https://www.tiktok.com/... ឬ https://www.youtube.com/watch?v=...",
+        help="បញ្ចូលលីងសាធារណៈដែលអ្នកមានសិទ្ធិមើល និងទាញយក។"
     ).strip()
-    st.caption("ប្រើតែលីងសាធារណៈដែលអ្នកមានសិទ្ធិទាញយក។ លីងឯកជន ឬគេហទំព័រដែលទាមទារចូលគណនីអាចមិនដំណើរការ។")
+    if st.button("🔎 ស្វែងរកវីដេអូ", use_container_width=True):
+        try:
+            parsed = urlparse(video_url)
+            if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                st.error("សូមបញ្ចូលលីងត្រឹមត្រូវដែលចាប់ផ្ដើមដោយ https:// ឬ http://")
+                st.session_state.link_preview = None
+                st.session_state.link_preview_url = ""
+            else:
+                import yt_dlp
+                with st.spinner("កំពុងស្វែងរកព័ត៌មានវីដេអូ…"):
+                    opts = {"quiet": True, "no_warnings": True, "skip_download": True,
+                            "noplaylist": True, "socket_timeout": 25,
+                            "extractor_retries": 1, "retries": 1}
+                    with yt_dlp.YoutubeDL(opts) as ydl:
+                        info = ydl.extract_info(video_url, download=False)
+                st.session_state.link_preview = {
+                    "title": info.get("title") or "វីដេអូគ្មានចំណងជើង",
+                    "duration": info.get("duration"),
+                    "thumbnail": info.get("thumbnail"),
+                    "webpage_url": info.get("webpage_url") or video_url,
+                    "description": (info.get("description") or "")[:400],
+                    "extractor": info.get("extractor_key") or info.get("extractor") or "Video",
+                }
+                st.session_state.link_preview_url = video_url
+        except Exception as e:
+            st.session_state.link_preview = None
+            st.session_state.link_preview_url = ""
+            st.error("រកមិនឃើញវីដេអូពីលីងនេះទេ។ សូមពិនិត្យលីង ឬសាកល្បងលីងសាធារណៈផ្សេងទៀត។")
+            st.caption(str(e)[:500])
+
+    preview = st.session_state.get("link_preview")
+    if preview and st.session_state.get("link_preview_url") == video_url:
+        st.markdown("---")
+        st.subheader("🎬 វីដេអូដែលបានរកឃើញ")
+        if preview.get("thumbnail"):
+            st.image(preview["thumbnail"], use_container_width=True)
+        st.markdown(f"**{preview['title']}**")
+        if preview.get("duration"):
+            duration = int(preview["duration"])
+            st.caption(f"រយៈពេល៖ {duration // 60} នាទី {duration % 60} វិនាទី · ប្រភព៖ {preview['extractor']}")
+        if preview.get("description"):
+            with st.expander("ព័ត៌មានវីដេអូ"):
+                st.write(preview["description"])
+        st.video(preview["webpage_url"])
+        st.success("បើវីដេអូត្រឹមត្រូវ អ្នកអាចចុច «បង្កើត Subtitle» ដើម្បីបន្ត។")
+    else:
+        st.caption("បញ្ចូលលីង រួចចុច «ស្វែងរកវីដេអូ» សិន។ កម្មវិធីនឹងបង្ហាញព័ត៌មាន និងវីដេអូឱ្យមើលមុន។")
+
 
 def download_video_from_url(url, destination, status_box):
     parsed = urlparse(url)
@@ -178,7 +230,7 @@ with st.expander("ការកំណត់ Subtitle", expanded=True):
 with st.expander("🎙️ មុខងារ AI Dubbing", expanded=False):
     make_dubbing = st.checkbox("បកប្រែសំឡេងចិនទៅខ្មែរ និងបង្កើតសំឡេងខ្មែរ", value=False)
     keep_original_audio = st.checkbox("លាយសំឡេងដើមស្រាលៗក្រោមសំឡេងខ្មែរ", value=False)
-    st.caption("Dubbing ប្រើម៉ូដែលបកប្រែ និង TTS ដែលដំណើរការលើម៉ាស៊ីនមេ។ វាអាចយឺត ឬអស់ RAM លើ Streamlit Cloud។ សម្រាប់លទ្ធផលល្អ សាកល្បងវីដេអូខ្លីជាមុន។")
+    st.caption("កែឱ្យលឿនឡើងដោយបញ្ចូលឃ្លាខ្លីៗជាក្រុម មុនបកប្រែ និងបង្កើតសំឡេង។ Streamlit Cloud អាចនៅតែយឺតពេលប្រើ CPU/RAM ច្រើន។ សូមសាកល្បងវីដេអូខ្លីជាមុន។")
 
 def _nllb_translate(text, tokenizer, model, **kwargs):
     import torch
@@ -215,7 +267,10 @@ def synthesize_khmer(text, tokenizer, tts_model, output_wav):
 
 color_map = {"ស": "&H00FFFFFF", "លឿង": "&H0000FFFF", "បៃតង": "&H0000FF00", "ខៀវ": "&H00FF0000"}
 
-has_input = uploaded is not None if source_mode == "📱 Upload ពីទូរស័ព្ទ" else bool(video_url)
+has_input = uploaded is not None if source_mode == "📱 Upload ពីទូរស័ព្ទ" else (
+    bool(video_url) and bool(st.session_state.get("link_preview"))
+    and st.session_state.get("link_preview_url") == video_url
+)
 if has_input and st.button("🚀 បង្កើត Subtitle", type="primary", use_container_width=True):
     temp_dir = Path(tempfile.mkdtemp(prefix="khmer_caption_"))
     input_path = temp_dir / "input_video.mp4"
@@ -278,18 +333,48 @@ if has_input and st.button("🚀 បង្កើត Subtitle", type="primary", u
             audio_parts = []
             translated_segments = []
             total = max(1, len(segments))
-            for idx, seg in enumerate(segments):
+            # Merge short Whisper segments into larger speech chunks. This reduces
+            # the number of translation and TTS model calls, which is much faster on CPU.
+            chunks = []
+            current = []
+            chunk_start = None
+            chunk_end = None
+            chunk_chars = 0
+            for seg in segments:
+                seg_text = fix_text(seg.text)
+                if not seg_text:
+                    continue
+                if current and (
+                    float(seg.end) - float(chunk_start) >= 7.0
+                    or chunk_chars + len(seg_text) > 220
+                ):
+                    chunks.append((chunk_start, chunk_end, current))
+                    current, chunk_chars = [], 0
+                    chunk_start = None
+                if not current:
+                    chunk_start = float(seg.start)
+                current.append(seg)
+                chunk_end = float(seg.end)
+                chunk_chars += len(seg_text)
+            if current:
+                chunks.append((chunk_start, chunk_end, current))
+
+            total_chunks = max(1, len(chunks))
+            for idx, (start_sec, end_sec, chunk_segments) in enumerate(chunks):
+                original_text = " ".join(fix_text(seg.text) for seg in chunk_segments)
                 translated = translate_chinese_to_khmer(
-                    seg.text,
+                    original_text,
                     lambda text, **kwargs: _nllb_translate(text, translator_tokenizer, translator_model, **kwargs)
                 )
-                translated_segments.append((seg.start, seg.end, translated))
+                translated_segments.append((start_sec, end_sec, translated))
                 part = tts_dir / f"part_{idx:05d}.wav"
                 if translated:
                     synthesize_khmer(translated, tokenizer, tts_model, part)
-                    audio_parts.append((float(seg.start), float(seg.end), part))
-                if idx % 3 == 0:
-                    progress.progress(72 + int(18 * (idx + 1) / total), text=f"កំពុងបង្កើតសំឡេងខ្មែរ… {idx + 1}/{total}")
+                    audio_parts.append((float(start_sec), float(end_sec), part))
+                progress.progress(
+                    72 + int(18 * (idx + 1) / total_chunks),
+                    text=f"កំពុងបង្កើតសំឡេងខ្មែរ… {idx + 1}/{total_chunks} ផ្នែក"
+                )
 
             # Place each spoken Khmer clip at the matching original segment start time.
             # Mix clips on a silent timeline; optional original audio is mixed back later.
