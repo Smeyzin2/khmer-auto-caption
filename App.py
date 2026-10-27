@@ -637,14 +637,9 @@ except Exception:
 
 # ម៉ូដែល Gemini ចម្បង៖ ជ្រើស Flash Lite ដែលមាន RPM ខ្ពស់ជាងតាម Rate Limit របស់អ្នក។
 # បើមិនមានទេ ទើបជ្រើសជម្រើសបម្រុងមួយ; មិនបង្វិលសាកម៉ូដែលច្រើនៗទេ។
-PREFERRED_MODELS = [
-    "gemini-3.5-flash-lite",
-    "gemini-2.5-flash-lite",
-    "gemini-3.1-flash-lite",
-    "gemini-3-flash",
-    "gemini-2.5-flash",
-    "gemini-3.8-flash",
-]
+# ប្រើតែ Gemini 3.8 Flash ប៉ុណ្ណោះ — មិនប្ដូរទៅម៉ូដែល Gemini ផ្សេងទេ។
+GEMINI_ONLY_MODEL = "gemini-3.8-flash"
+PREFERRED_MODELS = [GEMINI_ONLY_MODEL]
 
 GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
 
@@ -1365,32 +1360,10 @@ def get_available_models(client):
 
 
 def _get_available_models_uncached(client):
-    found = []
-    try:
-        for m in client.models.list():
-            name = (getattr(m, "name", "") or "").replace("models/", "")
-            actions = getattr(m, "supported_actions", None) or []
-            low = name.lower()
-            if not name or "generateContent" not in actions:
-                continue
-            if "flash" not in low and "pro" not in low:
-                continue
-            if any(x in low for x in ("tts", "live", "embedding", "image", "imagen", "veo", "robotics")):
-                continue
-            found.append(name)
-    except Exception:
-        pass
-    ordered = [m for m in PREFERRED_MODELS if m in found]
-    rest = [m for m in found if m not in ordered]
-    rest.sort(key=lambda m: ("lite" in m.lower(), "flash" not in m.lower()))
-    ordered += rest
-    # យកម៉ូដែលដែលបានជ្រើសមួយគត់។ វាបញ្ឈប់ loop ដែលប្ដូរ Gemini ទៅម៉ូដែលផ្សេងៗ
-    # ពេលមានកំហុស; កម្មវិធីនឹងបង្ហាញកំហុសជំនួសការបង្វិលម៉ូដែលរហូត។
-    ordered = (
-        [m for m in ordered if "lite" in m.lower()]
-        + [m for m in ordered if "lite" not in m.lower()]
-    )
-    return ordered[:1]
+    """បង្ខំឱ្យផ្នែក Gemini ប្រើតែ Gemini 3.8 Flash។"""
+    # មិនស្វែងរក/ជ្រើសម៉ូដែលបម្រុងទេ។ ប្រសិនបើ API Key មិនអាចប្រើម៉ូដែលនេះ
+    # កម្មវិធីនឹងបង្ហាញកំហុសជាក់លាក់ ជំនួសការប្ដូរទៅម៉ូដែលផ្សេង។
+    return [GEMINI_ONLY_MODEL]
 
 
 def parse_segments(raw, duration):
