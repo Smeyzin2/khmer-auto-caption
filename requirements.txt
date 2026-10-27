@@ -10,4 +10,8 @@ yt-dlp
 requests
 yt-dlp
 faster-whisper
-
+torch
+transformers
+sentencepiece
+safetensors
+soundfile
