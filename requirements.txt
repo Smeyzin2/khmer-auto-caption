@@ -10,3 +10,4 @@ yt-dlp
 requests
 yt-dlp
 faster-whisper
+
