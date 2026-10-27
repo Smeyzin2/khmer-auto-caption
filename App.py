@@ -5419,8 +5419,6 @@ GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
 
-if not GEMINI_KEY and not GROQ_KEY and not OAI_KEY and not st.session_state.get("user_oai_key") and not st.session_state.get("user_groq_key") and not st.session_state.get("user_gemini_key"):
-    st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ CodeCraft, Groq ឬ Gemini API Key នៅផ្ទាំង «🌐 បកប្រែ» ឬក្នុង Streamlit Secrets។")
 
 # API Manager ត្រូវបានដកចេញតាមការស្នើសុំ។
 
