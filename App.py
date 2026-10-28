@@ -1959,7 +1959,6 @@ def groq_chat_models(api_key):
     if found:
         ordered = [m for m in GROQ_CHAT_PREFERRED if m in found]
         ordered += [m for m in found if m not in ordered]
-        ordered = [m for m in ordered if 'qwen' not in m.lower()] + [m for m in ordered if 'qwen' in m.lower()]
     else:
         ordered = list(GROQ_CHAT_PREFERRED)
     _groq_chat_cache["models"] = ordered
@@ -2011,7 +2010,7 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
     )
     models = groq_chat_models(api_key)
     _strong = [m for m in models if not any(x in m.lower() for x in ("8b", "instant", "scout", "20b"))]
-    models = model_order(_strong, "groq") + model_order([m for m in models if m not in _strong], "groq")
+    models = model_order(_strong or models, "groq")
     if rotate and len(models) > 1:
         _shift = (int(rotate) if not isinstance(rotate, bool) else 1) % len(models)
         models = models[_shift:] + models[:_shift]   # ឱ្យម៉ូដែលផ្សេងពីអ្នកបកដំបូង មកពិនិត្យ
@@ -2020,7 +2019,6 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
         body = json.dumps({
             "model": model, "temperature": 0.05,
             "response_format": {"type": "json_object"},
-            **({"reasoning_effort": "low"} if "gpt-oss" in model.lower() else {}),
             "messages": [
                 {"role": "system", "content": system or TRANS_SYSTEM},
                 {"role": "user", "content": numbered},
@@ -2745,17 +2743,14 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     allidx = list(range(n))
     only_groq = not (gemini_key or oai_enabled())
     _quota_ok = time.time() - _GROQ_LIMIT["t"] > 900   # មិនជួប 429 ក្នុង ១៥ នាទីចុងក្រោយ
-    if allidx and (not only_groq or (groq_key and _quota_ok)) and all(o and has_khmer(str(o)) for o in outs):
+    if allidx and (groq_key or gemini_key or oai_enabled()) and (not only_groq or _quota_ok) and all(o and has_khmer(str(o)) for o in outs):
         try:
             cand_a = list(outs)
             cand_b = refine_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a,
                                   gemini_key, groq_key, progress=progress, shift=1)
             cand_b = [b or a for a, b in zip(cand_a, cand_b)]
-            if only_groq:
-                outs = cand_b   # Groq តែមួយ: កែសម្រួល ១ ជុំ (សន្សំកូតា)
-            else:
-                outs = judge_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a, cand_b,
-                                   gemini_key, groq_key, progress=progress, shift=2)
+            outs = judge_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a, cand_b,
+                               gemini_key, groq_key, progress=progress, shift=2)
         except Exception as e:
             errors.append(f"refine/judge: {e}"[:200])
     # តម្រឹមប្រវែងឃ្លាខ្មែរឱ្យសមនឹងពេលមាត់តួអង្គនិយាយ (lip-sync)
