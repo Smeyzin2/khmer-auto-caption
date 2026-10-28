@@ -2055,13 +2055,18 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
 
 
 # =====================================================================
-#  CodeCraft API (OpenAI-compatible) — ម៉ាស៊ីនបម្រុងបន្ថែម
-#  ដាក់ក្នុង Secrets: CODECRAFT_API_KEY, CODECRAFT_BASE_URL, CODECRAFT_MODEL
-#  ប្រើតែពេល Groq/Gemini បរាជ័យ (អស់កូតា) ប៉ុណ្ណោះ
+#  xKiro API (OpenAI-compatible) — បន្ថែមដោយរក្សាមុខងារចាស់ទាំងអស់
+#  Secrets អាចប្រើ XKIRO_API_KEY, XKIRO_BASE_URL, XKIRO_MODEL
+#  ក៏នៅតែគាំទ្រ CODECRAFT_* ចាស់សម្រាប់ backward compatibility
 # =====================================================================
-OAI_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
-OAI_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
-OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
+OAI_KEY = (get_secret("XKIRO_API_KEY", "").strip()
+           or get_secret("CODECRAFT_API_KEY", "").strip())
+OAI_BASE = (get_secret("XKIRO_BASE_URL", "").strip().rstrip("/")
+            or get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/"))
+OAI_MODEL = (get_secret("XKIRO_MODEL", "").strip()
+             or get_secret("CODECRAFT_MODEL", "").strip())
+XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
+XKIRO_DEFAULT_MODEL = "qwen/qwen3.5-plus:free"
 
 
 OAI_USER_CFG = {}   # Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ដាក់ពេលចុច «ចាប់ផ្តើម» ក្នុងរបៀបនេះ មិនលាយជាមួយអ្នកដទៃ)
@@ -2134,7 +2139,7 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
 
 
 def oai_test(key, base, model):
-    """សាកល្បង CodeCraft: ត្រឡប់ (True/False, សារ)។"""
+    """សាកល្បង xKiro/CodeCraft OpenAI-compatible API: ត្រឡប់ (True/False, សារ)។"""
     key, base, model = str(key).strip(), str(base).strip().rstrip("/"), str(model).strip()
     if not (key and base and model):
         return False, "សូមបំពេញ Key, Base URL និងឈ្មោះម៉ូដែលឱ្យគ្រប់។"
@@ -5350,7 +5355,7 @@ def ls_sync():
 
 def has_user_keys():
     ss = st.session_state
-    return bool(ss.get("user_groq_keys") or ss.get("user_gemini_keys"))
+    return bool(ss.get("user_groq_keys") or ss.get("user_gemini_keys") or ss.get("user_oai_key"))
 
 
 def effective_groq_key():
@@ -5370,14 +5375,14 @@ def mask_key(k):
 
 
 def user_key_box():
-    """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួនបានច្រើន (Groq / Gemini / CodeCraft) ហើយសេវទុកក្នុង Browser។"""
+    """ប្រអប់ API Key ផ្ទាល់ខ្លួន៖ xKiro សម្រាប់ការងារអត្ថបទ និង Groq/Gemini សម្រាប់មុខងារចាស់។"""
     if st.session_state.pop("_clear_key_input", False):
         st.session_state.pop("user_key_input", None)
         st.session_state.pop("user_keys_bulk", None)
     with st.container(border=True):
         st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន (ដាក់បានច្រើន Key)**")
-        st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq (console.groq.com/keys) ឬ Gemini (aistudio.google.com/apikey) Key របស់អ្នក។ "
-                   "ដាក់បានច្រើន Key — Key មួយអស់កូតា កម្មវិធីប្តូរទៅ Key បន្ទាប់ដោយស្វ័យប្រវត្តិ។")
+        st.caption("xKiro ប្រើសម្រាប់បកប្រែ/ដំណើរការអត្ថបទ។ Groq ឬ Gemini នៅតែត្រូវការសម្រាប់ការស្តាប់សំឡេង (Speech-to-Text) ក្នុងមុខងារចាស់។ "
+                   "Groq/Gemini អាចដាក់បានច្រើន Key ហើយប្តូរទៅ Key បន្ទាប់ដោយស្វ័យប្រវត្តិ។")
         _msg = st.session_state.pop("_key_msg", None)
         if _msg:
             (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
@@ -5397,22 +5402,31 @@ def user_key_box():
                     st.rerun()
         if st.session_state.get("user_oai_key"):
             any_saved = True
-            st.success(f"✅ កំពុងប្រើ CodeCraft Key របស់អ្នក (…{st.session_state['user_oai_key'][-4:]})")
-            if st.button("🗑 ឈប់ប្រើ CodeCraft Key", key="remove_user_oai_key"):
+            _saved_label = "xKiro" if "api.xkiro.com" in str(st.session_state.get("user_oai_base", "")).lower() else "OpenAI-compatible"
+            st.success(f"✅ កំពុងប្រើ {_saved_label} Key របស់អ្នក (…{st.session_state['user_oai_key'][-4:]})")
+            if st.button("🗑 ឈប់ប្រើ xKiro/CodeCraft Key", key="remove_user_oai_key"):
                 for _k in ("user_oai_key", "user_oai_base", "user_oai_model"):
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["Groq", "Gemini", "CodeCraft"], horizontal=True, key="user_key_provider")
+        provider = st.radio("ប្រភេទ Key", ["xKiro", "Groq", "Gemini", "CodeCraft"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
-        if provider == "CodeCraft":
-            typed = st.text_input("CodeCraft API Key", type="password", placeholder="cc_...", key="user_key_input")
-            oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://codecraftapi.com/v1"),
-                                        key="user_oai_base_input")
-            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"),
-                                         key="user_oai_model_input")
-            st.caption("CodeCraft ធ្វើការងារអត្ថបទទាំងអស់មុន (បកប្រែ កែសម្រួល ជ្រើសល្អបំផុត អារម្មណ៍ បង្រួមឃ្លា) ដើម្បីសន្សំ Groq/Gemini បើវាបរាជ័យ ទើបប្តូរទៅ Groq/Gemini។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq ឬ Gemini។")
+        if provider in ("xKiro", "CodeCraft"):
+            if provider == "xKiro":
+                typed = st.text_input("xKiro API Key", type="password", placeholder="sk-xt-...", key="user_key_input")
+                _old_base = str(st.session_state.get("user_oai_base") or "")
+                _old_model = str(st.session_state.get("user_oai_model") or "")
+                _default_base = _old_base if "api.xkiro.com" in _old_base.lower() else XKIRO_DEFAULT_BASE
+                _default_model = _old_model if "api.xkiro.com" in _old_base.lower() else XKIRO_DEFAULT_MODEL
+                oai_base_in = st.text_input("Base URL", value=_default_base, key="user_oai_base_input")
+                oai_model_in = st.text_input("Model ID (ត្រូវមាន vendor/model)", value=_default_model, key="user_oai_model_input")
+                st.caption("xKiro នឹងប្រើសម្រាប់ការបកប្រែ និងការងារអត្ថបទ។ កុំបញ្ចូលប្រាក់មុនសាកល្បងម៉ូដែល Free។ មុខងារស្តាប់សំឡេងចាស់នៅតែត្រូវការ Groq ឬ Gemini។")
+            else:
+                typed = st.text_input("CodeCraft API Key", type="password", placeholder="cc_...", key="user_key_input")
+                oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://codecraftapi.com/v1"), key="user_oai_base_input")
+                oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"), key="user_oai_model_input")
+                st.caption("រក្សាជម្រើស CodeCraft ចាស់ ដើម្បីកុំឱ្យប៉ះពាល់ដល់អ្នកប្រើដែលមានការកំណត់ពីមុន។")
         else:
             typed = st.text_area(f"{provider} API Key (មួយបន្ទាត់ ១ Key ឬបំបែកដោយក្បៀស — ដាក់បានច្រើន)",
                                  placeholder=("gsk_...\ngsk_...\ngsk_..." if provider == "Groq" else "AIza...\nAIza...\nAIza..."),
@@ -5422,7 +5436,7 @@ def user_key_box():
         st.caption("🔒 Key រក្សាទុកក្នុង Browser របស់អ្នកតែប៉ុណ្ណោះ (localStorage) មិនត្រូវបានរក្សាទុកលើម៉ាស៊ីនមេទេ។ "
                    "កុំប្រើលើកុំព្យូទ័រ/ទូរស័ព្ទសាធារណៈ។ បើលុបទិន្នន័យ Browser Key នឹងបាត់។")
         if st.button("✅ ពិនិត្យ និងបន្ថែម Key", key="user_key_save", use_container_width=True):
-            if provider == "CodeCraft":
+            if provider in ("xKiro", "CodeCraft"):
                 ok, msg = oai_test(typed, oai_base_in, oai_model_in)
                 if ok:
                     st.session_state["user_oai_key"] = typed.strip()
@@ -5430,7 +5444,8 @@ def user_key_box():
                     st.session_state["user_oai_model"] = oai_model_in.strip()
                     _ls_persist()
                     st.session_state["_clear_key_input"] = True
-                    st.session_state["_key_msg"] = ("ok", "បានបន្ថែម CodeCraft Key ✅")
+                    _label = "xKiro" if provider == "xKiro" else "CodeCraft"
+                    st.session_state["_key_msg"] = ("ok", f"បានភ្ជាប់ {_label} API Key ហើយ ✅")
                     st.rerun()
                 else:
                     st.error(msg)
@@ -5481,6 +5496,8 @@ ls_sync()
 
 if not GEMINI_KEY and not GROQ_KEY and not has_user_keys():
     st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
+elif not GEMINI_KEY and not GROQ_KEY and st.session_state.get("user_oai_key"):
+    st.info("បានកំណត់ xKiro សម្រាប់ការងារអត្ថបទហើយ។ ដើម្បីស្តាប់សំឡេងក្នុងវីដេអូ និងចម្លងជាអត្ថបទ មុខងារចាស់នៅតែត្រូវការ Groq ឬ Gemini API Key។")
 
 ENGINE_FREE = "⭐ គម្រោង VIP"
 ENGINE_GEMINI = "✨ Gemini (ទាញអត្ថបទ)"
