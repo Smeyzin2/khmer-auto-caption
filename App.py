@@ -2058,6 +2058,20 @@ OAI_BASE = (get_secret("XKIRO_BASE_URL", "https://api.xkiro.com/v1").strip().rst
 OAI_MODEL = get_secret("XKIRO_MODEL", "qwen/qwen3.5-flash").strip()
 
 
+# =====================================================================
+#  CodeCraft API (OpenAI-compatible) — ម៉ាស៊ីនបកប្រែទី២ (ប្រើជាបម្រុង បន្ទាប់ពី xKiro)
+#  Secrets: CODECRAFT_API_KEY, CODECRAFT_BASE_URL (ចាំបាច់), CODECRAFT_MODEL (ចាំបាច់)
+#  ឧ. CODECRAFT_BASE_URL = "https://.../v1"  (ត្រូវបញ្ចប់ត្រឹម /v1 មុន /chat/completions)
+# =====================================================================
+CC_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
+CC_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
+CC_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
+
+
+def cc_enabled():
+    return bool(CC_KEY and CC_BASE.startswith("http") and CC_MODEL)
+
+
 OAI_USER_CFG = {}   # Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ដាក់ពេលចុច «ចាប់ផ្តើម» ក្នុងរបៀបនេះ មិនលាយជាមួយអ្នកដទៃ)
 
 
@@ -2066,9 +2080,14 @@ def oai_cfg():
     return ((c.get("key") or OAI_KEY), (c.get("base") or OAI_BASE).rstrip("/"), (c.get("model") or OAI_MODEL))
 
 
-def oai_enabled():
+def xk_enabled():
     k, b, m = oai_cfg()
     return bool(k and b and m)
+
+
+def oai_enabled():
+    """មានម៉ាស៊ីន AI បកប្រែយ៉ាងហោចណាស់មួយ (xKiro ឬ CodeCraft)។"""
+    return xk_enabled() or cc_enabled()
 
 
 def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
@@ -2187,20 +2206,31 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
 
 
 _OAI_COOL = {"until": 0.0}
+_CC_COOL = {"until": 0.0}
 
 
-def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """សាក xKiro មុនគេ។ បើ xKiro នៅតែមានបញ្ហា អនុញ្ញាតឱ្យផ្លូវហៅបន្តប្រើ Groq ជាបម្រុង។"""
-    if not oai_enabled() or _OAI_COOL.get("until", 0) > time.time():
-        return None
+def _try_provider(cool, cfg, texts, budgets, system, to_english, raw):
     for attempt in range(2):
         try:
-            return oai_translate_chunk(texts, budgets, system, to_english, raw=raw)
+            return oai_translate_chunk(texts, budgets, system, to_english, cfg=cfg, raw=raw)
         except Exception as e:
             if "ចំនួនបន្ទាត់" in str(e):
                 continue   # ម៉ូដែលឆ្លើយខុសចំនួនបន្ទាត់ → សាកម្តងទៀត មិនសម្រាកទាំងមូល
-            _OAI_COOL["until"] = time.time() + 60   # server/បណ្តាញមានបញ្ហា → សម្រាក ១ នាទី
+            cool["until"] = time.time() + 60   # server/បណ្តាញមានបញ្ហា → សម្រាក ១ នាទី
             return None
+    return None
+
+
+def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
+    """សាក xKiro មុន បន្ទាប់មក CodeCraft។ បើទាំងពីរបរាជ័យ ទើបផ្លូវហៅបន្តប្រើ Groq ជាបម្រុង។"""
+    if xk_enabled() and _OAI_COOL.get("until", 0) <= time.time():
+        r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw)
+        if r is not None:
+            return r
+    if cc_enabled() and _CC_COOL.get("until", 0) <= time.time():
+        r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw)
+        if r is not None:
+            return r
     return None
 
 
@@ -5452,7 +5482,7 @@ GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 render_header()
 ls_sync()
 
-if not GROQ_KEY and not has_user_keys():
+if not GROQ_KEY and not oai_enabled() and not has_user_keys():
     st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
 
 ENGINE_FREE = "⭐ Groq សម្គាល់សំឡេង + xKiro បកប្រែ"
