@@ -2072,15 +2072,25 @@ def oai_enabled():
 
 
 def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
+    """Call xKiro's OpenAI-compatible endpoint with bounded retries for transient upstream errors.
+
+    xKiro can return HTTP 502/503/504 when a model provider is temporarily unavailable.
+    Retry those responses with backoff before allowing the existing Groq fallback to run.
+    """
     _key, _base, _model = cfg if cfg else oai_cfg()
+    if not (_key and _base and _model):
+        raise RuntimeError("xKiro: សូមកំណត់ XKIRO_API_KEY, XKIRO_BASE_URL និង XKIRO_MODEL ក្នុង Secrets។")
+
     numbered = "\n".join(
-        f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
+        f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and i < len(budgets) and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
     )
-    last = "xKiro: មិនទាន់កំណត់"
+    last = "xKiro: មិនទាន់ទទួលបានចម្លើយ"
+    # Try JSON mode first, then normal mode if the selected model rejects response_format.
     for use_json_mode in (True, False):
         payload = {
-            "model": _model, "temperature": 0.1,
+            "model": _model,
+            "temperature": 0.1,
             "messages": [
                 {"role": "system", "content": system or TRANS_SYSTEM},
                 {"role": "user", "content": numbered},
@@ -2089,42 +2099,60 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
         if use_json_mode:
             payload["response_format"] = {"type": "json_object"}
         body = json.dumps(payload).encode("utf-8")
-        for attempt in range(2):
+
+        # Retry transient provider/server errors; do not loop forever or retry bad credentials.
+        for attempt in range(4):
             request = urllib.request.Request(
-                _base + "/chat/completions", data=body, method="POST",
-                headers={"Authorization": f"Bearer {_key}", "Content-Type": "application/json",
-                         "User-Agent": "Mozilla/5.0"})
+                _base + "/chat/completions",
+                data=body,
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {_key}",
+                    "Content-Type": "application/json",
+                    "User-Agent": "Mozilla/5.0",
+                },
+            )
             try:
                 with urllib.request.urlopen(request, timeout=90) as r:
                     data = json.loads(r.read().decode("utf-8"))
-                content = data["choices"][0]["message"]["content"] or ""
+                content = data["choices"][0]["message"].get("content") or ""
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
                 content = re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=re.M).strip()
-                m = re.search(r"\{.*\}", content, flags=re.S)
-                items = json.loads(m.group(0) if m else content).get("translations") or []
+                match = re.search(r"\{.*\}", content, flags=re.S)
+                parsed = json.loads(match.group(0) if match else content)
+                items = parsed.get("translations") or []
                 if len(items) == len(texts):
                     if raw:
                         return list(items)
                     return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
-                last = "xKiro: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                last = "xKiro: ម៉ូដែលឆ្លើយតបមិនគ្រប់ចំនួនបន្ទាត់"
                 break
             except urllib.error.HTTPError as e:
                 detail = ""
                 try:
-                    detail = e.read().decode("utf-8", "ignore")[:160]
+                    detail = e.read().decode("utf-8", "ignore")[:220]
                 except Exception:
                     pass
-                last = f"xKiro HTTP {e.code}: {detail}"
-                if e.code == 429 and attempt == 0:
-                    time.sleep(5)
-                    continue
+                last = f"xKiro HTTP {e.code}: {detail}".strip()
+
+                # 400/422 can mean this model does not support JSON response_format.
                 if e.code in (400, 422) and use_json_mode:
-                    break   # ម៉ូដែលមិនគាំទ្រ json_object → សាកដោយគ្មាន
+                    break
+                # Rate limits and temporary upstream failures may recover after a short wait.
+                if e.code in (429, 500, 502, 503, 504) and attempt < 3:
+                    time.sleep((2, 4, 7)[attempt])
+                    continue
+                raise RuntimeError(last)
+            except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
+                last = f"xKiro បណ្តាញ/Timeout: {e}"
+                if attempt < 3:
+                    time.sleep((2, 4, 7)[attempt])
+                    continue
                 raise RuntimeError(last)
             except Exception as e:
                 last = f"xKiro: {e}"
                 break
-    raise RuntimeError(last[:300])
+    raise RuntimeError(last[:400])
 
 
 def oai_test(key, base, model):
@@ -2162,8 +2190,7 @@ _OAI_COOL = {"until": 0.0}
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """សាក xKiro មុនគេ។ ត្រឡប់បញ្ជី ឬ None (មិនបានកំណត់ / កំពុងសម្រាក / បរាជ័យ)
-    ដើម្បីឱ្យអ្នកហៅប្តូរទៅ Groq/Gemini ជាបម្រុង។"""
+    """សាក xKiro មុនគេ។ បើ xKiro នៅតែមានបញ្ហា អនុញ្ញាតឱ្យផ្លូវហៅបន្តប្រើ Groq ជាបម្រុង។"""
     if not oai_enabled() or _OAI_COOL.get("until", 0) > time.time():
         return None
     for attempt in range(2):
