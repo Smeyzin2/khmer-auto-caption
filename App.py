@@ -24,8 +24,6 @@ import streamlit as st
 import streamlit.components.v1 as components
 import imageio_ffmpeg
 import edge_tts
-from google import genai
-from google.genai import types
 
 st.set_page_config(
     page_title="បកប្រែវីដេអូមកនិយាយខ្មែរ",
@@ -2190,61 +2188,23 @@ EN_SYSTEM = (
 
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
-    # xKiro មុន (ដើម្បីសន្សំ token Gemini)
-    _rows = []
-    for _i, _t in enumerate(texts):
-        _r = str(_t)
-        if english and english[_i] and "[unclear]" not in str(english[_i]):
-            _r += f" (English meaning: {english[_i]})"
-        _rows.append(_r)
-    _sys = (TRANS_SYSTEM
-            + " Some lines include an English meaning in parentheses to help you understand; translate the true meaning "
-            "into Khmer and never output the English text or any tags."
-            + ((" STORY SO FAR (context only, do NOT translate): " + story) if story else ""))
-    _res = oai_try(_rows, budgets, _sys)
-    if _res is not None:
-        return _res
-    if not split_keys(api_key):
-        raise RuntimeError("xKiro មិនបានលទ្ធផល ហើយគ្មាន Gemini Key")
-    client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
-    _av = get_available_models(client)
-    _av = [m for m in _av if "pro" in m.lower()] + [m for m in _av if "pro" not in m.lower()]
-    models = model_order(_av[:5], "gemini")
+    """Compatibility wrapper: translate with xKiro only; never call Gemini."""
     rows = []
-    for i, t in enumerate(texts):
-        row = f"{i + 1}. {t}"
-        if english and english[i]:
-            row += f"\n   (English meaning: {english[i]})"
-        if budgets and budgets[i]:
-            row += f"\n   [max {budgets[i]} chars]"
+    for i, text in enumerate(texts):
+        row = str(text)
+        if english and i < len(english) and english[i] and "[unclear]" not in str(english[i]):
+            row += f" (English meaning: {english[i]})"
         rows.append(row)
-    prompt = (
+    system = (
         TRANS_SYSTEM
-        + " Some items include an English meaning to help you understand; translate the true meaning into Khmer. "
-        "Never output the English text or the tags.\n\n"
-        + (("STORY SO FAR (for context only, do NOT translate this):\n" + story + "\n\n") if story else "")
-        + "LINES TO TRANSLATE:\n" + "\n".join(rows)
+        + " Some lines include an English meaning in parentheses to help you understand; "
+          "translate the true meaning into Khmer and never output English text or tags."
+        + ((" STORY SO FAR (context only, do NOT translate): " + story) if story else "")
     )
-    last = None
-    for model in models:
-        try:
-            resp = client.models.generate_content(
-                model=model, contents=prompt,
-                config=types.GenerateContentConfig(temperature=0.05, response_mime_type="application/json"),
-            )
-            raw = (getattr(resp, "text", "") or "").strip()
-            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw)
-            data = json.loads(raw)
-            items = data.get("translations") if isinstance(data, dict) else data
-            if isinstance(items, list) and len(items) == len(texts):
-                model_good("gemini", model)
-                return [clean_translation(x) for x in items]
-            last = f"{model}: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
-            model_cool(model, last)
-        except Exception as e:
-            last = f"{model}: {e}"
-            model_cool(model, last)
-    raise RuntimeError(str(last)[:300])
+    result = oai_try(rows, budgets, system)
+    if result is not None:
+        return result
+    raise RuntimeError("xKiro បកប្រែមិនបាន។ សូមពិនិត្យ XKIRO_API_KEY, XKIRO_BASE_URL និង XKIRO_MODEL ក្នុង Secrets ហើយពិនិត្យ quota/model access។")
 
 
 REFINE_SYSTEM = (
@@ -2605,17 +2565,17 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         with ThreadPoolExecutor(max_workers=5) as pool:
             for idxs, res, err in pool.map(_km, batches):
                 if err:
-                    errors.append(f"gemini: {err}"[:200])
+                    errors.append(f"xKiro: {err}"[:200])
                 else:
                     for i, r in zip(idxs, res):
                         outs[i] = r
                 done += len(idxs)
                 _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
-    gem_ok = {i for i, o in enumerate(outs) if o is not None}
-    # ជំហាន ២ខ: Groq បកឃ្លាដែល Gemini មិនបាន (បម្រុង)
+    xkiro_ok = {i for i, o in enumerate(outs) if o is not None}
+    # ជំហាន ២ខ: Groq ជាបម្រុង ប្រសិនបើ xKiro មិនបាន
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
-        _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) 0/{len(missing)} ឃ្លា...")
+        _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq ជាបម្រុង) 0/{len(missing)} ឃ្លា...")
         groups = [missing[k:k + 8] for k in range(0, len(missing), 8)]
         def _gkm(idxs):
             try:
@@ -2649,7 +2609,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                         if r and has_khmer(str(r)):
                             outs[i] = r
                 done_ += len(idxs)
-                _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq) {done_}/{len(missing)} ឃ្លា...")
+                _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq ជាបម្រុង) {done_}/{len(missing)} ឃ្លា...")
     # បម្រុង: Google Translate លើអត្ថបទអង់គ្លេស (ត្រឹមត្រូវជាងបកពីចិន/ថៃ/វៀតណាមផ្ទាល់)
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing:
@@ -5186,7 +5146,7 @@ def scroll_to_downloads():
 
 
 # API keys: អាចដាក់ច្រើនក្នុង Secret តែមួយដោយបំបែកជាក្បៀស ឬបន្ទាត់ថ្មី។
-# ក៏អាចប្រើ GEMINI_API_KEY_1, GEMINI_API_KEY_2 ... និង GROQ_API_KEY_1, GROQ_API_KEY_2 ... បាន។
+# អាចប្រើ GROQ_API_KEY_1, GROQ_API_KEY_2 ... បាន។
 def collect_api_keys(prefix):
     values = [get_secret(prefix, ""), get_secret(prefix + "S", "")]
     # អាន numbered secrets រហូតដល់ 20 keys; ឈប់ពេលជួប 5 លេខទទេជាប់គ្នា។
