@@ -2072,6 +2072,30 @@ def cc_enabled():
     return bool(CC_KEY and CC_BASE.startswith("http") and CC_MODEL)
 
 
+# Additional OpenAI-compatible providers. Add only providers for which the owner
+# has supplied a key. Free-tier availability/quota is controlled by each provider.
+# Cloudflare BASE_URL must include the account id, e.g. .../accounts/<ID>/ai/v1.
+_EXTRA_PROVIDER_SPECS = [
+    ("OpenRouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL", "https://openrouter.ai/api/v1", "qwen/qwen3-4b:free"),
+    ("Cloudflare Workers AI", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_BASE_URL", "CLOUDFLARE_MODEL", "", "@cf/meta/llama-3.1-8b-instruct"),
+    ("Mistral AI", "MISTRAL_API_KEY", "MISTRAL_BASE_URL", "MISTRAL_MODEL", "https://api.mistral.ai/v1", "mistral-small-latest"),
+    ("NVIDIA NIM", "NVIDIA_API_KEY", "NVIDIA_BASE_URL", "NVIDIA_MODEL", "https://integrate.api.nvidia.com/v1", "meta/llama-3.3-70b-instruct"),
+    ("Cohere Compatibility", "COHERE_API_KEY", "COHERE_BASE_URL", "COHERE_MODEL", "https://api.cohere.com/compatibility/v1", "command-r7b-12-2024"),
+    ("SambaNova", "SAMBANOVA_API_KEY", "SAMBANOVA_BASE_URL", "SAMBANOVA_MODEL", "https://api.sambanova.ai/v1", "Meta-Llama-3.3-70B-Instruct"),
+]
+_EXTRA_PROVIDERS = []
+for _pname, _pkey, _pbase, _pmodel, _default_base, _default_model in _EXTRA_PROVIDER_SPECS:
+    _pk = str(get_secret(_pkey, "") or "").strip()
+    _pb = str(get_secret(_pbase, _default_base) or _default_base).strip().rstrip("/")
+    _pm = str(get_secret(_pmodel, _default_model) or _default_model).strip()
+    if _pk and _pb.startswith("https://") and _pm:
+        _EXTRA_PROVIDERS.append((_pname, (_pk, _pb, _pm)))
+
+
+def extra_provider_enabled():
+    return bool(_EXTRA_PROVIDERS)
+
+
 OAI_USER_CFG = {}   # Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ដាក់ពេលចុច «ចាប់ផ្តើម» ក្នុងរបៀបនេះ មិនលាយជាមួយអ្នកដទៃ)
 
 
@@ -2086,8 +2110,8 @@ def xk_enabled():
 
 
 def oai_enabled():
-    """មានម៉ាស៊ីន AI បកប្រែយ៉ាងហោចណាស់មួយ (xKiro ឬ CodeCraft)។"""
-    return xk_enabled() or cc_enabled()
+    """មានម៉ាស៊ីនបកប្រែ OpenAI-compatible យ៉ាងហោចណាស់មួយ។"""
+    return xk_enabled() or cc_enabled() or extra_provider_enabled()
 
 
 def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
@@ -2207,6 +2231,7 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
 
 _OAI_COOL = {"until": 0.0}
 _CC_COOL = {"until": 0.0}
+_EXTRA_COOL = {}
 
 
 _LAST_AI_ERR = {}
@@ -2226,13 +2251,20 @@ def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKir
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """សាក xKiro មុន បន្ទាប់មក CodeCraft។ បើទាំងពីរបរាជ័យ ទើបផ្លូវហៅបន្តប្រើ Groq ជាបម្រុង។"""
+    """Fallback order: xKiro -> CodeCraft -> configured providers; caller may then use Groq/Google fallback."""
     if xk_enabled() and _OAI_COOL.get("until", 0) <= time.time():
-        r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw)
+        r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="xKiro")
         if r is not None:
             return r
     if cc_enabled() and _CC_COOL.get("until", 0) <= time.time():
         r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw, name="CodeCraft")
+        if r is not None:
+            return r
+    for _name, _cfg in _EXTRA_PROVIDERS:
+        _cool = _EXTRA_COOL.setdefault(_name, {"until": 0.0})
+        if _cool.get("until", 0) > time.time():
+            continue
+        r = _try_provider(_cool, _cfg, texts, budgets, system, to_english, raw, name=_name)
         if r is not None:
             return r
     return None
@@ -5492,7 +5524,7 @@ ls_sync()
 if not GROQ_KEY and not oai_enabled() and not has_user_keys():
     st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
 
-ENGINE_FREE = "⭐ Groq សម្គាល់សំឡេង + xKiro បកប្រែ"
+ENGINE_FREE = "⭐ Groq សម្គាល់សំឡេង + AI API បកប្រែ (Fallback ស្វ័យប្រវត្តិ)"
 
 current_job = st.session_state.get("job")
 busy = bool(current_job and current_job.running())
@@ -5843,9 +5875,22 @@ with tab_trans:
     with st.container(border=True):
         engine_options = [ENGINE_FREE]
         if not effective_groq_key():
-            st.warning("សូមដាក់ Groq API Key សម្រាប់សម្គាល់សំឡេង។ xKiro ប្រើសម្រាប់បកប្រែអត្ថបទ។")
+            st.warning("សូមដាក់ Groq API Key សម្រាប់សម្គាល់សំឡេង និងកំណត់ API បកប្រែយ៉ាងហោចណាស់មួយក្នុង Secrets ឬបញ្ចូល xKiro Key ផ្ទាល់ខ្លួន។")
         engine_label = st.selectbox("ម៉ាស៊ីនដំណើរការ", engine_options, index=0, disabled=True)
-        st.caption("xKiro ប្រើសម្រាប់ការបកប្រែ/កែអត្ថបទ; Groq ប្រើតែសម្រាប់សម្គាល់សំឡេងវីដេអូ។")
+        st.caption("Groq ប្រើសម្រាប់សម្គាល់សំឡេង។ ការបកប្រែសាកល្បង xKiro និង CodeCraft ជាមុន រួចបន្តទៅ Provider ផ្សេងៗដែលម្ចាស់កម្មវិធីបានកំណត់ក្នុង Secrets។")
+        with st.expander("🌐 API ដែលអាចភ្ជាប់តាម Secrets"):
+            st.markdown("""
+            - `XKIRO_API_KEY`, `XKIRO_BASE_URL`, `XKIRO_MODEL`
+            - `CODECRAFT_API_KEY`, `CODECRAFT_BASE_URL`, `CODECRAFT_MODEL`
+            - `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (Base URL លំនាំដើម `https://openrouter.ai/api/v1`)
+            - `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_BASE_URL`, `CLOUDFLARE_MODEL` (Base URL ត្រូវមាន Account ID)
+            - `MISTRAL_API_KEY`, `MISTRAL_MODEL`
+            - `NVIDIA_API_KEY`, `NVIDIA_MODEL`
+            - `COHERE_API_KEY`, `COHERE_MODEL`
+            - `SAMBANOVA_API_KEY`, `SAMBANOVA_MODEL`
+
+            Provider នឹងត្រូវបានរំលងដោយស្វ័យប្រវត្តិ ប្រសិនបើគ្មាន Key។ សូមកំណត់ឈ្មោះម៉ូដែលដែលមានសិទ្ធិប្រើក្នុងគណនីរបស់អ្នក។ កូតា Free អាចប្រែប្រួល ហើយមិនមែនគ្រប់ API ខាងលើសុទ្ធតែឥតគិតថ្លៃគ្រប់ពេលទេ។ API Key មិនត្រូវបង្ហាញដល់អ្នកប្រើធម្មតាទេ។
+            """)
         lc1, lc2 = st.columns(2)
         with lc1:
             language_label = st.selectbox("ភាសាដើម", list(LANGUAGES.keys()), index=0)
