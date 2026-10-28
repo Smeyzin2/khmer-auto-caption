@@ -2209,11 +2209,15 @@ _OAI_COOL = {"until": 0.0}
 _CC_COOL = {"until": 0.0}
 
 
-def _try_provider(cool, cfg, texts, budgets, system, to_english, raw):
+_LAST_AI_ERR = {}
+
+
+def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKiro"):
     for attempt in range(2):
         try:
             return oai_translate_chunk(texts, budgets, system, to_english, cfg=cfg, raw=raw)
         except Exception as e:
+            _LAST_AI_ERR[name] = str(e)[:260]   # ទុកមូលហេតុពិត ដើម្បីបង្ហាញអ្នកប្រើ
             if "ចំនួនបន្ទាត់" in str(e):
                 continue   # ម៉ូដែលឆ្លើយខុសចំនួនបន្ទាត់ → សាកម្តងទៀត មិនសម្រាកទាំងមូល
             cool["until"] = time.time() + 60   # server/បណ្តាញមានបញ្ហា → សម្រាក ១ នាទី
@@ -2228,7 +2232,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
         if r is not None:
             return r
     if cc_enabled() and _CC_COOL.get("until", 0) <= time.time():
-        r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw)
+        r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw, name="CodeCraft")
         if r is not None:
             return r
     return None
@@ -2261,7 +2265,10 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
     result = oai_try(rows, budgets, system)
     if result is not None:
         return result
-    raise RuntimeError("xKiro បកប្រែមិនបាន។ សូមពិនិត្យ XKIRO_API_KEY, XKIRO_BASE_URL និង XKIRO_MODEL ក្នុង Secrets ហើយពិនិត្យ quota/model access។")
+    _why = " | ".join(f"{k}: {v}" for k, v in _LAST_AI_ERR.items()) or "គ្មាន API Key ដែលបានកំណត់"
+    raise RuntimeError(
+        "ម៉ាស៊ីន AI (xKiro/CodeCraft) បកប្រែមិនបាន។ មូលហេតុពិត៖ " + _why +
+        " — សូមពិនិត្យ Key/Base URL/Model ក្នុង Secrets និង quota។")
 
 
 REFINE_SYSTEM = (
