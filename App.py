@@ -2173,7 +2173,7 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
                 },
             )
             try:
-                with urllib.request.urlopen(request, timeout=90) as r:
+                with urllib.request.urlopen(request, timeout=40) as r:
                     data = json.loads(r.read().decode("utf-8"))
                 content = data["choices"][0]["message"].get("content") or ""
                 content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
@@ -2199,16 +2199,13 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
                 if e.code in (400, 422) and use_json_mode:
                     break
                 # Rate limits and temporary upstream failures may recover after a short wait.
-                if e.code in (429, 500, 502, 503, 504) and attempt < 3:
-                    time.sleep((2, 4, 7)[attempt])
+                if e.code in (429, 500, 502, 503, 504) and attempt < 1:
+                    time.sleep(1.5)          # សាកម្តងទៀតតែ ១ ដង រួចឆាប់ប្តូរទៅម៉ាស៊ីនបន្ទាប់
                     continue
                 raise RuntimeError(last)
             except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
                 last = f"xKiro បណ្តាញ/Timeout: {e}"
-                if attempt < 3:
-                    time.sleep((2, 4, 7)[attempt])
-                    continue
-                raise RuntimeError(last)
+                raise RuntimeError(last)     # Timeout = ម៉ាស៊ីនយឺត → ប្តូរភ្លាម កុំរង់ចាំ
             except Exception as e:
                 last = f"xKiro: {e}"
                 break
@@ -2262,22 +2259,25 @@ def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKir
             _LAST_AI_ERR[name] = str(e)[:260]   # ទុកមូលហេតុពិត ដើម្បីបង្ហាញអ្នកប្រើ
             if "ចំនួនបន្ទាត់" in str(e):
                 continue   # ម៉ូដែលឆ្លើយខុសចំនួនបន្ទាត់ → សាកម្តងទៀត មិនសម្រាកទាំងមូល
-            cool["until"] = time.time() + 60   # server/បណ្តាញមានបញ្ហា → សម្រាក ១ នាទី
+            cool["until"] = time.time() + 180  # server/បណ្តាញមានបញ្ហា → រំលង ៣ នាទី (កុំឱ្យរង់ចាំម៉ាស៊ីនខូចរាល់ឃ្លា)
             return None
     return None
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """Fallback order: xKiro -> CodeCraft -> configured providers; caller may then use Groq/Google fallback."""
+    """xKiro -> CodeCraft -> OpenRouter... តាមលំដាប់ ប៉ុន្តែមានកំណត់ពេលសរុប ៥០ វិនាទី ក្នុងមួយបាច់ ទើបបន្តទៅ Groq/Google។"""
+    t_end = time.time() + 50
     if xk_enabled() and _OAI_COOL.get("until", 0) <= time.time():
         r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="xKiro")
         if r is not None:
             return r
-    if cc_enabled() and _CC_COOL.get("until", 0) <= time.time():
+    if cc_enabled() and _CC_COOL.get("until", 0) <= time.time() and time.time() < t_end:
         r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw, name="CodeCraft")
         if r is not None:
             return r
     for _name, _cfg in _EXTRA_PROVIDERS:
+        if time.time() >= t_end:
+            break
         _cool = _EXTRA_COOL.setdefault(_name, {"until": 0.0})
         if _cool.get("until", 0) > time.time():
             continue
@@ -2611,6 +2611,9 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
     return result
 
 
+FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
+
+
 def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None):
     n = len(texts)
     errors = []
@@ -2626,7 +2629,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 pass
 
     # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (ធ្វើស្របគ្នា ៣ បាច់ក្នុងពេលតែមួយ)
-    if groq_key or oai_enabled():
+    if (groq_key or oai_enabled()) and not FAST_TRANSLATE:
         def _en(idxs):
             rows_ = [str(texts[i]).strip() for i in idxs]
             try:
@@ -2649,7 +2652,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
     synopsis = ""
-    if n > 2:
+    if n > 2 and not FAST_TRANSLATE:
         if groq_key or oai_enabled():
             synopsis = make_synopsis(english, texts, None, groq_key)
         if not synopsis and gemini_key:
