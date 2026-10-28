@@ -2076,7 +2076,7 @@ def cc_enabled():
 # has supplied a key. Free-tier availability/quota is controlled by each provider.
 # Cloudflare BASE_URL must include the account id, e.g. .../accounts/<ID>/ai/v1.
 _EXTRA_PROVIDER_SPECS = [
-    ("OpenRouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL", "https://openrouter.ai/api/v1", "qwen/qwen3-4b:free"),
+    ("OpenRouter", "OPENROUTER_API_KEY", "OPENROUTER_BASE_URL", "OPENROUTER_MODEL", "https://openrouter.ai/api/v1", "openrouter/free"),
     ("Cloudflare Workers AI", "CLOUDFLARE_API_TOKEN", "CLOUDFLARE_BASE_URL", "CLOUDFLARE_MODEL", "", "@cf/meta/llama-3.1-8b-instruct"),
     ("Mistral AI", "MISTRAL_API_KEY", "MISTRAL_BASE_URL", "MISTRAL_MODEL", "https://api.mistral.ai/v1", "mistral-small-latest"),
     ("NVIDIA NIM", "NVIDIA_API_KEY", "NVIDIA_BASE_URL", "NVIDIA_MODEL", "https://integrate.api.nvidia.com/v1", "meta/llama-3.3-70b-instruct"),
@@ -2085,9 +2085,26 @@ _EXTRA_PROVIDER_SPECS = [
 ]
 _EXTRA_PROVIDERS = []
 for _pname, _pkey, _pbase, _pmodel, _default_base, _default_model in _EXTRA_PROVIDER_SPECS:
-    _pk = str(get_secret(_pkey, "") or "").strip()
     _pb = str(get_secret(_pbase, _default_base) or _default_base).strip().rstrip("/")
     _pm = str(get_secret(_pmodel, _default_model) or _default_model).strip()
+
+    # OpenRouter supports a list of keys. Try every configured key as its own
+    # provider entry, so one 429/invalid key does not stop the other keys.
+    if _pname == "OpenRouter":
+        _key_values = [
+            get_secret("OPENROUTER_API_KEY", ""),
+            get_secret("OPENROUTER_API_KEYS", ""),
+        ]
+        for _key_i in range(1, 21):
+            _key_values.append(get_secret(f"OPENROUTER_API_KEY_{_key_i}", ""))
+        _keys = split_keys(_key_values)
+        if _pb.startswith("https://") and _pm:
+            for _idx, _pk in enumerate(_keys, start=1):
+                if _pk:
+                    _EXTRA_PROVIDERS.append((f"OpenRouter #{_idx}", (_pk, _pb, _pm)))
+        continue
+
+    _pk = str(get_secret(_pkey, "") or "").strip()
     if _pk and _pb.startswith("https://") and _pm:
         _EXTRA_PROVIDERS.append((_pname, (_pk, _pb, _pm)))
 
@@ -5882,7 +5899,7 @@ with tab_trans:
             st.markdown("""
             - `XKIRO_API_KEY`, `XKIRO_BASE_URL`, `XKIRO_MODEL`
             - `CODECRAFT_API_KEY`, `CODECRAFT_BASE_URL`, `CODECRAFT_MODEL`
-            - `OPENROUTER_API_KEY`, `OPENROUTER_MODEL` (Base URL លំនាំដើម `https://openrouter.ai/api/v1`)
+            - `OPENROUTER_API_KEYS = ["key1", "key2", ...]` ឬ `OPENROUTER_API_KEY_1`, `OPENROUTER_API_KEY_2` និង `OPENROUTER_MODEL` (Base URL លំនាំដើម `https://openrouter.ai/api/v1`)
             - `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_BASE_URL`, `CLOUDFLARE_MODEL` (Base URL ត្រូវមាន Account ID)
             - `MISTRAL_API_KEY`, `MISTRAL_MODEL`
             - `NVIDIA_API_KEY`, `NVIDIA_MODEL`
