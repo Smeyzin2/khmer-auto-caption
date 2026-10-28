@@ -635,11 +635,8 @@ try:
 except Exception:
     ST_VER = (1, 0)
 
-PREFERRED_MODELS = [
-    "gemini-3.8-flash", "gemini-3-flash", "gemini-flash-latest",
-    "gemini-2.5-flash", "gemini-2.5-pro", "gemini-flash-lite-latest",
-    "gemini-2.5-flash-lite",
-]
+# Gemini models are no longer used. xKiro handles text translation; Groq handles STT.
+PREFERRED_MODELS = []
 
 GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
 
@@ -2055,18 +2052,12 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
 
 
 # =====================================================================
-#  xKiro API (OpenAI-compatible) — បន្ថែមដោយរក្សាមុខងារចាស់ទាំងអស់
-#  Secrets អាចប្រើ XKIRO_API_KEY, XKIRO_BASE_URL, XKIRO_MODEL
-#  ក៏នៅតែគាំទ្រ CODECRAFT_* ចាស់សម្រាប់ backward compatibility
+#  xKiro API (OpenAI-compatible) — សម្រាប់ការងារអត្ថបទ/បកប្រែ
+#  Secrets: XKIRO_API_KEY, XKIRO_BASE_URL (optional), XKIRO_MODEL
 # =====================================================================
-OAI_KEY = (get_secret("XKIRO_API_KEY", "").strip()
-           or get_secret("CODECRAFT_API_KEY", "").strip())
-OAI_BASE = (get_secret("XKIRO_BASE_URL", "").strip().rstrip("/")
-            or get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/"))
-OAI_MODEL = (get_secret("XKIRO_MODEL", "").strip()
-             or get_secret("CODECRAFT_MODEL", "").strip())
-XKIRO_DEFAULT_BASE = "https://api.xkiro.com/v1"
-XKIRO_DEFAULT_MODEL = "qwen/qwen3.5-plus:free"
+OAI_KEY = get_secret("XKIRO_API_KEY", "").strip()
+OAI_BASE = (get_secret("XKIRO_BASE_URL", "https://api.xkiro.com/v1").strip().rstrip("/") or "https://api.xkiro.com/v1")
+OAI_MODEL = get_secret("XKIRO_MODEL", "qwen/qwen3.5-flash").strip()
 
 
 OAI_USER_CFG = {}   # Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ដាក់ពេលចុច «ចាប់ផ្តើម» ក្នុងរបៀបនេះ មិនលាយជាមួយអ្នកដទៃ)
@@ -2088,7 +2079,7 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
     )
-    last = "CodeCraft: មិនទាន់កំណត់"
+    last = "xKiro: មិនទាន់កំណត់"
     for use_json_mode in (True, False):
         payload = {
             "model": _model, "temperature": 0.1,
@@ -2117,7 +2108,7 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
                     if raw:
                         return list(items)
                     return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
-                last = "CodeCraft: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
+                last = "xKiro: ចំនួនបន្ទាត់មិនត្រូវគ្នា"
                 break
             except urllib.error.HTTPError as e:
                 detail = ""
@@ -2125,7 +2116,7 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
                     detail = e.read().decode("utf-8", "ignore")[:160]
                 except Exception:
                     pass
-                last = f"CodeCraft HTTP {e.code}: {detail}"
+                last = f"xKiro HTTP {e.code}: {detail}"
                 if e.code == 429 and attempt == 0:
                     time.sleep(5)
                     continue
@@ -2133,13 +2124,13 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
                     break   # ម៉ូដែលមិនគាំទ្រ json_object → សាកដោយគ្មាន
                 raise RuntimeError(last)
             except Exception as e:
-                last = f"CodeCraft: {e}"
+                last = f"xKiro: {e}"
                 break
     raise RuntimeError(last[:300])
 
 
 def oai_test(key, base, model):
-    """សាកល្បង xKiro/CodeCraft OpenAI-compatible API: ត្រឡប់ (True/False, សារ)។"""
+    """សាកល្បង xKiro: ត្រឡប់ (True/False, សារ)។"""
     key, base, model = str(key).strip(), str(base).strip().rstrip("/"), str(model).strip()
     if not (key and base and model):
         return False, "សូមបំពេញ Key, Base URL និងឈ្មោះម៉ូដែលឱ្យគ្រប់។"
@@ -2153,14 +2144,14 @@ def oai_test(key, base, model):
 
 
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
-    """បើបានកំណត់ CodeCraft API នោះប្រើ CodeCraft មុន (ម៉ាស៊ីនសំខាន់)។
-    បើវាបរាជ័យ (ឧ. 503 កំពុង upgrade) ទើបប្តូរទៅ Groq ជាបម្រុង ហើយសម្រាក CodeCraft ១ នាទី។"""
+    """បើបានកំណត់ xKiro API នោះប្រើ xKiro មុន (ម៉ាស៊ីនសំខាន់)។
+    បើវាបរាជ័យ (ឧ. 503 កំពុង upgrade) ទើបប្តូរទៅ Groq ជាបម្រុង ហើយសម្រាក xKiro ១ នាទី។"""
     oai_err = None
     _r = oai_try(texts, budgets, system, to_english)
     if _r is not None:
         return _r
     if oai_enabled():
-        oai_err = "CodeCraft មិនបានលទ្ធផល"
+        oai_err = "xKiro មិនបានលទ្ធផល"
     try:
         return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
     except Exception as groq_err:
@@ -2173,7 +2164,7 @@ _OAI_COOL = {"until": 0.0}
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """សាក CodeCraft មុនគេ។ ត្រឡប់បញ្ជី ឬ None (មិនបានកំណត់ / កំពុងសម្រាក / បរាជ័យ)
+    """សាក xKiro មុនគេ។ ត្រឡប់បញ្ជី ឬ None (មិនបានកំណត់ / កំពុងសម្រាក / បរាជ័យ)
     ដើម្បីឱ្យអ្នកហៅប្តូរទៅ Groq/Gemini ជាបម្រុង។"""
     if not oai_enabled() or _OAI_COOL.get("until", 0) > time.time():
         return None
@@ -2199,7 +2190,7 @@ EN_SYSTEM = (
 
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
-    # CodeCraft មុន (ដើម្បីសន្សំ token Gemini)
+    # xKiro មុន (ដើម្បីសន្សំ token Gemini)
     _rows = []
     for _i, _t in enumerate(texts):
         _r = str(_t)
@@ -2214,7 +2205,7 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
     if _res is not None:
         return _res
     if not split_keys(api_key):
-        raise RuntimeError("CodeCraft មិនបានលទ្ធផល ហើយគ្មាន Gemini Key")
+        raise RuntimeError("xKiro មិនបានលទ្ធផល ហើយគ្មាន Gemini Key")
     client = make_gemini_client(api_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
     _av = get_available_models(client)
     _av = [m for m in _av if "pro" in m.lower()] + [m for m in _av if "pro" not in m.lower()]
@@ -4439,7 +4430,7 @@ class Job:
 
 
 def engine_name(engine):
-    return "គម្រោង VIP" if engine == "free" else "Gemini"
+    return "Groq + xKiro"
 
 
 def run_worker(job, item, settings, fonts_data):
@@ -4491,8 +4482,7 @@ def run_worker(job, item, settings, fonts_data):
                 analysis_future = analysis_pool.submit(_analyze)
             item["pct"] = 0.25
             rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
-            order = (["free", "gemini"] if settings["engine"] == "free" else ["gemini", "free"])
-            order = [k for k in order if (k == "free" and settings["groq_key"]) or (k == "gemini" and settings["gemini_key"])]
+            order = ["free"] if settings["groq_key"] else []
             segments = None
             used_engine = ""
             used_model = ""
@@ -4503,7 +4493,7 @@ def run_worker(job, item, settings, fonts_data):
                     if engine == "free":
                         segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"], keep_failed=False)
                     else:
-                        segments, used_model, failed_chunks = transcribe_gemini_text(settings["gemini_key"], settings["groq_key"], master_path, duration, settings["language"], rep, speech=speech)
+                        raise RuntimeError("ម៉ាស៊ីនសម្គាល់សំឡេងនេះត្រូវបានបិទ។")
                     used_engine = engine
                     break
                 except UserError:
@@ -4534,13 +4524,6 @@ def run_worker(job, item, settings, fonts_data):
                 try:
                     client = None
                     dub_model = used_model
-                    if settings["gemini_key"]:
-                        try:
-                            client = make_gemini_client(settings["gemini_key"], types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
-                            _ms = model_order(get_available_models(client)[:5], "gemini")
-                            dub_model = _ms[0] if _ms else None
-                        except Exception:
-                            client = None
                     dub_segments = merge_for_dub(segments)
                     seg_voices = None
                     targets = None
@@ -5313,13 +5296,12 @@ def _ls_persist():
     """រៀបចំទិន្នន័យ Key ដើម្បីសរសេរចូល localStorage នៅពេល rerun បន្ទាប់។"""
     ss = st.session_state
     groq = list(ss.get("user_groq_keys", []))
-    gem = list(ss.get("user_gemini_keys", []))
-    oai = {"key": ss.get("user_oai_key", ""), "base": ss.get("user_oai_base", ""),
-           "model": ss.get("user_oai_model", "")}
-    if not ss.get("remember_keys", True) or not (groq or gem or oai["key"]):
+    oai = {"key": ss.get("user_oai_key", ""), "base": ss.get("user_oai_base", "https://api.xkiro.com/v1"),
+           "model": ss.get("user_oai_model", "qwen/qwen3.5-flash")}
+    if not ss.get("remember_keys", True) or not (groq or oai["key"]):
         payload = ""
     else:
-        payload = json.dumps({"groq": groq, "gemini": gem, "oai": oai})
+        payload = json.dumps({"groq": groq, "oai": oai})
     ss["_ls_payload"] = payload
     ss["_ls_nonce"] = ss.get("_ls_nonce", 0) + 1
 
@@ -5342,10 +5324,10 @@ def ls_sync():
         data = {}
     if not isinstance(data, dict):
         return
-    for sk, name in (("user_groq_keys", "groq"), ("user_gemini_keys", "gemini")):
-        merged = split_keys([st.session_state.get(sk, []), data.get(name) or []])
-        if merged:
-            st.session_state[sk] = merged
+    sk, name = "user_groq_keys", "groq"
+    merged = split_keys([st.session_state.get(sk, []), data.get(name) or []])
+    if merged:
+        st.session_state[sk] = merged
     oai = data.get("oai") or {}
     if isinstance(oai, dict) and oai.get("key") and not st.session_state.get("user_oai_key"):
         st.session_state["user_oai_key"] = str(oai.get("key", "")).strip()
@@ -5355,7 +5337,7 @@ def ls_sync():
 
 def has_user_keys():
     ss = st.session_state
-    return bool(ss.get("user_groq_keys") or ss.get("user_gemini_keys") or ss.get("user_oai_key"))
+    return bool(ss.get("user_groq_keys") or ss.get("user_oai_key"))
 
 
 def effective_groq_key():
@@ -5365,8 +5347,8 @@ def effective_groq_key():
 
 
 def effective_gemini_key():
-    mine = st.session_state.get("user_gemini_keys", [])
-    return "\n".join(split_keys([mine, GEMINI_KEY])) if mine else GEMINI_KEY
+    # Gemini removed by request. Do not load or call Gemini keys/models.
+    return ""
 
 
 def mask_key(k):
@@ -5375,19 +5357,19 @@ def mask_key(k):
 
 
 def user_key_box():
-    """ប្រអប់ API Key ផ្ទាល់ខ្លួន៖ xKiro សម្រាប់ការងារអត្ថបទ និង Groq/Gemini សម្រាប់មុខងារចាស់។"""
+    """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួនបានច្រើន (Groq / xKiro) ហើយសេវទុកក្នុង Browser។"""
     if st.session_state.pop("_clear_key_input", False):
         st.session_state.pop("user_key_input", None)
         st.session_state.pop("user_keys_bulk", None)
     with st.container(border=True):
         st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន (ដាក់បានច្រើន Key)**")
-        st.caption("xKiro ប្រើសម្រាប់បកប្រែ/ដំណើរការអត្ថបទ។ Groq ឬ Gemini នៅតែត្រូវការសម្រាប់ការស្តាប់សំឡេង (Speech-to-Text) ក្នុងមុខងារចាស់។ "
-                   "Groq/Gemini អាចដាក់បានច្រើន Key ហើយប្តូរទៅ Key បន្ទាប់ដោយស្វ័យប្រវត្តិ។")
+        st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq Key សម្រាប់សម្គាល់សំឡេង និង xKiro Key សម្រាប់បកប្រែ។ "
+                   "ដាក់បានច្រើន Key — Key មួយអស់កូតា កម្មវិធីប្តូរទៅ Key បន្ទាប់ដោយស្វ័យប្រវត្តិ។")
         _msg = st.session_state.pop("_key_msg", None)
         if _msg:
             (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
         any_saved = False
-        for name, sk in (("Groq", "user_groq_keys"), ("Gemini", "user_gemini_keys")):
+        for name, sk in (("Groq", "user_groq_keys"),):
             lst = list(st.session_state.get(sk, []))
             if not lst:
                 continue
@@ -5402,56 +5384,45 @@ def user_key_box():
                     st.rerun()
         if st.session_state.get("user_oai_key"):
             any_saved = True
-            _saved_label = "xKiro" if "api.xkiro.com" in str(st.session_state.get("user_oai_base", "")).lower() else "OpenAI-compatible"
-            st.success(f"✅ កំពុងប្រើ {_saved_label} Key របស់អ្នក (…{st.session_state['user_oai_key'][-4:]})")
-            if st.button("🗑 ឈប់ប្រើ xKiro/CodeCraft Key", key="remove_user_oai_key"):
+            st.success(f"✅ កំពុងប្រើ xKiro Key របស់អ្នក (…{st.session_state['user_oai_key'][-4:]})")
+            if st.button("🗑 ឈប់ប្រើ xKiro Key", key="remove_user_oai_key"):
                 for _k in ("user_oai_key", "user_oai_base", "user_oai_model"):
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["xKiro", "Groq", "Gemini", "CodeCraft"], horizontal=True, key="user_key_provider")
+        provider = st.radio("ប្រភេទ Key", ["Groq", "xKiro"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
-        if provider in ("xKiro", "CodeCraft"):
-            if provider == "xKiro":
-                typed = st.text_input("xKiro API Key", type="password", placeholder="sk-xt-...", key="user_key_input")
-                _old_base = str(st.session_state.get("user_oai_base") or "")
-                _old_model = str(st.session_state.get("user_oai_model") or "")
-                _default_base = _old_base if "api.xkiro.com" in _old_base.lower() else XKIRO_DEFAULT_BASE
-                _default_model = _old_model if "api.xkiro.com" in _old_base.lower() else XKIRO_DEFAULT_MODEL
-                oai_base_in = st.text_input("Base URL", value=_default_base, key="user_oai_base_input")
-                oai_model_in = st.text_input("Model ID (ត្រូវមាន vendor/model)", value=_default_model, key="user_oai_model_input")
-                st.caption("xKiro នឹងប្រើសម្រាប់ការបកប្រែ និងការងារអត្ថបទ។ កុំបញ្ចូលប្រាក់មុនសាកល្បងម៉ូដែល Free។ មុខងារស្តាប់សំឡេងចាស់នៅតែត្រូវការ Groq ឬ Gemini។")
-            else:
-                typed = st.text_input("CodeCraft API Key", type="password", placeholder="cc_...", key="user_key_input")
-                oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://codecraftapi.com/v1"), key="user_oai_base_input")
-                oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"), key="user_oai_model_input")
-                st.caption("រក្សាជម្រើស CodeCraft ចាស់ ដើម្បីកុំឱ្យប៉ះពាល់ដល់អ្នកប្រើដែលមានការកំណត់ពីមុន។")
+        if provider == "xKiro":
+            typed = st.text_input("xKiro API Key", type="password", placeholder="xkiro_...", key="user_key_input")
+            oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://api.xkiro.com/v1"),
+                                        key="user_oai_base_input")
+            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "qwen/qwen3.5-flash"),
+                                         key="user_oai_model_input")
+            st.caption("xKiro ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទ។ ការសម្គាល់សំឡេងវីដេអូនៅតែត្រូវការ Groq ព្រោះ xKiro មិនមាន Speech-to-Text API។")
         else:
-            typed = st.text_area(f"{provider} API Key (មួយបន្ទាត់ ១ Key ឬបំបែកដោយក្បៀស — ដាក់បានច្រើន)",
-                                 placeholder=("gsk_...\ngsk_...\ngsk_..." if provider == "Groq" else "AIza...\nAIza...\nAIza..."),
-                                 height=120, key="user_keys_bulk")
+            typed = st.text_area("Groq API Key (មួយបន្ទាត់ ១ Key ឬបំបែកដោយក្បៀស — ដាក់បានច្រើន)",
+                                 placeholder="gsk_...\ngsk_...", height=120, key="user_keys_bulk")
         st.toggle("💾 ចងចាំ Key ក្នុងឧបករណ៍/Browser នេះ (ចូលលើកក្រោយមិនបាច់ដាក់ម្តងទៀត)", value=True,
                   key="remember_keys", on_change=_ls_persist)
         st.caption("🔒 Key រក្សាទុកក្នុង Browser របស់អ្នកតែប៉ុណ្ណោះ (localStorage) មិនត្រូវបានរក្សាទុកលើម៉ាស៊ីនមេទេ។ "
                    "កុំប្រើលើកុំព្យូទ័រ/ទូរស័ព្ទសាធារណៈ។ បើលុបទិន្នន័យ Browser Key នឹងបាត់។")
         if st.button("✅ ពិនិត្យ និងបន្ថែម Key", key="user_key_save", use_container_width=True):
-            if provider in ("xKiro", "CodeCraft"):
-                ok, msg = oai_test(typed, oai_base_in, oai_model_in)
+            if provider == "xKiro":
+                ok, msg = oai_test(typed, oai_base_in or "https://api.xkiro.com/v1", oai_model_in or "qwen/qwen3.5-flash")
                 if ok:
                     st.session_state["user_oai_key"] = typed.strip()
-                    st.session_state["user_oai_base"] = oai_base_in.strip().rstrip("/")
-                    st.session_state["user_oai_model"] = oai_model_in.strip()
+                    st.session_state["user_oai_base"] = (oai_base_in or "https://api.xkiro.com/v1").strip().rstrip("/")
+                    st.session_state["user_oai_model"] = (oai_model_in or "qwen/qwen3.5-flash").strip()
                     _ls_persist()
                     st.session_state["_clear_key_input"] = True
-                    _label = "xKiro" if provider == "xKiro" else "CodeCraft"
-                    st.session_state["_key_msg"] = ("ok", f"បានភ្ជាប់ {_label} API Key ហើយ ✅")
+                    st.session_state["_key_msg"] = ("ok", "បានបន្ថែម xKiro Key ✅")
                     st.rerun()
                 else:
                     st.error(msg)
             else:
-                sk = "user_groq_keys" if provider == "Groq" else "user_gemini_keys"
-                check = validate_groq_key if provider == "Groq" else validate_gemini_key
+                sk = "user_groq_keys"
+                check = validate_groq_key
                 new_keys = split_keys(typed)[:20]
                 have = list(st.session_state.get(sk, []))
                 if not new_keys:
@@ -5482,25 +5453,22 @@ def user_key_box():
                         st.session_state["_clear_key_input"] = True
                     st.rerun()
         if any_saved and st.button("🧹 លុប Key ផ្ទាល់ខ្លួនទាំងអស់ (រួមទាំងក្នុង Browser)", key="user_key_clear_all", use_container_width=True):
-            for _k in ("user_groq_keys", "user_gemini_keys", "user_oai_key", "user_oai_base", "user_oai_model"):
+            for _k in ("user_groq_keys", "user_oai_key", "user_oai_base", "user_oai_model"):
                 st.session_state.pop(_k, None)
             _ls_persist()
             st.rerun()
 
 
-GEMINI_KEY = collect_api_keys("GEMINI_API_KEY")   # ដាក់ GEMINI_API_KEY ក្នុង Secrets (អាចដាក់ច្រើន)
+GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
 ls_sync()
 
-if not GEMINI_KEY and not GROQ_KEY and not has_user_keys():
+if not GROQ_KEY and not has_user_keys():
     st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
-elif not GEMINI_KEY and not GROQ_KEY and st.session_state.get("user_oai_key"):
-    st.info("បានកំណត់ xKiro សម្រាប់ការងារអត្ថបទហើយ។ ដើម្បីស្តាប់សំឡេងក្នុងវីដេអូ និងចម្លងជាអត្ថបទ មុខងារចាស់នៅតែត្រូវការ Groq ឬ Gemini API Key។")
 
-ENGINE_FREE = "⭐ គម្រោង VIP"
-ENGINE_GEMINI = "✨ Gemini (ទាញអត្ថបទ)"
+ENGINE_FREE = "⭐ Groq សម្គាល់សំឡេង + xKiro បកប្រែ"
 
 current_job = st.session_state.get("job")
 busy = bool(current_job and current_job.running())
@@ -5849,17 +5817,11 @@ with tab_cut:
 # ============================ ផ្ទាំង ២: បកប្រែ ============================
 with tab_trans:
     with st.container(border=True):
-        engine_options = []
-        if effective_groq_key():
-            engine_options.append(ENGINE_FREE)
-        if effective_gemini_key():
-            engine_options.append(ENGINE_GEMINI)   # បើគ្មាន Groq Gemini ជាម៉ាស៊ីនចម្បង
-        if not engine_options:
-            engine_options.append(ENGINE_GEMINI)
-            st.warning("មិនទាន់មាន API Key ទេ។ សូមដាក់ Gemini ឬ Groq Key ខាងក្រោម រួចចុច «ពិនិត្យ និងប្រើ Key នេះ»។")
-        engine_label = st.selectbox("ម៉ាស៊ីនបកប្រែ", engine_options, index=0)
-        if effective_groq_key() and effective_gemini_key():
-            st.caption("🔁 បើម៉ាស៊ីនទីមួយមានបញ្ហា ឬអស់កូតា កម្មវិធីប្តូរទៅ Gemini បម្រុងដោយស្វ័យប្រវត្តិ។")
+        engine_options = [ENGINE_FREE]
+        if not effective_groq_key():
+            st.warning("សូមដាក់ Groq API Key សម្រាប់សម្គាល់សំឡេង។ xKiro ប្រើសម្រាប់បកប្រែអត្ថបទ។")
+        engine_label = st.selectbox("ម៉ាស៊ីនដំណើរការ", engine_options, index=0, disabled=True)
+        st.caption("xKiro ប្រើសម្រាប់ការបកប្រែ/កែអត្ថបទ; Groq ប្រើតែសម្រាប់សម្គាល់សំឡេងវីដេអូ។")
         lc1, lc2 = st.columns(2)
         with lc1:
             language_label = st.selectbox("ភាសាដើម", list(LANGUAGES.keys()), index=0)
@@ -6205,8 +6167,8 @@ if run:
     fonts_data = sorted(fonts_data, key=lambda f: 0 if f[2] == font_name else 1)
     clone_samples = [b_ for b_ in (clone_sample_bytes(f_) for f_ in clone_files) if b_] if clone_on else []
     settings = {
-        "engine": "free" if engine_label == ENGINE_FREE else "gemini",
-        "gemini_key": effective_gemini_key(), "groq_key": effective_groq_key(), "fx": fx_settings,
+        "engine": "free",
+        "gemini_key": "", "groq_key": effective_groq_key(), "fx": fx_settings,
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
