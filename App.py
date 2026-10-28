@@ -5255,67 +5255,226 @@ def validate_gemini_key(key):
         return False, "ពិនិត្យ Key មិនបាន (បញ្ហាបណ្តាញ)។ សូមសាកម្តងទៀត។"
 
 
+# =====================================================================
+#  API Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ — ដាក់បានច្រើន Key + សេវទុកក្នុង Browser
+#  Key រក្សាទុកក្នុង localStorage របស់ Browser អ្នកប្រើផ្ទាល់ (មិនផ្ញើទៅរក្សាទុកលើម៉ាស៊ីនមេទេ)
+#  ពេលចូលលើកក្រោយ កម្មវិធីអានវិញដោយស្វ័យប្រវត្តិ
+# =====================================================================
+_LS_HTML = """<!doctype html><html><body><script>
+(function () {
+  var KEY = "kvai_user_keys_v1", lastNonce = null, sent = false;
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+  }
+  function readStore() { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
+  window.addEventListener("message", function (ev) {
+    var d = ev.data;
+    if (!d || d.type !== "streamlit:render") return;
+    var a = d.args || {};
+    if (a.nonce !== undefined && a.nonce !== lastNonce) {
+      lastNonce = a.nonce;
+      if (a.save !== null && a.save !== undefined) {
+        try {
+          if (a.save === "") localStorage.removeItem(KEY); else localStorage.setItem(KEY, a.save);
+        } catch (e) {}
+      }
+    }
+    if (!sent) {
+      sent = true;
+      send("streamlit:setComponentValue", {value: {data: readStore()}, dataType: "json"});
+    }
+  });
+  send("streamlit:componentReady", {apiVersion: 1});
+  send("streamlit:setFrameHeight", {height: 0});
+})();
+</script></body></html>"""
+
+
+@st.cache_resource(show_spinner=False)
+def _kv_component():
+    folder = os.path.join(tempfile.gettempdir(), "kvai_ls_component")
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "index.html"), "w", encoding="utf-8") as f:
+        f.write(_LS_HTML)
+    return components.declare_component("kvai_local_storage", path=folder)
+
+
+def _ls_persist():
+    """រៀបចំទិន្នន័យ Key ដើម្បីសរសេរចូល localStorage នៅពេល rerun បន្ទាប់។"""
+    ss = st.session_state
+    groq = list(ss.get("user_groq_keys", []))
+    gem = list(ss.get("user_gemini_keys", []))
+    oai = {"key": ss.get("user_oai_key", ""), "base": ss.get("user_oai_base", ""),
+           "model": ss.get("user_oai_model", "")}
+    if not ss.get("remember_keys", True) or not (groq or gem or oai["key"]):
+        payload = ""
+    else:
+        payload = json.dumps({"groq": groq, "gemini": gem, "oai": oai})
+    ss["_ls_payload"] = payload
+    ss["_ls_nonce"] = ss.get("_ls_nonce", 0) + 1
+
+
+def ls_sync():
+    """ហៅមួយដងក្នុងមួយ run: សរសេរ Key ថ្មីចូល Browser និងអាន Key ដែលបានរក្សាទុកពីមុនមកវិញ។"""
+    try:
+        res = _kv_component()(save=st.session_state.get("_ls_payload"),
+                              nonce=st.session_state.get("_ls_nonce", 0),
+                              default=None, key="kv_ls")
+    except Exception:
+        return
+    if not res or st.session_state.get("_ls_loaded"):
+        return
+    st.session_state["_ls_loaded"] = True
+    raw = (res.get("data") if isinstance(res, dict) else "") or ""
+    try:
+        data = json.loads(raw) if raw else {}
+    except Exception:
+        data = {}
+    if not isinstance(data, dict):
+        return
+    for sk, name in (("user_groq_keys", "groq"), ("user_gemini_keys", "gemini")):
+        merged = split_keys([st.session_state.get(sk, []), data.get(name) or []])
+        if merged:
+            st.session_state[sk] = merged
+    oai = data.get("oai") or {}
+    if isinstance(oai, dict) and oai.get("key") and not st.session_state.get("user_oai_key"):
+        st.session_state["user_oai_key"] = str(oai.get("key", "")).strip()
+        st.session_state["user_oai_base"] = str(oai.get("base", "")).strip()
+        st.session_state["user_oai_model"] = str(oai.get("model", "")).strip()
+
+
+def has_user_keys():
+    ss = st.session_state
+    return bool(ss.get("user_groq_keys") or ss.get("user_gemini_keys"))
+
+
 def effective_groq_key():
     """Key របស់អ្នកប្រើ (បើមាន) មុន ហើយ key របស់កម្មវិធីជាបម្រុង។"""
-    mine = st.session_state.get("user_groq_key", "")
+    mine = st.session_state.get("user_groq_keys", [])
     return "\n".join(split_keys([mine, GROQ_KEY])) if mine else GROQ_KEY
 
 
 def effective_gemini_key():
-    mine = st.session_state.get("user_gemini_key", "")
+    mine = st.session_state.get("user_gemini_keys", [])
     return "\n".join(split_keys([mine, GEMINI_KEY])) if mine else GEMINI_KEY
 
 
+def mask_key(k):
+    k = str(k)
+    return (k[:4] + "…" + k[-4:]) if len(k) > 10 else "…"
+
+
 def user_key_box():
-    """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួន (Groq ឬ Gemini)។ រក្សាតែក្នុង session។"""
+    """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួនបានច្រើន (Groq / Gemini / CodeCraft) ហើយសេវទុកក្នុង Browser។"""
     if st.session_state.pop("_clear_key_input", False):
         st.session_state.pop("user_key_input", None)
+        st.session_state.pop("user_keys_bulk", None)
     with st.container(border=True):
-        st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន**")
-        st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ អ្នកអាចដាក់ Groq (console.groq.com/keys) ឬ Gemini (aistudio.google.com/apikey) Key របស់អ្នកផ្ទាល់ ដើម្បីបន្តប្រើបាន។")
-        for name, sk in (("Groq", "user_groq_key"), ("Gemini", "user_gemini_key"), ("CodeCraft", "user_oai_key")):
-            mine = st.session_state.get(sk, "")
-            if mine:
-                st.success(f"✅ កំពុងប្រើ {name} Key របស់អ្នក (…{mine[-4:]})")
-                if st.button(f"🗑 ឈប់ប្រើ {name} Key", key=f"remove_{sk}"):
-                    st.session_state.pop(sk, None)
+        st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន (ដាក់បានច្រើន Key)**")
+        st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq (console.groq.com/keys) ឬ Gemini (aistudio.google.com/apikey) Key របស់អ្នក។ "
+                   "ដាក់បានច្រើន Key — Key មួយអស់កូតា កម្មវិធីប្តូរទៅ Key បន្ទាប់ដោយស្វ័យប្រវត្តិ។")
+        _msg = st.session_state.pop("_key_msg", None)
+        if _msg:
+            (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
+        any_saved = False
+        for name, sk in (("Groq", "user_groq_keys"), ("Gemini", "user_gemini_keys")):
+            lst = list(st.session_state.get(sk, []))
+            if not lst:
+                continue
+            any_saved = True
+            st.markdown(f"✅ **{name}** · {len(lst)} Key")
+            for n, k in enumerate(lst):
+                c1, c2 = st.columns([5, 1])
+                c1.markdown(f"`{mask_key(k)}`")
+                if c2.button("🗑", key=f"del_{sk}_{n}", help="លុប Key នេះ"):
+                    st.session_state[sk] = [x for i, x in enumerate(lst) if i != n]
+                    _ls_persist()
                     st.rerun()
+        if st.session_state.get("user_oai_key"):
+            any_saved = True
+            st.success(f"✅ កំពុងប្រើ CodeCraft Key របស់អ្នក (…{st.session_state['user_oai_key'][-4:]})")
+            if st.button("🗑 ឈប់ប្រើ CodeCraft Key", key="remove_user_oai_key"):
+                for _k in ("user_oai_key", "user_oai_base", "user_oai_model"):
+                    st.session_state.pop(_k, None)
+                _ls_persist()
+                st.rerun()
         provider = st.radio("ប្រភេទ Key", ["Groq", "Gemini", "CodeCraft"], horizontal=True, key="user_key_provider")
-        typed = st.text_input(f"{provider} API Key", type="password",
-                              placeholder={"Groq": "gsk_...", "Gemini": "AIza...", "CodeCraft": "cc_..."}[provider],
-                              key="user_key_input")
         oai_base_in = oai_model_in = ""
+        typed = ""
         if provider == "CodeCraft":
+            typed = st.text_input("CodeCraft API Key", type="password", placeholder="cc_...", key="user_key_input")
             oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://codecraftapi.com/v1"),
                                         key="user_oai_base_input")
             oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "gemini-3.7-flash"),
                                          key="user_oai_model_input")
             st.caption("CodeCraft ធ្វើការងារអត្ថបទទាំងអស់មុន (បកប្រែ កែសម្រួល ជ្រើសល្អបំផុត អារម្មណ៍ បង្រួមឃ្លា) ដើម្បីសន្សំ Groq/Gemini បើវាបរាជ័យ ទើបប្តូរទៅ Groq/Gemini។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq ឬ Gemini។")
-        st.caption("🔒 Key ប្រើតែក្នុងទំព័រនេះ មិនត្រូវបានរក្សាទុកទេ ហើយបាត់ពេលអ្នកបិទទំព័រ ឬឈប់ប្រើ។")
-        if st.button("✅ ពិនិត្យ និងប្រើ Key នេះ", key="user_key_save", use_container_width=True):
+        else:
+            typed = st.text_area(f"{provider} API Key (មួយបន្ទាត់ ១ Key ឬបំបែកដោយក្បៀស — ដាក់បានច្រើន)",
+                                 placeholder=("gsk_...\ngsk_...\ngsk_..." if provider == "Groq" else "AIza...\nAIza...\nAIza..."),
+                                 height=120, key="user_keys_bulk")
+        st.toggle("💾 ចងចាំ Key ក្នុងឧបករណ៍/Browser នេះ (ចូលលើកក្រោយមិនបាច់ដាក់ម្តងទៀត)", value=True,
+                  key="remember_keys", on_change=_ls_persist)
+        st.caption("🔒 Key រក្សាទុកក្នុង Browser របស់អ្នកតែប៉ុណ្ណោះ (localStorage) មិនត្រូវបានរក្សាទុកលើម៉ាស៊ីនមេទេ។ "
+                   "កុំប្រើលើកុំព្យូទ័រ/ទូរស័ព្ទសាធារណៈ។ បើលុបទិន្នន័យ Browser Key នឹងបាត់។")
+        if st.button("✅ ពិនិត្យ និងបន្ថែម Key", key="user_key_save", use_container_width=True):
             if provider == "CodeCraft":
                 ok, msg = oai_test(typed, oai_base_in, oai_model_in)
-            else:
-                ok, msg = (validate_groq_key if provider == "Groq" else validate_gemini_key)(typed)
-            if ok:
-                if provider == "CodeCraft":
+                if ok:
                     st.session_state["user_oai_key"] = typed.strip()
                     st.session_state["user_oai_base"] = oai_base_in.strip().rstrip("/")
                     st.session_state["user_oai_model"] = oai_model_in.strip()
+                    _ls_persist()
+                    st.session_state["_clear_key_input"] = True
+                    st.session_state["_key_msg"] = ("ok", "បានបន្ថែម CodeCraft Key ✅")
+                    st.rerun()
                 else:
-                    st.session_state["user_groq_key" if provider == "Groq" else "user_gemini_key"] = typed.strip()
-                st.session_state["_clear_key_input"] = True
-                st.rerun()
+                    st.error(msg)
             else:
-                st.error(msg)
+                sk = "user_groq_keys" if provider == "Groq" else "user_gemini_keys"
+                check = validate_groq_key if provider == "Groq" else validate_gemini_key
+                new_keys = split_keys(typed)[:20]
+                have = list(st.session_state.get(sk, []))
+                if not new_keys:
+                    st.error("សូមបិទភ្ជាប់ Key យ៉ាងតិច ១។")
+                else:
+                    added, dup, bad = 0, 0, []
+                    with st.spinner("កំពុងពិនិត្យ Key..."):
+                        for k in new_keys:
+                            if k in have:
+                                dup += 1
+                                continue
+                            ok, msg = check(k)
+                            if ok:
+                                have.append(k)
+                                added += 1
+                            else:
+                                bad.append(f"{mask_key(k)}: {msg}")
+                    if added:
+                        st.session_state[sk] = have
+                        _ls_persist()
+                    text = f"បានបន្ថែម {added} Key ✅"
+                    if dup:
+                        text += f" · ស្ទួន {dup}"
+                    if bad:
+                        text += f" · មិនត្រឹមត្រូវ {len(bad)}:\n\n" + "\n\n".join(bad)
+                    st.session_state["_key_msg"] = ("ok" if added else "warn", text)
+                    if added:
+                        st.session_state["_clear_key_input"] = True
+                    st.rerun()
+        if any_saved and st.button("🧹 លុប Key ផ្ទាល់ខ្លួនទាំងអស់ (រួមទាំងក្នុង Browser)", key="user_key_clear_all", use_container_width=True):
+            for _k in ("user_groq_keys", "user_gemini_keys", "user_oai_key", "user_oai_base", "user_oai_model"):
+                st.session_state.pop(_k, None)
+            _ls_persist()
+            st.rerun()
 
 
 GEMINI_KEY = collect_api_keys("GEMINI_API_KEY")   # ដាក់ GEMINI_API_KEY ក្នុង Secrets (អាចដាក់ច្រើន)
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
+ls_sync()
 
-if not GEMINI_KEY and not GROQ_KEY and not st.session_state.get("user_groq_key") and not st.session_state.get("user_gemini_key"):
+if not GEMINI_KEY and not GROQ_KEY and not has_user_keys():
     st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
 
 ENGINE_FREE = "⭐ គម្រោង VIP"
