@@ -2227,20 +2227,21 @@ def oai_test(key, base, model):
 
 
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
-    """បើបានកំណត់ xKiro API នោះប្រើ xKiro មុន (ម៉ាស៊ីនសំខាន់)។
-    បើវាបរាជ័យ (ឧ. 503 កំពុង upgrade) ទើបប្តូរទៅ Groq ជាបម្រុង ហើយសម្រាក xKiro ១ នាទី។"""
-    oai_err = None
-    _r = oai_try(texts, budgets, system, to_english)
-    if _r is not None:
-        return _r
+    """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft → xKiro (ម៉ាស៊ីនបម្រុង)។"""
+    groq_err = None
+    if api_key:
+        try:
+            return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
+        except Exception as e:
+            groq_err = e
     if oai_enabled():
-        oai_err = "xKiro មិនបានលទ្ធផល"
-    try:
-        return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
-    except Exception as groq_err:
-        if oai_err is not None:
-            raise RuntimeError(f"{str(oai_err)[:150]} | {str(groq_err)[:150]}")
-        raise
+        _r = oai_try(texts, budgets, system, to_english)
+        if _r is not None:
+            return _r
+    parts = [f"Groq: {str(groq_err)[:150]}"] if groq_err else []
+    if _LAST_AI_ERR:
+        parts.append("; ".join(f"{k}: {v}"[:110] for k, v in list(_LAST_AI_ERR.items())[:4]))
+    raise RuntimeError(" | ".join(parts) or "គ្មានម៉ាស៊ីនបកប្រែដែលបានកំណត់")
 
 
 _OAI_COOL = {"until": 0.0}
@@ -2265,16 +2266,9 @@ def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKir
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """xKiro -> CodeCraft -> OpenRouter... តាមលំដាប់ ប៉ុន្តែមានកំណត់ពេលសរុប ៥០ វិនាទី ក្នុងមួយបាច់ ទើបបន្តទៅ Groq/Google។"""
-    t_end = time.time() + 50
-    if xk_enabled() and _OAI_COOL.get("until", 0) <= time.time():
-        r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="xKiro")
-        if r is not None:
-            return r
-    if cc_enabled() and _CC_COOL.get("until", 0) <= time.time() and time.time() < t_end:
-        r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw, name="CodeCraft")
-        if r is not None:
-            return r
+    """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft → xKiro
+    (មានកំណត់ពេលសរុប ១២០ វិនាទីក្នុងមួយបាច់)។"""
+    t_end = time.time() + 120
     for _name, _cfg in _EXTRA_PROVIDERS:
         if time.time() >= t_end:
             break
@@ -2282,6 +2276,14 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
         if _cool.get("until", 0) > time.time():
             continue
         r = _try_provider(_cool, _cfg, texts, budgets, system, to_english, raw, name=_name)
+        if r is not None:
+            return r
+    if cc_enabled() and _CC_COOL.get("until", 0) <= time.time() and time.time() < t_end:
+        r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw, name="CodeCraft")
+        if r is not None:
+            return r
+    if xk_enabled() and _OAI_COOL.get("until", 0) <= time.time() and time.time() < t_end:
+        r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="xKiro")
         if r is not None:
             return r
     return None
@@ -2297,8 +2299,8 @@ EN_SYSTEM = (
 )
 
 
-def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None):
-    """Compatibility wrapper: translate with xKiro only; never call Gemini."""
+def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None, groq_key=None):
+    """បកជាខ្មែរ៖ Groq មុន រួច OpenRouter → CodeCraft → xKiro ជាបម្រុង (មិនហៅ Gemini)។"""
     rows = []
     for i, text in enumerate(texts):
         row = str(text)
@@ -2311,13 +2313,13 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
           "translate the true meaning into Khmer and never output English text or tags."
         + ((" STORY SO FAR (context only, do NOT translate): " + story) if story else "")
     )
+    if groq_key:
+        return groq_translate_chunk(groq_key, rows, budgets, system=system)
     result = oai_try(rows, budgets, system)
     if result is not None:
         return result
     _why = " | ".join(f"{k}: {v}" for k, v in _LAST_AI_ERR.items()) or "គ្មាន API Key ដែលបានកំណត់"
-    raise RuntimeError(
-        "ម៉ាស៊ីន AI (xKiro/CodeCraft) បកប្រែមិនបាន។ មូលហេតុពិត៖ " + _why +
-        " — សូមពិនិត្យ Key/Base URL/Model ក្នុង Secrets និង quota។")
+    raise RuntimeError("ម៉ាស៊ីន AI បកប្រែមិនបាន។ មូលហេតុ៖ " + _why + " — សូមពិនិត្យ Key/Base URL/Model ក្នុង Secrets និង quota។")
 
 
 REFINE_SYSTEM = (
@@ -2673,7 +2675,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 return idxs, gemini_translate_khmer(
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
-                    story=story,
+                    story=story, groq_key=groq_key,
                 ), None
             except Exception as e:
                 return idxs, None, e
@@ -2744,6 +2746,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs],
                     [budgets[i] for i in idxs] if budgets else None,
+                    groq_key=groq_key,
                 )
                 for i, r in zip(idxs, res):
                     if r and has_khmer(str(r)):
@@ -2788,7 +2791,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             r = None
             if (gemini_key or oai_enabled()) and dead["gemini"] < 2:
                 try:
-                    r = gemini_translate_khmer(gemini_key, one, [english[i]], bud)[0]
+                    r = gemini_translate_khmer(gemini_key, one, [english[i]], bud, groq_key=groq_key)[0]
                     dead["gemini"] = 0
                 except Exception as e:
                     _fail("gemini", f"gemini-1: {e}")
