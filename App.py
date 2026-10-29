@@ -1210,7 +1210,7 @@ def split_keys(value):
         value = "\n".join("\n".join(split_keys(v)) for v in value)
     out = []
     for k in re.split(r"[\s,;]+", str(value or "")):
-        k = k.strip().strip('"').strip("'")
+        k = k.strip().strip("[]()").strip('"').strip("'").strip("[]()").strip('"').strip("'")
         if k and k not in out:
             out.append(k)
     return out
@@ -2147,14 +2147,19 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
     )
     last = "xKiro: មិនទាន់ទទួលបានចម្លើយ"
     # Try JSON mode first, then normal mode if the selected model rejects response_format.
-    for use_json_mode in (True, False):
+    for _mode in ("json", "plain", "merge"):
+        use_json_mode = (_mode == "json")
+        if _mode == "merge":
+            _msgs = [{"role": "user", "content": (system or TRANS_SYSTEM) + "\n\n" + numbered}]
+        else:
+            _msgs = [
+                {"role": "system", "content": system or TRANS_SYSTEM},
+                {"role": "user", "content": numbered},
+            ]
         payload = {
             "model": _model,
             "temperature": 0.1,
-            "messages": [
-                {"role": "system", "content": system or TRANS_SYSTEM},
-                {"role": "user", "content": numbered},
-            ],
+            "messages": _msgs,
         }
         if use_json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -2196,8 +2201,8 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
                 last = f"xKiro HTTP {e.code}: {detail}".strip()
 
                 # 400/422 can mean this model does not support JSON response_format.
-                if e.code in (400, 422) and use_json_mode:
-                    break
+                if e.code in (400, 422) and _mode != "merge":
+                    break   # JSON mode / system role មិនគាំទ្រ → សាករបៀបបន្ទាប់
                 # Rate limits and temporary upstream failures may recover after a short wait.
                 if e.code in (429, 500, 502, 503, 504) and attempt < 1:
                     time.sleep(1.5)          # សាកម្តងទៀតតែ ១ ដង រួចឆាប់ប្តូរទៅម៉ាស៊ីនបន្ទាប់
@@ -2241,7 +2246,8 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
     parts = [f"Groq: {str(groq_err)[:150]}"] if groq_err else []
     if _LAST_AI_ERR:
         parts.append("; ".join(f"{k}: {v}"[:110] for k, v in list(_LAST_AI_ERR.items())[:4]))
-    raise RuntimeError(" | ".join(parts) or "គ្មានម៉ាស៊ីនបកប្រែដែលបានកំណត់")
+    parts.append("ស្ថានភាព៖ " + provider_status())
+    raise RuntimeError(" | ".join(parts))
 
 
 _OAI_COOL = {"until": 0.0}
@@ -2263,6 +2269,32 @@ def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKir
             cool["until"] = time.time() + 180  # server/បណ្តាញមានបញ្ហា → រំលង ៣ នាទី (កុំឱ្យរង់ចាំម៉ាស៊ីនខូចរាល់ឃ្លា)
             return None
     return None
+
+
+def provider_status():
+    """សង្ខេបស្ថានភាពម៉ាស៊ីន AI នីមួយៗ (បានកំណត់ឬអត់ / កំពុងសម្រាក) ដើម្បីបង្ហាញក្នុងសារកំហុស។"""
+    now = time.time()
+    def _cool(c):
+        left = int(c.get("until", 0) - now)
+        return f" (សម្រាក {left}វិ)" if left > 0 else ""
+    out = []
+    try:
+        out.append("Groq ✓" if (GROQ_KEY or has_user_keys()) else "Groq ✗ (គ្មាន key)")
+    except Exception:
+        out.append("Groq ?")
+    names = [n for n, _ in _EXTRA_PROVIDERS]
+    n_or = sum(1 for n in names if n.startswith("OpenRouter"))
+    out.append(f"OpenRouter ×{n_or}" if n_or else "OpenRouter ✗ (គ្មាន key)")
+    for n in names:
+        if not n.startswith("OpenRouter"):
+            out.append(f"{n} ✓" + _cool(_EXTRA_COOL.get(n, {})))
+    if cc_enabled():
+        out.append("CodeCraft ✓" + _cool(_CC_COOL))
+    else:
+        miss = [k for k, v in (("API_KEY", CC_KEY), ("BASE_URL", CC_BASE.startswith("http") and CC_BASE), ("MODEL", CC_MODEL)) if not v]
+        out.append("CodeCraft ✗ (ខ្វះ CODECRAFT_" + ", CODECRAFT_".join(miss) + ")")
+    out.append("xKiro ✓" + _cool(_OAI_COOL) if xk_enabled() else "xKiro ✗ (គ្មាន XKIRO_API_KEY)")
+    return " · ".join(out)
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
@@ -2319,7 +2351,7 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
     if result is not None:
         return result
     _why = " | ".join(f"{k}: {v}" for k, v in _LAST_AI_ERR.items()) or "គ្មាន API Key ដែលបានកំណត់"
-    raise RuntimeError("ម៉ាស៊ីន AI បកប្រែមិនបាន។ មូលហេតុ៖ " + _why + " — សូមពិនិត្យ Key/Base URL/Model ក្នុង Secrets និង quota។")
+    raise RuntimeError("ម៉ាស៊ីន AI បកប្រែមិនបាន។ មូលហេតុ៖ " + _why + " | ស្ថានភាព៖ " + provider_status())
 
 
 REFINE_SYSTEM = (
