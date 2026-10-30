@@ -516,6 +516,96 @@ def apply_neon_theme():
     st.markdown(LANDSCAPE_NEON_CSS, unsafe_allow_html=True)
 
 
+# ---------- Neon cinematic dashboard polish (Angkor-inspired) ----------
+CINEMATIC_DASHBOARD_CSS = """
+<style>
+:root{
+ --ink:#F7F8FF;--soft:#C4D2FF;--bg:#05091F;--card:#0C1740;
+ --card2:#101F50;--line:rgba(60,210,255,.48);
+ --p1:#FF1493;--p2:#00D9FF;--gold:#FFD84D;
+}
+html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{
+ background:
+  radial-gradient(ellipse at 5% 15%,rgba(255,0,153,.26),transparent 28%),
+  radial-gradient(ellipse at 95% 12%,rgba(0,190,255,.24),transparent 30%),
+  linear-gradient(145deg,#030719 0%,#10113D 48%,#071B36 100%) !important;
+ color:#F7F8FF!important;
+}
+.block-container{max-width:1700px!important;padding:.35rem .7rem 4.2rem!important}
+.stApp p,.stApp label,.stApp h1,.stApp h2,.stApp h3,.stApp li,
+.stApp [data-testid="stMarkdownContainer"],[data-testid="stWidgetLabel"] p{
+ color:#F7F8FF!important;
+}
+[data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{color:#C4D2FF!important}
+.kvai-head{
+ position:relative;isolation:isolate;overflow:hidden;
+ min-height:112px;margin:2px 0 8px!important;padding:12px 18px!important;
+ border:1px solid rgba(42,220,255,.72)!important;border-radius:18px!important;
+ background:
+  linear-gradient(90deg,rgba(3,7,28,.94) 0%,rgba(7,23,64,.78) 48%,rgba(3,9,35,.35) 100%),
+  radial-gradient(ellipse at 80% 100%,rgba(0,215,255,.35),transparent 45%)!important;
+ box-shadow:0 0 24px rgba(0,195,255,.24),inset 0 0 25px rgba(0,195,255,.08)!important;
+}
+.kvai-head:before{
+ content:"";position:absolute;z-index:-1;inset:0;opacity:.85;
+ background:
+  linear-gradient(110deg,transparent 0 20%,rgba(255,30,170,.0) 35%,rgba(255,30,170,.45) 36%,transparent 38% 58%,rgba(0,220,255,.48) 60%,transparent 62%),
+  repeating-linear-gradient(115deg,transparent 0 70px,rgba(0,220,255,.12) 71px 73px,transparent 74px 145px);
+ background-size:220% 100%;animation:kvai-banner-lights 7s linear infinite;
+}
+.kvai-head:after{
+ content:"";position:absolute;z-index:-1;right:8%;bottom:-17px;width:260px;height:100px;
+ opacity:.55;background:
+  radial-gradient(ellipse at 50% 100%,#FFD66B 0 3%,transparent 4%),
+  linear-gradient(90deg,transparent 0 12%,#0C1740 12% 17%,transparent 17% 24%,#0C1740 24% 29%,transparent 29% 36%,#0C1740 36% 42%,transparent 42% 48%,#0C1740 48% 54%,transparent 54% 61%,#0C1740 61% 67%,transparent 67% 73%,#0C1740 73% 79%,transparent 79%),
+  linear-gradient(0deg,#08132F 0 22%,transparent 23%);
+ clip-path:polygon(0 100%,0 75%,8% 75%,8% 55%,14% 55%,14% 75%,22% 75%,22% 35%,28% 35%,28% 12%,32% 35%,38% 35%,38% 75%,46% 75%,46% 46%,50% 0,54% 46%,54% 75%,62% 75%,62% 35%,68% 35%,68% 12%,72% 35%,78% 35%,78% 75%,86% 75%,86% 55%,92% 55%,92% 75%,100% 75%,100% 100%);
+ filter:drop-shadow(0 0 9px #00D9FF);
+}
+@keyframes kvai-banner-lights{from{background-position:220% 0}to{background-position:-20% 0}}
+.kvai-logo{box-shadow:0 0 22px rgba(255,20,147,.65)!important}
+.kvai-title h1{color:#fff!important;text-shadow:0 0 15px rgba(0,220,255,.7)!important}
+.kvai-title h1 span{background:linear-gradient(90deg,#FF65C5,#00E5FF,#FFE36A)!important;-webkit-background-clip:text!important;background-clip:text!important}
+.kvai-badge{background:rgba(255,211,78,.12)!important;border-color:#FFD84D!important;color:#FFE36A!important}
+[data-baseweb="tab-list"]{background:rgba(5,12,40,.94)!important;border:1px solid rgba(0,210,255,.48)!important;box-shadow:0 0 16px rgba(0,210,255,.12)}
+button[data-baseweb="tab"]{background:linear-gradient(145deg,#17234F,#0A1435)!important;border:1px solid rgba(87,165,255,.38)!important;color:#EAF3FF!important}
+button[data-baseweb="tab"][aria-selected="true"]{background:linear-gradient(105deg,#FF1493,#843BFF,#00CFFF)!important;box-shadow:0 0 18px rgba(255,20,147,.5)!important}
+div[data-testid="stVerticalBlockBorderWrapper"]{background:linear-gradient(145deg,rgba(15,29,75,.97),rgba(6,14,43,.98))!important;border:1px solid rgba(43,201,255,.48)!important;box-shadow:0 7px 22px rgba(0,0,0,.28),0 0 13px rgba(0,180,255,.08)!important}
+[data-baseweb="select"]>div,.stTextInput input,.stNumberInput input,.stTextArea textarea,[data-baseweb="textarea"]>div{background:#091638!important;color:#fff!important;border:1px solid #328DC4!important}
+[data-baseweb="select"] *{color:#fff!important}
+[data-baseweb="popover"] ul,[data-baseweb="popover"] li,[data-baseweb="menu"]{background:#101A43!important;color:white!important}
+[data-testid="stFileUploaderDropzone"]{background:linear-gradient(135deg,rgba(0,174,255,.13),rgba(174,30,255,.13))!important;border:2px dashed #00D9FF!important;box-shadow:inset 0 0 22px rgba(0,210,255,.12)}
+[data-testid="stFileUploaderDropzone"] *{color:#fff!important}
+.stButton>button,.stDownloadButton>button{background:linear-gradient(145deg,#142451,#0A1538)!important;color:white!important;border:1px solid rgba(0,215,255,.7)!important;box-shadow:0 0 10px rgba(0,180,255,.12)}
+.stButton>button[kind="primary"],.stDownloadButton>button[kind="primary"]{background:linear-gradient(100deg,#FF1493,#853BFF,#00CFFF)!important;box-shadow:0 0 22px rgba(255,20,147,.4)!important}
+.stButton>button:hover,.stDownloadButton>button:hover{box-shadow:0 0 22px rgba(0,220,255,.55)!important;border-color:#FFE36A!important}
+[data-testid="stRadio"] label{background:#111D49!important;border-color:#328DC4!important;color:#fff!important}
+[data-testid="stRadio"] label:has(input:checked){background:linear-gradient(100deg,#FF1493,#743DFF)!important}
+[data-testid="stMetric"]{background:#101B43!important;border:1px solid #328DC4!important}
+[data-testid="stMetricValue"],[data-testid="stMetricValue"] *{color:#fff!important}
+[data-testid="stAlert"],[data-testid="stExpander"]{background:#101A40!important;border:1px solid #328DC4!important}
+.st-key-startbar{background:linear-gradient(180deg,rgba(5,9,31,0),rgba(5,9,31,.97) 35%)!important;padding:10px 12px calc(8px + env(safe-area-inset-bottom))!important}
+.st-key-startbar .stButton>button{min-height:48px!important;font-size:1.05rem!important}
+@media (orientation:landscape) and (max-height:650px){
+ .block-container{padding:.2rem .55rem 3.6rem!important}
+ .kvai-head{min-height:74px!important;padding:6px 12px!important;margin:0 0 5px!important}
+ .kvai-logo{width:40px!important;height:40px!important;font-size:22px!important}
+ .kvai-title h1{font-size:1.25rem!important}
+ .kvai-title p{font-size:.72rem!important}
+ .kvai-badge{padding:4px 9px!important;font-size:.7rem!important}
+ [data-baseweb="tab-list"]{padding:3px!important}
+ button[data-baseweb="tab"]{height:37px!important}
+ [data-testid="stVerticalBlock"]{gap:.35rem!important}
+ div[data-testid="stVerticalBlockBorderWrapper"]{padding:2px!important}
+ [data-testid="stFileUploaderDropzone"]{padding:7px!important}
+ [data-testid="stVideo"] video{max-height:130px!important}
+ .stButton>button,.stDownloadButton>button{min-height:36px!important}
+}
+@media(max-width:700px){[data-baseweb="tab-list"]{overflow-x:auto!important}}
+</style>
+"""
+
+
 def render_header():
     st.markdown(
         """
@@ -594,6 +684,7 @@ def srt_time(sec):
 
 apply_theme()
 apply_neon_theme()
+st.markdown(CINEMATIC_DASHBOARD_CSS, unsafe_allow_html=True)
 
 
 def server_ram_info():
@@ -5999,7 +6090,7 @@ GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
 components.html("""
-<div style="display:flex;justify-content:flex-end;padding:0 2px 6px;font-family:system-ui">
+<div style="display:flex;justify-content:flex-end;padding:0 2px 2px;font-family:system-ui">
 <button id="kvaiRotate" style="cursor:pointer;border:1px solid #25D9FF;border-radius:12px;padding:9px 15px;color:white;font-weight:800;background:linear-gradient(100deg,#FF279F,#853CFF,#08C8EF);box-shadow:0 0 15px #168ac066">
 📱 បង្វិលទូរសព្ទផ្ដេក / ពេញអេក្រង់
 </button><span id="kvaiRotateMsg" style="color:#B9C7F5;font-size:11px;margin:auto 8px"></span>
@@ -6015,7 +6106,7 @@ document.getElementById('kvaiRotate').addEventListener('click',async()=>{
  }catch(e){msg.textContent='បើមិនបង្វិល សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
 });
 </script>
-""",height=52,scrolling=False)
+""",height=42,scrolling=False)
 ls_sync()
 
 if not GROQ_KEY and not oai_enabled() and not has_user_keys():
