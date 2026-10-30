@@ -2091,7 +2091,8 @@ CLAUDE_KEYS = split_keys(_claude_vals)
 CLAUDE_BASE = (str(get_secret("ANTHROPIC_BASE_URL", "https://api.anthropic.com") or "").strip().rstrip("/")
                or "https://api.anthropic.com")
 CLAUDE_MODEL = (str(get_secret("ANTHROPIC_MODEL", "claude-sonnet-5-5") or "").strip() or "claude-sonnet-5-5")
-_CLAUDE_PROVIDERS = [(f"Claude #{_i}", (_k, CLAUDE_BASE, CLAUDE_MODEL)) for _i, _k in enumerate(CLAUDE_KEYS, start=1)]
+_CLAUDE_SECRET_PROVIDERS = [(f"Claude #{_i}", (_k, CLAUDE_BASE, CLAUDE_MODEL)) for _i, _k in enumerate(CLAUDE_KEYS, start=1)]
+_CLAUDE_PROVIDERS = list(_CLAUDE_SECRET_PROVIDERS)   # បញ្ជីដែលកំពុងប្រើ (Key ផ្ទាល់ខ្លួនមុន រួច Secrets) — ធ្វើបច្ចុប្បន្នភាពពេលចុច «ចាប់ផ្តើម»
 _CLAUDE_COOL = {}
 
 
@@ -5520,10 +5521,13 @@ def _ls_persist():
     groq = list(ss.get("user_groq_keys", []))
     oai = {"key": ss.get("user_oai_key", ""), "base": ss.get("user_oai_base", "https://api.xkiro.com/v1"),
            "model": ss.get("user_oai_model", "qwen/qwen3.5-flash")}
-    if not ss.get("remember_keys", True) or not (groq or oai["key"]):
+    claude = {"keys": list(ss.get("user_claude_keys", [])),
+              "base": ss.get("user_claude_base", "https://api.anthropic.com"),
+              "model": ss.get("user_claude_model", "claude-sonnet-5-5")}
+    if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"]):
         payload = ""
     else:
-        payload = json.dumps({"groq": groq, "oai": oai})
+        payload = json.dumps({"groq": groq, "oai": oai, "claude": claude})
     ss["_ls_payload"] = payload
     ss["_ls_nonce"] = ss.get("_ls_nonce", 0) + 1
 
@@ -5555,11 +5559,20 @@ def ls_sync():
         st.session_state["user_oai_key"] = str(oai.get("key", "")).strip()
         st.session_state["user_oai_base"] = str(oai.get("base", "")).strip()
         st.session_state["user_oai_model"] = str(oai.get("model", "")).strip()
+    cl = data.get("claude") or {}
+    if isinstance(cl, dict) and cl.get("keys"):
+        _merged_c = split_keys([st.session_state.get("user_claude_keys", []), cl.get("keys") or []])
+        if _merged_c:
+            st.session_state["user_claude_keys"] = _merged_c
+            if cl.get("base") and not st.session_state.get("user_claude_base"):
+                st.session_state["user_claude_base"] = str(cl.get("base")).strip()
+            if cl.get("model") and not st.session_state.get("user_claude_model"):
+                st.session_state["user_claude_model"] = str(cl.get("model")).strip()
 
 
 def has_user_keys():
     ss = st.session_state
-    return bool(ss.get("user_groq_keys") or ss.get("user_oai_key"))
+    return bool(ss.get("user_groq_keys") or ss.get("user_oai_key") or ss.get("user_claude_keys"))
 
 
 def effective_groq_key():
@@ -5578,11 +5591,118 @@ def mask_key(k):
     return (k[:4] + "…" + k[-4:]) if len(k) > 10 else "…"
 
 
+def _classify_http(code):
+    if code == 200:
+        return "ok", "ប្រើបាន"
+    if code in (401, 403):
+        return "bad", "Key មិនត្រឹមត្រូវ ឬត្រូវបានបិទ"
+    if code == 402:
+        return "bad", "អស់ credit / ត្រូវបង់ប្រាក់"
+    if code == 404:
+        return "bad", "URL ឬឈ្មោះម៉ូដែលខុស"
+    if code == 429:
+        return "limit", "Key ត្រឹមត្រូវ តែអស់កូតា ឬ Rate limit បណ្តោះអាសន្ន"
+    return "error", f"HTTP {code}"
+
+
+def _http_probe(url, headers, payload=None, timeout=30, secret=""):
+    """ហៅម្តង (គ្មាន retry) ហើយត្រឡប់ (state, សារ, ms)។ មិនបង្ហាញ Key ក្នុងសារ។"""
+    t0 = time.time()
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=body, method="POST" if body else "GET", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            r.read(2000)
+        return "ok", "ប្រើបាន", int((time.time() - t0) * 1000)
+    except urllib.error.HTTPError as e:
+        state, msg = _classify_http(e.code)
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "ignore")[:160].replace("\n", " ")
+        except Exception:
+            pass
+        if secret:
+            detail = detail.replace(secret, "***")
+        if detail and state in ("error", "bad"):
+            msg += " · " + detail
+        return state, msg, int((time.time() - t0) * 1000)
+    except Exception as e:
+        return "error", "បណ្តាញ/Timeout: " + str(e)[:120], int((time.time() - t0) * 1000)
+
+
+def check_groq_key(cfg):
+    key = cfg[0]
+    return _http_probe(GROQ_MODELS_URL, {"Authorization": f"Bearer {key}", "User-Agent": "Mozilla/5.0"}, secret=key)
+
+
+def check_claude_key(cfg):
+    key, base, model = cfg
+    base = str(base).rstrip("/")
+    url = base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+    headers = {"x-api-key": key, "Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01",
+               "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    payload = {"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
+    return _http_probe(url, headers, payload, secret=key)
+
+
+def check_openai_key(cfg):
+    key, base, model = cfg
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    payload = {"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
+    return _http_probe(str(base).rstrip("/") + "/chat/completions", headers, payload, secret=key)
+
+
+def key_check_targets():
+    """Key ទាំងអស់ (ដែលអ្នកដាក់ + ក្នុង Secrets): (ឈ្មោះ, Key បិទបាំង, ប្រភេទ, cfg, ម៉ូដែល)។"""
+    ss = st.session_state
+    rows = []
+    for i, k in enumerate(ss.get("user_claude_keys", []), start=1):
+        _b = ss.get("user_claude_base", "https://api.anthropic.com")
+        _m = ss.get("user_claude_model", "claude-sonnet-5-5")
+        rows.append((f"Claude #{i} (ដាក់ក្នុងកម្មវិធី)", mask_key(k), "claude", (k, _b, _m), _m))
+    for name, cfg in _CLAUDE_SECRET_PROVIDERS:
+        rows.append((f"{name} (Secrets)", mask_key(cfg[0]), "claude", cfg, cfg[2]))
+    for i, k in enumerate(ss.get("user_groq_keys", []), start=1):
+        rows.append((f"Groq #{i} (ដាក់ក្នុងកម្មវិធី)", mask_key(k), "groq", (k,), "whisper + chat"))
+    for i, k in enumerate(split_keys(GROQ_KEY), start=1):
+        rows.append((f"Groq #{i} (Secrets)", mask_key(k), "groq", (k,), "whisper + chat"))
+    if ss.get("user_oai_key"):
+        _cfg = (ss["user_oai_key"], ss.get("user_oai_base", "https://api.xkiro.com/v1"),
+                ss.get("user_oai_model", "qwen/qwen3.5-flash"))
+        rows.append(("xKiro (ដាក់ក្នុងកម្មវិធី)", mask_key(_cfg[0]), "openai", _cfg, _cfg[2]))
+    for name, cfg in _EXTRA_PROVIDERS:
+        rows.append((f"{name} (Secrets)", mask_key(cfg[0]), "openai", cfg, cfg[2]))
+    if cc_enabled():
+        rows.append(("CodeCraft (Secrets)", mask_key(CC_KEY), "openai", (CC_KEY, CC_BASE, CC_MODEL), CC_MODEL))
+    if OAI_KEY and OAI_BASE and OAI_MODEL:
+        rows.append(("xKiro (Secrets)", mask_key(OAI_KEY), "openai", (OAI_KEY, OAI_BASE, OAI_MODEL), OAI_MODEL))
+    return rows
+
+
+def run_key_checks():
+    targets = key_check_targets()
+    fn = {"groq": check_groq_key, "claude": check_claude_key, "openai": check_openai_key}
+
+    def one(t):
+        name, masked, kind, cfg, model = t
+        try:
+            state, msg, ms = fn[kind](cfg)
+        except Exception as e:
+            state, msg, ms = "error", str(e)[:140], 0
+        return {"name": name, "key": masked, "model": model, "state": state, "msg": msg, "ms": ms}
+
+    if not targets:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
+        return list(pool.map(one, targets))
+
+
 def user_key_box():
     """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួនបានច្រើន (Groq / xKiro) ហើយសេវទុកក្នុង Browser។"""
     if st.session_state.pop("_clear_key_input", False):
         st.session_state.pop("user_key_input", None)
         st.session_state.pop("user_keys_bulk", None)
+        st.session_state.pop("user_claude_bulk", None)
     with st.container(border=True):
         st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន (ដាក់បានច្រើន Key)**")
         st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq Key សម្រាប់សម្គាល់សំឡេង និង xKiro Key សម្រាប់បកប្រែ។ "
@@ -5591,7 +5711,7 @@ def user_key_box():
         if _msg:
             (st.success if _msg[0] == "ok" else st.warning)(_msg[1])
         any_saved = False
-        for name, sk in (("Groq", "user_groq_keys"),):
+        for name, sk in (("Claude", "user_claude_keys"), ("Groq", "user_groq_keys")):
             lst = list(st.session_state.get(sk, []))
             if not lst:
                 continue
@@ -5612,10 +5732,20 @@ def user_key_box():
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["Groq", "xKiro"], horizontal=True, key="user_key_provider")
+        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "xKiro"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
-        if provider == "xKiro":
+        if provider == "Claude":
+            typed = st.text_area("Claude API Key (មួយបន្ទាត់ ១ Key — ដាក់បានច្រើន)",
+                                 placeholder="sk-...", height=100, key="user_claude_bulk")
+            oai_base_in = st.text_input("Base URL (ដាក់តាមហាង បើមិនមាន ទុកលំនាំដើម)",
+                                        value=st.session_state.get("user_claude_base", "https://api.anthropic.com"),
+                                        key="user_claude_base_input")
+            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល",
+                                         value=st.session_state.get("user_claude_model", "claude-sonnet-5-5"),
+                                         key="user_claude_model_input")
+            st.caption("Claude ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទជាខ្មែរ (សាកមុនគេ)។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq Key ព្រោះ Claude មិនស្តាប់សំឡេងទេ។")
+        elif provider == "xKiro":
             typed = st.text_input("xKiro API Key", type="password", placeholder="xkiro_...", key="user_key_input")
             oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://api.xkiro.com/v1"),
                                         key="user_oai_base_input")
@@ -5630,7 +5760,43 @@ def user_key_box():
         st.caption("🔒 Key រក្សាទុកក្នុង Browser របស់អ្នកតែប៉ុណ្ណោះ (localStorage) មិនត្រូវបានរក្សាទុកលើម៉ាស៊ីនមេទេ។ "
                    "កុំប្រើលើកុំព្យូទ័រ/ទូរស័ព្ទសាធារណៈ។ បើលុបទិន្នន័យ Browser Key នឹងបាត់។")
         if st.button("✅ ពិនិត្យ និងបន្ថែម Key", key="user_key_save", use_container_width=True):
-            if provider == "xKiro":
+            if provider == "Claude":
+                _new = split_keys(typed)[:20]
+                _base = (oai_base_in or "https://api.anthropic.com").strip().rstrip("/")
+                _model = (oai_model_in or "claude-sonnet-5-5").strip()
+                _have = list(st.session_state.get("user_claude_keys", []))
+                if not _new:
+                    st.error("សូមបិទភ្ជាប់ Key យ៉ាងតិច ១។")
+                elif not _base.startswith("http"):
+                    st.error("Base URL ត្រូវចាប់ផ្តើមដោយ https://")
+                else:
+                    _added, _dup, _bad = 0, 0, []
+                    with st.spinner("កំពុងពិនិត្យ Key..."):
+                        for _k in _new:
+                            if _k in _have:
+                                _dup += 1
+                                continue
+                            _st, _msg, _ms = check_claude_key((_k, _base, _model))
+                            if _st in ("ok", "limit"):
+                                _have.append(_k)
+                                _added += 1
+                            else:
+                                _bad.append(f"{mask_key(_k)}: {_msg}")
+                    if _added:
+                        st.session_state["user_claude_keys"] = _have
+                        st.session_state["user_claude_base"] = _base
+                        st.session_state["user_claude_model"] = _model
+                        _ls_persist()
+                    _text = f"បានបន្ថែម {_added} Claude Key ✅"
+                    if _dup:
+                        _text += f" · ស្ទួន {_dup}"
+                    if _bad:
+                        _text += f" · មិនត្រឹមត្រូវ {len(_bad)}:\n\n" + "\n\n".join(_bad)
+                    st.session_state["_key_msg"] = ("ok" if _added else "warn", _text)
+                    if _added:
+                        st.session_state["_clear_key_input"] = True
+                    st.rerun()
+            elif provider == "xKiro":
                 ok, msg = oai_test(typed, oai_base_in or "https://api.xkiro.com/v1", oai_model_in or "qwen/qwen3.5-flash")
                 if ok:
                     st.session_state["user_oai_key"] = typed.strip()
@@ -5674,8 +5840,28 @@ def user_key_box():
                     if added:
                         st.session_state["_clear_key_input"] = True
                     st.rerun()
+        if st.button("🔍 ពិនិត្យ Key ទាំងអស់ — ណាប្រើបាន ណាប្រើមិនបាន", key="user_key_check_all", use_container_width=True):
+            with st.spinner("កំពុងពិនិត្យ..."):
+                st.session_state["_key_check"] = {"t": time.time(), "rows": run_key_checks()}
+        _kc = st.session_state.get("_key_check")
+        if _kc:
+            if not _kc["rows"]:
+                st.info("មិនទាន់មាន Key ណាមួយទេ។")
+            else:
+                _icon = {"ok": "✅ ប្រើបាន", "limit": "⚠️ អស់កូតា/Limit", "bad": "❌ មិនត្រឹមត្រូវ", "error": "❌ កំហុស"}
+                _c1, _c2, _c3 = st.columns(3)
+                _c1.metric("✅ ប្រើបាន", sum(1 for r in _kc["rows"] if r["state"] == "ok"))
+                _c2.metric("⚠️ អស់កូតា", sum(1 for r in _kc["rows"] if r["state"] == "limit"))
+                _c3.metric("❌ ប្រើមិនបាន", sum(1 for r in _kc["rows"] if r["state"] in ("bad", "error")))
+                st.dataframe(
+                    [{"ស្ថានភាព": _icon[r["state"]], "Provider": r["name"], "Key": r["key"],
+                      "ម៉ូដែល": r["model"], "ms": r["ms"], "ព័ត៌មាន": r["msg"]} for r in _kc["rows"]],
+                    use_container_width=True, hide_index=True)
+                st.caption("ពិនិត្យនៅម៉ោង " + time.strftime("%H:%M:%S", time.localtime(_kc["t"]))
+                           + " · ⚠️ = Key ត្រឹមត្រូវ តែអស់កូតាបណ្តោះអាសន្ន។")
         if any_saved and st.button("🧹 លុប Key ផ្ទាល់ខ្លួនទាំងអស់ (រួមទាំងក្នុង Browser)", key="user_key_clear_all", use_container_width=True):
-            for _k in ("user_groq_keys", "user_oai_key", "user_oai_base", "user_oai_model"):
+            for _k in ("user_groq_keys", "user_oai_key", "user_oai_base", "user_oai_model",
+                       "user_claude_keys", "user_claude_base", "user_claude_model"):
                 st.session_state.pop(_k, None)
             _ls_persist()
             st.rerun()
@@ -5716,44 +5902,9 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
 
-# =====================================================================
-#  ផ្ទាំងអ្នកគ្រប់គ្រង (ឃើញតែម្ចាស់កម្មវិធីម្នាក់ប៉ុណ្ណោះ)
-#  ► ដាក់ ADMIN_KEY ក្នុង Secrets (ឧ. ADMIN_KEY = "លេខសម្ងាត់ខ្លួនឯង")
-#  ► បើកកម្មវិធីដោយតំណ  https://កម្មវិធីរបស់អ្នក/?admin=លេខសម្ងាត់  ម្តង
-#    ក្រោយមកផ្ទាំង «🔐 Admin» នឹងលេចឡើង (អ្នកផ្សេងមើលមិនឃើញទេ)
-#  ► បើមិនបានដាក់ ADMIN_KEY ផ្ទាំងនេះមិនបង្ហាញទាល់តែសោះ
-# =====================================================================
-ADMIN_KEY = str(get_secret("ADMIN_KEY", "") or "").strip()
-
-
-def admin_unlocked():
-    if not ADMIN_KEY:
-        return False
-    if st.session_state.get("_kadmin"):
-        return True
-    try:
-        q = st.query_params.get("admin")
-        if isinstance(q, list):
-            q = q[0] if q else ""
-        if q and hmac.compare_digest(str(q), ADMIN_KEY):
-            st.session_state["_kadmin"] = True
-            try:
-                del st.query_params["admin"]
-            except Exception:
-                pass
-            return True
-    except Exception:
-        pass
-    return False
-
-
-IS_ADMIN = admin_unlocked()
-_tab_labels = ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
-if IS_ADMIN:
-    _tab_labels.append("🔐 Admin")
-_all_tabs = st.tabs(_tab_labels)
-tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = _all_tabs[:7]
-tab_admin = _all_tabs[7] if IS_ADMIN else None
+tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+)
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
@@ -6464,6 +6615,13 @@ if run:
         OAI_USER_CFG.update({"key": st.session_state.get("user_oai_key", ""),
                              "base": st.session_state.get("user_oai_base", ""),
                              "model": st.session_state.get("user_oai_model", "")})
+    _CLAUDE_PROVIDERS[:] = []
+    for _i, _k in enumerate(st.session_state.get("user_claude_keys", []), start=1):
+        _CLAUDE_PROVIDERS.append((f"Claude ផ្ទាល់ខ្លួន #{_i}", (
+            _k, st.session_state.get("user_claude_base", "https://api.anthropic.com"),
+            st.session_state.get("user_claude_model", "claude-sonnet-5-5"))))
+    _CLAUDE_PROVIDERS.extend(_CLAUDE_SECRET_PROVIDERS)
+    _CLAUDE_COOL.clear()
     job_folder = tempfile.mkdtemp(prefix="kac_")
     job_items = []
     for idx, it in enumerate(items, start=1):
@@ -6540,138 +6698,4 @@ with tab_out:
                 shutil.rmtree(job.folder, ignore_errors=True)
                 st.session_state.pop("job", None)
                 gc.collect()
-                st.rerun()
-
-
-# =====================================================================
-#  ពិនិត្យ API Key ថាណាប្រើបាន ណាប្រើមិនបាន (សម្រាប់ម្ចាស់ម្នាក់ឯង)
-# =====================================================================
-def _classify_http(code):
-    if code == 200:
-        return "ok", "ប្រើបាន"
-    if code in (401, 403):
-        return "bad", "Key មិនត្រឹមត្រូវ ឬត្រូវបានបិទ"
-    if code == 402:
-        return "bad", "អស់ credit / ត្រូវបង់ប្រាក់"
-    if code == 404:
-        return "bad", "URL ឬឈ្មោះម៉ូដែលខុស"
-    if code == 429:
-        return "limit", "Key ត្រឹមត្រូវ តែអស់កូតា ឬ Rate limit បណ្តោះអាសន្ន"
-    return "error", f"HTTP {code}"
-
-
-def _http_probe(url, headers, payload=None, timeout=30, secret=""):
-    """ហៅម្តង (គ្មាន retry) ហើយត្រឡប់ (state, សារ, ms)។ មិនបង្ហាញ Key ក្នុងសារ។"""
-    t0 = time.time()
-    body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(url, data=body, method="POST" if body else "GET", headers=headers)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            r.read(2000)
-        return "ok", "ប្រើបាន", int((time.time() - t0) * 1000)
-    except urllib.error.HTTPError as e:
-        state, msg = _classify_http(e.code)
-        detail = ""
-        try:
-            detail = e.read().decode("utf-8", "ignore")[:160].replace("\n", " ")
-        except Exception:
-            pass
-        if secret:
-            detail = detail.replace(secret, "***")
-        if detail and state in ("error", "bad"):
-            msg += " · " + detail
-        return state, msg, int((time.time() - t0) * 1000)
-    except Exception as e:
-        return "error", "បណ្តាញ/Timeout: " + str(e)[:120], int((time.time() - t0) * 1000)
-
-
-def check_groq_key(cfg):
-    key = cfg[0]
-    return _http_probe(GROQ_MODELS_URL, {"Authorization": f"Bearer {key}", "User-Agent": "Mozilla/5.0"}, secret=key)
-
-
-def check_claude_key(cfg):
-    key, base, model = cfg
-    url = base + ("/messages" if base.endswith("/v1") else "/v1/messages")
-    headers = {"x-api-key": key, "Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01",
-               "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-    payload = {"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
-    return _http_probe(url, headers, payload, secret=key)
-
-
-def check_openai_key(cfg):
-    key, base, model = cfg
-    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-    payload = {"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
-    return _http_probe(base.rstrip("/") + "/chat/completions", headers, payload, secret=key)
-
-
-def admin_key_targets():
-    """បញ្ជី Key ទាំងអស់ដែលបានដាក់ក្នុង Secrets: (ឈ្មោះ, Key បិទបាំង, ប្រភេទ, cfg, ម៉ូដែល)។"""
-    rows = []
-    for i, k in enumerate(split_keys(GROQ_KEY), start=1):
-        rows.append((f"Groq #{i}", mask_key(k), "groq", (k,), "whisper + chat"))
-    for name, cfg in _CLAUDE_PROVIDERS:
-        rows.append((name, mask_key(cfg[0]), "claude", cfg, cfg[2]))
-    for name, cfg in _EXTRA_PROVIDERS:
-        rows.append((name, mask_key(cfg[0]), "openai", cfg, cfg[2]))
-    if cc_enabled():
-        rows.append(("CodeCraft", mask_key(CC_KEY), "openai", (CC_KEY, CC_BASE, CC_MODEL), CC_MODEL))
-    if OAI_KEY and OAI_BASE and OAI_MODEL:
-        rows.append(("xKiro", mask_key(OAI_KEY), "openai", (OAI_KEY, OAI_BASE, OAI_MODEL), OAI_MODEL))
-    return rows
-
-
-def run_key_checks():
-    targets = admin_key_targets()
-    fn = {"groq": check_groq_key, "claude": check_claude_key, "openai": check_openai_key}
-
-    def one(t):
-        name, masked, kind, cfg, model = t
-        try:
-            state, msg, ms = fn[kind](cfg)
-        except Exception as e:
-            state, msg, ms = "error", str(e)[:140], 0
-        return {"name": name, "key": masked, "model": model, "state": state, "msg": msg, "ms": ms}
-
-    if not targets:
-        return []
-    with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
-        return list(pool.map(one, targets))
-
-
-if IS_ADMIN and tab_admin is not None:
-    with tab_admin:
-        with st.container(border=True):
-            st.markdown("**🔐 ពិនិត្យ API Key (ម្ចាស់ម្នាក់ឯង)**")
-            st.caption("ផ្ទាំងនេះបង្ហាញតែអ្នកដែលបើកដោយ ?admin=... ប៉ុណ្ណោះ។ Key ត្រូវបានបិទបាំង (បង្ហាញតែដើម និងចុង)។ "
-                       "ការពិនិត្យនីមួយៗប្រើ token តិចតួចបំផុត (៨ token)។")
-            _n_t = len(admin_key_targets())
-            if _n_t == 0:
-                st.warning("មិនមាន API Key ណាមួយក្នុង Secrets ទេ។")
-            if st.button(f"🔍 ពិនិត្យ Key ទាំងអស់ ({_n_t})", type="primary", use_container_width=True,
-                         disabled=(_n_t == 0), key="admin_check_btn"):
-                with st.spinner("កំពុងពិនិត្យ..."):
-                    st.session_state["_admin_results"] = {"t": time.time(), "rows": run_key_checks()}
-            _res_a = st.session_state.get("_admin_results")
-            if _res_a:
-                _rows = _res_a["rows"]
-                _ok = sum(1 for r in _rows if r["state"] == "ok")
-                _lim = sum(1 for r in _rows if r["state"] == "limit")
-                _bad = sum(1 for r in _rows if r["state"] in ("bad", "error"))
-                _m1, _m2, _m3 = st.columns(3)
-                _m1.metric("✅ ប្រើបាន", _ok)
-                _m2.metric("⚠️ អស់កូតា", _lim)
-                _m3.metric("❌ ប្រើមិនបាន", _bad)
-                _icon = {"ok": "✅ ប្រើបាន", "limit": "⚠️ អស់កូតា/Limit", "bad": "❌ មិនត្រឹមត្រូវ", "error": "❌ កំហុស"}
-                st.dataframe(
-                    [{"ស្ថានភាព": _icon[r["state"]], "Provider": r["name"], "Key": r["key"],
-                      "ម៉ូដែល": r["model"], "ms": r["ms"], "ព័ត៌មាន": r["msg"]} for r in _rows],
-                    use_container_width=True, hide_index=True)
-                st.caption("ពិនិត្យនៅម៉ោង " + time.strftime("%H:%M:%S", time.localtime(_res_a["t"]))
-                           + " · ⚠️ មានន័យថា Key ត្រឹមត្រូវ ហើយនឹងប្រើបានវិញពេលកូតាត្រឡប់មកវិញ។")
-            st.caption("ស្ថានភាពម៉ាស៊ីនបច្ចុប្បន្ន៖ " + provider_status())
-            if st.button("🔒 ចាក់សោវិញ (លាក់ផ្ទាំងនេះ)", use_container_width=True, key="admin_lock_btn"):
-                st.session_state.pop("_kadmin", None)
-                st.session_state.pop("_admin_results", None)
                 st.rerun()
