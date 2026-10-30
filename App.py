@@ -6486,8 +6486,7 @@ timbre_file = None
 dub_offset = 0.0
 tight_sync = False
 
-# ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
-start_slot = st.container(key="startbar")
+# ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
 
 tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
     ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
@@ -7158,6 +7157,8 @@ if _sq and st.session_state.get("_run_split"):
     too_many = len(_sq) > SPLIT_QUEUE_MAX
 
 # ============================ ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) ============================
+# Place the action slot AFTER all tabs so Streamlit does not reserve a tall empty block above the dashboard.
+start_slot = st.container(key="startbar")
 run = False
 with start_slot:
     if busy:
@@ -7418,3 +7419,86 @@ button[data-baseweb="tab"] p {font-size:.78rem !important;white-space:nowrap !im
 </style>
 """
 st.markdown(SCREENSHOT_LAYOUT_CORRECTION_CSS, unsafe_allow_html=True)
+
+# =====================================================================
+# FINAL DESKTOP MODE — landscape phone behaves like a compact desktop UI
+# Keep the three-column workspace, shrink the whole interface to the viewport,
+# collapse optional settings, and reserve a small non-overlapping action bar.
+# =====================================================================
+DESKTOP_MODE_VIEWPORT_CSS = r"""
+<style>
+@media screen and (orientation:landscape) and (max-height:700px) and (min-width:600px) {
+  html { zoom:.80 !important; }
+  html, body, .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] {
+    width:100% !important; height:100dvh !important; min-height:100dvh !important;
+    max-height:100dvh !important; overflow:hidden !important;
+  }
+  .block-container {
+    width:125vw !important; max-width:none !important; height:125dvh !important;
+    min-height:0 !important; max-height:125dvh !important; overflow:hidden !important;
+    padding:3px 8px 42px !important; margin:0 !important;
+  }
+  [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stDecoration"],
+  [data-testid="stStatusWidget"] {display:none !important;height:0 !important}
+  [data-testid="stVerticalBlock"] {gap:.16rem !important}
+  [data-testid="stElementContainer"] {margin:0 !important;padding:0 !important}
+  .kvai-head {height:52px !important;min-height:52px !important;max-height:52px !important;
+    margin:0 0 2px !important;padding:3px 8px !important;gap:6px !important}
+  .kvai-logo {width:34px !important;height:34px !important;flex:0 0 34px !important;font-size:18px !important}
+  .kvai-title h1 {font-size:1.08rem !important;line-height:1 !important}
+  .kvai-title p {display:none !important}
+  .kvai-badge {font-size:.62rem !important;padding:3px 7px !important}
+  iframe[title="streamlit.components.v1.html"] {height:20px !important;max-height:20px !important}
+  [data-testid="stElementContainer"]:has(iframe[title="streamlit.components.v1.html"]) {
+    height:20px !important;min-height:20px !important;margin:0 !important;padding:0 !important}
+  /* Desktop-style tabs: all seven stay in one row. */
+  [data-baseweb="tab-list"] {display:flex !important;flex-wrap:nowrap !important;gap:3px !important;
+    padding:2px !important;margin:1px 0 3px !important;overflow:hidden !important}
+  button[data-baseweb="tab"] {flex:1 1 0 !important;min-width:0 !important;height:29px !important;
+    padding:0 2px !important;border-radius:7px !important}
+  button[data-baseweb="tab"] p {font-size:.66rem !important;white-space:nowrap !important;
+    overflow:hidden !important;text-overflow:ellipsis !important}
+  [data-baseweb="tab-panel"] {height:calc(100dvh - 112px) !important;max-height:calc(100dvh - 112px) !important;
+    overflow:hidden !important;padding:0 !important}
+  /* Keep the real 3-column desktop dashboard; never stack the columns. */
+  [data-testid="stHorizontalBlock"] {display:flex !important;flex-wrap:nowrap !important;gap:.25rem !important}
+  [data-testid="stColumn"] {min-width:0 !important;flex:1 1 0 !important}
+  .kvai-panel-title {font-size:.70rem !important;padding:2px 5px !important;margin:0 0 1px !important}
+  .kvai-step {width:19px !important;height:19px !important;font-size:.64rem !important}
+  div[data-testid="stVerticalBlockBorderWrapper"] {padding:2px !important;border-radius:8px !important}
+  [data-testid="stWidgetLabel"] p, .stApp label {font-size:.62rem !important;margin:0 !important;line-height:1.02 !important}
+  [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+    font-size:.53rem !important;line-height:1.02 !important;margin:0 !important}
+  [data-testid="stFileUploaderDropzone"] {min-height:31px !important;padding:1px 3px !important}
+  [data-testid="stFileUploaderDropzoneInstructions"] {padding:0 !important}
+  [data-testid="stFileUploaderDropzoneInstructions"] span,
+  [data-testid="stFileUploaderDropzoneInstructions"] small {font-size:.53rem !important}
+  [data-testid="stVideo"] video, .kvai-empty-preview {height:72px !important;max-height:72px !important}
+  .kvai-play {width:29px !important;height:29px !important;font-size:14px !important}
+  .kvai-filmstrip {display:none !important}
+  [data-baseweb="select"]>div {min-height:25px !important}
+  .stTextInput input, .stNumberInput input {min-height:24px !important}
+  .stTextArea textarea {height:34px !important;min-height:34px !important}
+  .stButton>button, .stDownloadButton>button {min-height:25px !important;padding:1px 4px !important;
+    font-size:.60rem !important;border-radius:6px !important}
+  [data-testid="stRadio"] [role="radiogroup"] {gap:2px !important;flex-wrap:nowrap !important}
+  [data-testid="stRadio"] label {padding:2px 3px !important;font-size:.56rem !important}
+  [data-testid="stToggle"], [data-testid="stCheckbox"], [data-testid="stSlider"] {padding:0 !important}
+  [data-testid="stExpander"] summary {min-height:22px !important;padding:1px 5px !important}
+  [data-testid="stExpander"] summary p {font-size:.60rem !important}
+  [data-testid="stAlert"] {padding:2px 5px !important;margin:1px 0 !important}
+  [data-testid="stAlert"] p {font-size:.57rem !important;line-height:1.02 !important}
+  /* Start button fixed to the screen edge; slot is now at document end, not above the tabs. */
+  .st-key-startbar {position:fixed !important;left:0 !important;right:0 !important;bottom:0 !important;
+    transform:none !important;width:100% !important;z-index:1000 !important;margin:0 !important;
+    padding:2px 6px !important;border-radius:0 !important;
+    background:linear-gradient(90deg,rgba(255,20,147,.2),rgba(4,9,30,.97),rgba(0,210,255,.2)) !important;
+    border-top:1px solid rgba(0,220,255,.5) !important;backdrop-filter:blur(7px) !important}
+  .st-key-startbar [data-testid="stVerticalBlockBorderWrapper"],
+  .st-key-startbar [data-testid="stVerticalBlock"] {background:transparent !important;border:0 !important;box-shadow:none !important}
+  .st-key-startbar .stButton>button {min-height:28px !important;font-size:.68rem !important;
+    padding:1px 5px !important;color:#fff !important;opacity:1 !important}
+}
+</style>
+"""
+st.markdown(DESKTOP_MODE_VIEWPORT_CSS, unsafe_allow_html=True)
