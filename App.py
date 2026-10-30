@@ -2072,6 +2072,95 @@ def cc_enabled():
     return bool(CC_KEY and CC_BASE.startswith("http") and CC_MODEL)
 
 
+# =====================================================================
+#  Claude (Anthropic) API — ម៉ាស៊ីនបកប្រែល្អបំផុត (ត្រូវបានសាកមុនគេ បើមាន Key)
+#  Secrets:
+#    ANTHROPIC_API_KEY  (ឬ CLAUDE_API_KEY)  ← ដាក់បានច្រើន Key: ANTHROPIC_API_KEYS ឬ ANTHROPIC_API_KEY_1, _2 ...
+#    ANTHROPIC_BASE_URL (មិនចាំបាច់ — លំនាំដើម https://api.anthropic.com
+#                        បើប្រើ Claude Code API ពីហាង/proxy សូមដាក់ Base URL ដែលហាងផ្តល់ឱ្យ)
+#    ANTHROPIC_MODEL    (មិនចាំបាច់ — លំនាំដើម claude-sonnet-5-5)
+# =====================================================================
+_claude_vals = [
+    get_secret("ANTHROPIC_API_KEY", ""), get_secret("ANTHROPIC_API_KEYS", ""),
+    get_secret("CLAUDE_API_KEY", ""), get_secret("CLAUDE_API_KEYS", ""),
+]
+for _ci in range(1, 21):
+    _claude_vals.append(get_secret(f"ANTHROPIC_API_KEY_{_ci}", ""))
+CLAUDE_KEYS = split_keys(_claude_vals)
+CLAUDE_BASE = (str(get_secret("ANTHROPIC_BASE_URL", "https://api.anthropic.com") or "").strip().rstrip("/")
+               or "https://api.anthropic.com")
+CLAUDE_MODEL = (str(get_secret("ANTHROPIC_MODEL", "claude-sonnet-5-5") or "").strip() or "claude-sonnet-5-5")
+_CLAUDE_PROVIDERS = [(f"Claude #{_i}", (_k, CLAUDE_BASE, CLAUDE_MODEL)) for _i, _k in enumerate(CLAUDE_KEYS, start=1)]
+_CLAUDE_COOL = {}
+
+
+def claude_enabled():
+    return bool(_CLAUDE_PROVIDERS)
+
+
+def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
+    """ហៅ Claude តាម Anthropic Messages API (/v1/messages) ហើយទទួលលទ្ធផល JSON {"translations": [...]}។"""
+    _key, _base, _model = cfg
+    if not (_key and _base and _model):
+        raise RuntimeError("Claude: សូមកំណត់ ANTHROPIC_API_KEY ក្នុង Secrets។")
+    numbered = "\n".join(
+        f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and i < len(budgets) and budgets[i] else "") + str(t)
+        for i, t in enumerate(texts)
+    )
+    sys_text = (system or TRANS_SYSTEM) + ' Return ONLY the JSON object {"translations": [...]} with no other text.'
+    url = _base + ("/messages" if _base.endswith("/v1") else "/v1/messages")
+    payload = {
+        "model": _model,
+        "max_tokens": 4096,
+        "temperature": 0.1,
+        "system": sys_text,
+        "messages": [{"role": "user", "content": numbered}],
+    }
+    body = json.dumps(payload).encode("utf-8")
+    last = "Claude: មិនទាន់ទទួលបានចម្លើយ"
+    for attempt in range(3):
+        request = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={
+                "x-api-key": _key,
+                "Authorization": f"Bearer {_key}",
+                "anthropic-version": "2023-06-01",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=60) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            content = "".join(b.get("text", "") for b in (data.get("content") or []) if b.get("type") == "text")
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+            content = re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=re.M).strip()
+            match = re.search(r"\{.*\}", content, flags=re.S)
+            parsed = json.loads(match.group(0) if match else content)
+            items = parsed.get("translations") or []
+            if len(items) == len(texts):
+                if raw:
+                    return list(items)
+                return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
+            last = "Claude: ឆ្លើយតបមិនគ្រប់ចំនួនបន្ទាត់"
+        except urllib.error.HTTPError as e:
+            detail = ""
+            try:
+                detail = e.read().decode("utf-8", "ignore")[:220]
+            except Exception:
+                pass
+            last = f"Claude HTTP {e.code}: {detail}".strip()
+            if e.code in (429, 500, 502, 503, 529) and attempt < 1:
+                time.sleep(2)
+                continue
+            raise RuntimeError(last)
+        except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
+            raise RuntimeError(f"Claude បណ្តាញ/Timeout: {e}")
+        except Exception as e:
+            last = f"Claude: {e}"
+    raise RuntimeError(last[:400])
+
+
 # Additional OpenAI-compatible providers. Add only providers for which the owner
 # has supplied a key. Free-tier availability/quota is controlled by each provider.
 # Cloudflare BASE_URL must include the account id, e.g. .../accounts/<ID>/ai/v1.
@@ -2128,7 +2217,7 @@ def xk_enabled():
 
 def oai_enabled():
     """មានម៉ាស៊ីនបកប្រែ OpenAI-compatible យ៉ាងហោចណាស់មួយ។"""
-    return xk_enabled() or cc_enabled() or extra_provider_enabled()
+    return claude_enabled() or xk_enabled() or cc_enabled() or extra_provider_enabled()
 
 
 def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
@@ -2234,6 +2323,14 @@ def oai_test(key, base, model):
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
     """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft → xKiro (ម៉ាស៊ីនបម្រុង)។"""
     groq_err = None
+    if claude_enabled():
+        for _cn, _cc in _CLAUDE_PROVIDERS:
+            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
+            if _cl.get("until", 0) > time.time():
+                continue
+            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
+            if _cr is not None:
+                return _cr
     if api_key:
         try:
             return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
@@ -2258,10 +2355,10 @@ _EXTRA_COOL = {}
 _LAST_AI_ERR = {}
 
 
-def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKiro"):
+def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKiro", fn=None):
     for attempt in range(2):
         try:
-            return oai_translate_chunk(texts, budgets, system, to_english, cfg=cfg, raw=raw)
+            return (fn or oai_translate_chunk)(texts, budgets, system, to_english, cfg=cfg, raw=raw)
         except Exception as e:
             _LAST_AI_ERR[name] = str(e)[:260]   # ទុកមូលហេតុពិត ដើម្បីបង្ហាញអ្នកប្រើ
             if "ចំនួនបន្ទាត់" in str(e):
@@ -2282,6 +2379,10 @@ def provider_status():
         out.append("Groq ✓" if (GROQ_KEY or has_user_keys()) else "Groq ✗ (គ្មាន key)")
     except Exception:
         out.append("Groq ?")
+    if claude_enabled():
+        out.append(f"Claude ×{len(_CLAUDE_PROVIDERS)} ✓")
+    else:
+        out.append("Claude ✗ (គ្មាន ANTHROPIC_API_KEY)")
     names = [n for n, _ in _EXTRA_PROVIDERS]
     n_or = sum(1 for n in names if n.startswith("OpenRouter"))
     out.append(f"OpenRouter ×{n_or}" if n_or else "OpenRouter ✗ (គ្មាន key)")
@@ -2301,6 +2402,15 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
     """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft → xKiro
     (មានកំណត់ពេលសរុប ១២០ វិនាទីក្នុងមួយបាច់)។"""
     t_end = time.time() + 120
+    for _name, _cfg in _CLAUDE_PROVIDERS:
+        if time.time() >= t_end:
+            break
+        _cool = _CLAUDE_COOL.setdefault(_name, {"until": 0.0})
+        if _cool.get("until", 0) > time.time():
+            continue
+        r = _try_provider(_cool, _cfg, texts, budgets, system, to_english, raw, name=_name, fn=claude_translate_chunk)
+        if r is not None:
+            return r
     for _name, _cfg in _EXTRA_PROVIDERS:
         if time.time() >= t_end:
             break
@@ -5932,9 +6042,10 @@ with tab_trans:
         if not effective_groq_key():
             st.warning("សូមដាក់ Groq API Key សម្រាប់សម្គាល់សំឡេង និងកំណត់ API បកប្រែយ៉ាងហោចណាស់មួយក្នុង Secrets ឬបញ្ចូល xKiro Key ផ្ទាល់ខ្លួន។")
         engine_label = st.selectbox("ម៉ាស៊ីនដំណើរការ", engine_options, index=0, disabled=True)
-        st.caption("Groq ប្រើសម្រាប់សម្គាល់សំឡេង។ ការបកប្រែសាកល្បង xKiro និង CodeCraft ជាមុន រួចបន្តទៅ Provider ផ្សេងៗដែលម្ចាស់កម្មវិធីបានកំណត់ក្នុង Secrets។")
+        st.caption("Groq ប្រើសម្រាប់សម្គាល់សំឡេង។ ការបកប្រែសាកល្បង Claude (បើមាន Key) មុនគេ រួច xKiro និង CodeCraft រួចបន្តទៅ Provider ផ្សេងៗដែលម្ចាស់កម្មវិធីបានកំណត់ក្នុង Secrets។")
         with st.expander("🌐 API ដែលអាចភ្ជាប់តាម Secrets"):
             st.markdown("""
+            - `ANTHROPIC_API_KEY` (ឬ `ANTHROPIC_API_KEYS = ["key1", "key2"]` / `ANTHROPIC_API_KEY_1`, `_2`), `ANTHROPIC_BASE_URL` (មិនចាំបាច់), `ANTHROPIC_MODEL` (មិនចាំបាច់)
             - `XKIRO_API_KEY`, `XKIRO_BASE_URL`, `XKIRO_MODEL`
             - `CODECRAFT_API_KEY`, `CODECRAFT_BASE_URL`, `CODECRAFT_MODEL`
             - `OPENROUTER_API_KEYS = ["key1", "key2", ...]` ឬ `OPENROUTER_API_KEY_1`, `OPENROUTER_API_KEY_2` និង `OPENROUTER_MODEL` (Base URL លំនាំដើម `https://openrouter.ai/api/v1`)
