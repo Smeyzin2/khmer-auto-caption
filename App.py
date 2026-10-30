@@ -116,11 +116,11 @@ if IS_STREAMLIT_CLOUD and os.environ.get("BLOCK_STREAMLIT_CLOUD") == "1":
 #  THEME (Khmer Video AI — light)
 # =====================================================================
 for _k, _v in {
-    "theme.base": "light",
-    "theme.primaryColor": "#7C3AED",
-    "theme.backgroundColor": "#F4F7FF",
-    "theme.secondaryBackgroundColor": "#FFFFFF",
-    "theme.textColor": "#1F2A44",
+    "theme.base": "dark",
+    "theme.primaryColor": "#FF2DAA",
+    "theme.backgroundColor": "#070B22",
+    "theme.secondaryBackgroundColor": "#10183D",
+    "theme.textColor": "#F5F7FF",
     "server.maxUploadSize": 100,
 }.items():
     try:
@@ -471,6 +471,51 @@ def apply_theme():
     st.markdown(COMPACT_CSS, unsafe_allow_html=True)
 
 
+LANDSCAPE_NEON_CSS = """
+<style>
+:root{--ink:#F5F7FF;--soft:#B9C7F5;--bg:#070B22;--card:#10183D;--card2:#151F4B;--line:rgba(91,184,255,.42);--p1:#FF2DAA;--p2:#16CFFF;--gold:#FFD34E}
+html,body,.stApp,[data-testid="stAppViewContainer"]{background:radial-gradient(ellipse at 8% 5%,rgba(255,34,170,.23),transparent 34%),radial-gradient(ellipse at 92% 8%,rgba(0,213,255,.22),transparent 34%),linear-gradient(135deg,#05091D,#10143B 48%,#080D29)!important;color:#F5F7FF!important}
+.stApp:before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background:linear-gradient(110deg,transparent,rgba(20,210,255,.04),transparent);background-size:220% 100%;animation:kvai-light-run 8s linear infinite}
+@keyframes kvai-light-run{from{background-position:200% 0}to{background-position:-20% 0}}
+.block-container{max-width:1600px!important;padding:.5rem .8rem 5rem!important;position:relative;z-index:1}
+.stApp p,.stApp label,.stApp h1,.stApp h2,.stApp h3,.stApp li,.stApp [data-testid="stMarkdownContainer"],[data-testid="stWidgetLabel"] p{color:#F5F7FF!important}
+[data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{color:#B9C7F5!important}
+.kvai-head{padding:8px 13px;border:1px solid rgba(65,195,255,.45);border-radius:18px;background:linear-gradient(105deg,rgba(255,45,170,.2),rgba(14,26,72,.94),rgba(22,207,255,.17));box-shadow:0 0 22px rgba(22,207,255,.15)}
+.kvai-logo{background:linear-gradient(135deg,#FF2DAA,#7B42FF,#16CFFF)!important;box-shadow:0 0 22px rgba(255,45,170,.5)!important}
+.kvai-title h1{color:white!important;text-shadow:0 0 16px rgba(22,207,255,.5)}
+.kvai-title h1 span{background:linear-gradient(90deg,#FF55C8,#43E7FF,#FFE36A);-webkit-background-clip:text;background-clip:text;color:transparent!important}
+.kvai-badge{color:#FFE36A!important;background:rgba(255,211,78,.12)!important;border-color:#FFD34E!important}
+[data-baseweb="tab-list"]{display:flex!important;gap:5px!important;padding:5px!important;background:#080F30!important;border:1px solid rgba(70,190,255,.45)!important}
+button[data-baseweb="tab"]{flex:1 1 0!important;min-width:max-content!important;height:43px!important;border:1px solid rgba(120,150,255,.22)!important;border-radius:12px!important;background:linear-gradient(145deg,#18234F,#101735)!important;color:#DCE7FF!important}
+button[data-baseweb="tab"][aria-selected="true"]{background:linear-gradient(110deg,#F52AA7,#783BFF,#08BFEF)!important;box-shadow:0 0 17px rgba(211,45,255,.42)!important;color:white!important}
+button[data-baseweb="tab"] p{color:inherit!important;font-weight:800!important;white-space:nowrap}
+div[data-testid="stVerticalBlockBorderWrapper"]{background:linear-gradient(145deg,rgba(23,34,82,.97),rgba(10,17,48,.98))!important;border:1px solid rgba(75,190,255,.38)!important;border-radius:16px!important;box-shadow:0 7px 24px rgba(0,0,0,.22)!important}
+div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlockBorderWrapper"]{background:rgba(25,36,83,.65)!important}
+[data-baseweb="select"]>div,.stTextInput input,.stNumberInput input,.stTextArea textarea,[data-baseweb="textarea"]>div{background:#0C1538!important;color:white!important;border:1px solid #3B8FC8!important}
+[data-baseweb="select"] *{color:white!important}
+[data-baseweb="popover"] ul,[data-baseweb="popover"] li,[data-baseweb="menu"]{background:#101A43!important;color:white!important}
+[data-testid="stFileUploaderDropzone"]{background:rgba(28,50,111,.65)!important;border:2px dashed #20D7FF!important;box-shadow:inset 0 0 20px rgba(22,207,255,.08)}
+[data-testid="stFileUploaderDropzone"] *{color:white!important}
+.stButton>button,.stDownloadButton>button{background:linear-gradient(145deg,#172451,#101735)!important;color:white!important;border:1px solid rgba(68,204,255,.65)!important;border-radius:12px!important;min-height:44px!important}
+.stButton>button[kind="primary"],.stDownloadButton>button[kind="primary"]{background:linear-gradient(100deg,#FF279F,#853CFF,#08C8EF)!important;color:white!important;border:0!important;box-shadow:0 0 20px rgba(211,45,255,.38)!important}
+.stButton>button:hover,.stDownloadButton>button:hover{transform:translateY(-2px);border-color:#FFE36A!important;box-shadow:0 0 17px rgba(22,207,255,.35)!important}
+[data-testid="stRadio"] label{background:#111D49!important;border-color:#3C75B5!important;color:white!important}
+[data-testid="stRadio"] label:has(input:checked){background:linear-gradient(100deg,#E82CA9,#6745FF)!important}
+[data-testid="stToggle"] label:has(input:checked)>div:first-child{background:linear-gradient(90deg,#FF2DAA,#16CFFF)!important}
+[data-testid="stProgress"]>div>div>div{background:linear-gradient(90deg,#FF2DAA,#8B42FF,#16CFFF)!important}
+[data-testid="stMetric"]{background:#111B43!important;border:1px solid #3C8FC5!important}
+[data-testid="stMetricValue"],[data-testid="stMetricValue"] *{color:white!important}
+[data-testid="stAlert"],[data-testid="stExpander"]{background:#111A40!important;border:1px solid #3B8FC8!important}
+[data-testid="stVideo"] video{max-height:190px}
+.kvai-prev{border-color:#27D9FF!important;box-shadow:0 0 20px rgba(22,207,255,.18)}
+@media(orientation:landscape) and (max-height:600px){.block-container{padding:.25rem .55rem 4rem!important}.kvai-head{padding:5px 10px;margin-bottom:4px}.kvai-logo{width:34px;height:34px;font-size:19px}.kvai-title h1{font-size:1.12rem!important}.kvai-title p,.kvai-badge{font-size:.68rem}button[data-baseweb="tab"]{height:35px!important}[data-testid="stVerticalBlock"]{gap:.35rem!important}div[data-testid="stVerticalBlockBorderWrapper"]{padding:2px!important}[data-testid="stVideo"] video{max-height:115px}.kvai-prev{height:105px!important}.stButton>button,.stDownloadButton>button{min-height:35px!important}}
+@media(max-width:700px){[data-baseweb="tab-list"]{overflow-x:auto!important}button[data-baseweb="tab"]{flex:0 0 auto!important;padding:0 9px!important}}
+</style>
+"""
+def apply_neon_theme():
+    st.markdown(LANDSCAPE_NEON_CSS, unsafe_allow_html=True)
+
+
 def render_header():
     st.markdown(
         """
@@ -548,6 +593,7 @@ def srt_time(sec):
 
 
 apply_theme()
+apply_neon_theme()
 
 
 def server_ram_info():
@@ -5952,6 +5998,24 @@ GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិ�
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
+components.html("""
+<div style="display:flex;justify-content:flex-end;padding:0 2px 6px;font-family:system-ui">
+<button id="kvaiRotate" style="cursor:pointer;border:1px solid #25D9FF;border-radius:12px;padding:9px 15px;color:white;font-weight:800;background:linear-gradient(100deg,#FF279F,#853CFF,#08C8EF);box-shadow:0 0 15px #168ac066">
+📱 បង្វិលទូរសព្ទផ្ដេក / ពេញអេក្រង់
+</button><span id="kvaiRotateMsg" style="color:#B9C7F5;font-size:11px;margin:auto 8px"></span>
+</div>
+<script>
+document.getElementById('kvaiRotate').addEventListener('click',async()=>{
+ const msg=document.getElementById('kvaiRotateMsg');
+ try{
+  const d=window.parent.document;
+  if(!d.fullscreenElement && d.documentElement.requestFullscreen) await d.documentElement.requestFullscreen();
+  if(window.parent.screen?.orientation?.lock){await window.parent.screen.orientation.lock('landscape');msg.textContent='ផ្ដេករួច ✓';}
+  else{msg.textContent='សូមបង្វិលទូរសព្ទទៅផ្ដេក';}
+ }catch(e){msg.textContent='បើមិនបង្វិល សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
+});
+</script>
+""",height=52,scrolling=False)
 ls_sync()
 
 if not GROQ_KEY and not oai_enabled() and not has_user_keys():
