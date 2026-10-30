@@ -7182,3 +7182,122 @@ with tab_out:
                 st.session_state.pop("job", None)
                 gc.collect()
                 st.rerun()
+
+
+# ---------- Screenshot-specific correction: remove clipping and footer overlay ----------
+# The previous final CSS accidentally re-enabled overflow:hidden and a fixed footer.
+# Keep every Streamlit widget reachable; the action button is placed in normal flow.
+SCREENSHOT_LAYOUT_CORRECTION_CSS = """
+<style>
+/* Restore the Angkor background and animated neon light beams. */
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+  background-color:#05091d !important;
+  color:#f7f8ff !important;
+}
+.stApp::before {
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:
+    repeating-linear-gradient(112deg,transparent 0 13%,rgba(0,220,255,.10) 13.15%,transparent 13.5% 28%),
+    linear-gradient(105deg,transparent 35%,rgba(255,25,170,.16) 48%,transparent 62%);
+  background-size:190% 100%,230% 100%;
+  animation:kvai-screenshot-lights 7s linear infinite;
+}
+@keyframes kvai-screenshot-lights {
+  from {background-position:190% 0,210% 0}
+  to {background-position:-20% 0,-30% 0}
+}
+[data-testid="stMain"] > div, .block-container {position:relative;z-index:1}
+
+/* Do not lock the document to a short viewport or clip widgets. */
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+  height:auto !important; min-height:100% !important;
+  max-height:none !important; overflow-x:hidden !important; overflow-y:auto !important;
+}
+[data-testid="stMain"] {overflow:visible !important}
+.block-container {
+  height:auto !important; min-height:100dvh !important; max-height:none !important;
+  overflow:visible !important; max-width:1800px !important;
+  padding:4px 10px 12px !important;
+}
+
+/* Remove the large blank band after the header and compact orientation control. */
+.kvai-head {height:76px !important;min-height:76px !important;max-height:76px !important;
+  margin:0 0 3px !important;padding:5px 12px !important}
+.kvai-logo {width:44px !important;height:44px !important;flex-basis:44px !important}
+.kvai-title h1 {font-size:clamp(1.05rem,2vw,1.5rem) !important}
+.kvai-title p {font-size:.72rem !important;margin:0 !important}
+.kvai-badge {font-size:.72rem !important;padding:4px 9px !important}
+iframe[title="streamlit.components.v1.html"] {
+  display:block !important;height:32px !important;max-height:32px !important;
+  margin:0 !important;padding:0 !important;
+}
+[data-testid="stElementContainer"]:has(iframe[title="streamlit.components.v1.html"]) {
+  height:32px !important;min-height:32px !important;margin:0 !important;padding:0 !important;
+}
+[data-testid="stVerticalBlock"] {gap:.25rem !important}
+[data-testid="stElementContainer"] {margin-bottom:0 !important}
+
+/* Tabs and dashboard columns: compact desktop proportions, preserve clickability. */
+[data-baseweb="tab-list"] {display:flex !important;gap:4px !important;
+  margin:2px 0 4px !important;padding:3px !important}
+button[data-baseweb="tab"] {height:36px !important;min-width:0 !important;padding:0 8px !important}
+button[data-baseweb="tab"] p {font-size:.78rem !important;white-space:nowrap !important}
+[data-baseweb="tab-panel"] {height:auto !important;max-height:none !important;
+  overflow:visible !important;padding:2px 0 8px !important}
+[data-testid="stHorizontalBlock"] {gap:.4rem !important;flex-wrap:nowrap !important}
+[data-testid="stColumn"] {min-width:0 !important}
+[data-testid="stWidgetLabel"] p {font-size:.75rem !important;margin-bottom:1px !important}
+[data-testid="stFileUploaderDropzone"] {min-height:46px !important;padding:3px 6px !important}
+[data-testid="stVideo"] video {max-height:130px !important;object-fit:contain !important}
+.kvai-empty-preview {height:130px !important}
+.stButton>button,.stDownloadButton>button {min-height:34px !important;font-size:.76rem !important}
+
+/* Critical: never pin the start button over the dashboard. Its container is before tabs,
+   so it becomes a compact action strip directly above the tab row. */
+.st-key-startbar {
+  position:relative !important;inset:auto !important;left:auto !important;bottom:auto !important;
+  transform:none !important;width:100% !important;z-index:4 !important;
+  margin:2px 0 4px !important;padding:3px 8px !important;
+  background:linear-gradient(90deg,rgba(255,20,147,.18),rgba(6,15,48,.94),rgba(0,210,255,.18)) !important;
+  border:1px solid rgba(0,220,255,.55) !important;border-radius:12px !important;
+  box-shadow:0 0 13px rgba(0,190,255,.15) !important;
+}
+.st-key-startbar [data-testid="stVerticalBlockBorderWrapper"],
+.st-key-startbar [data-testid="stVerticalBlock"] {
+  background:transparent !important;border:0 !important;box-shadow:none !important;
+}
+.st-key-startbar .stButton>button,.st-key-startbar .stButton>button:disabled {
+  min-height:38px !important;opacity:1 !important;color:#fff !important;
+  border:1px solid #19ddff !important;border-radius:11px !important;
+  background:linear-gradient(100deg,#ff1493,#843bff,#00cfff) !important;
+  box-shadow:0 0 14px rgba(0,207,255,.25) !important;
+}
+
+/* Keep warning compact so it does not push the workspace down. */
+[data-testid="stAlert"] {padding:6px 10px !important;margin:3px 0 5px !important}
+[data-testid="stAlert"] p {font-size:.78rem !important;line-height:1.25 !important;margin:0 !important}
+
+/* Landscape: fit the desktop-like layout more tightly without clipping the controls.
+   If a device has an unusually short viewport, natural scrolling remains available
+   rather than making buttons unreachable. */
+@media (orientation:landscape) and (min-width:700px) {
+  .block-container {padding:3px 8px 8px !important}
+  .kvai-head {height:68px !important;min-height:68px !important;max-height:68px !important}
+  .kvai-logo {width:39px !important;height:39px !important;flex-basis:39px !important}
+  .kvai-title p {font-size:.66rem !important}
+  button[data-baseweb="tab"] {height:33px !important}
+  [data-testid="stVideo"] video,.kvai-empty-preview {max-height:112px !important;height:112px !important}
+  [data-testid="stFileUploaderDropzone"] {min-height:38px !important}
+  [data-testid="stWidgetLabel"] p {font-size:.69rem !important}
+  .stButton>button,.stDownloadButton>button {min-height:30px !important;font-size:.69rem !important}
+  .st-key-startbar .stButton>button {min-height:34px !important}
+}
+@media (orientation:portrait) {
+  .kvai-head {height:auto !important;min-height:68px !important;max-height:none !important}
+}
+</style>
+"""
+st.markdown(SCREENSHOT_LAYOUT_CORRECTION_CSS, unsafe_allow_html=True)
+
