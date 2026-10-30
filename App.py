@@ -2100,6 +2100,19 @@ def claude_enabled():
     return bool(_CLAUDE_PROVIDERS)
 
 
+_CLAUDE_FALLBACK_MODELS = ["claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5"]
+_CLAUDE_GOOD_MODEL = {}
+_CLAUDE_LAST_CALL = {"t": 0.0}
+_CLAUDE_MIN_GAP = 2.2   # laalaa មាន 30 request/នាទី → ទុកគម្លាត ≥2.2វិ រវាងការហៅ
+
+
+def _claude_throttle():
+    gap = _CLAUDE_MIN_GAP - (time.time() - _CLAUDE_LAST_CALL["t"])
+    if gap > 0:
+        time.sleep(min(gap, _CLAUDE_MIN_GAP))
+    _CLAUDE_LAST_CALL["t"] = time.time()
+
+
 def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
     """ហៅ Claude តាម Anthropic Messages API (/v1/messages) ហើយទទួលលទ្ធផល JSON {"translations": [...]}។"""
     _key, _base, _model = cfg
@@ -2111,16 +2124,21 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
     )
     sys_text = (system or TRANS_SYSTEM) + ' Return ONLY the JSON object {"translations": [...]} with no other text.'
     url = _base + ("/messages" if _base.endswith("/v1") else "/v1/messages")
-    payload = {
-        "model": _model,
-        "max_tokens": 4096,
-        "temperature": 0.1,
-        "system": sys_text,
-        "messages": [{"role": "user", "content": numbered}],
-    }
-    body = json.dumps(payload).encode("utf-8")
+    use_temp = True
+    _first = _CLAUDE_GOOD_MODEL.get(_key) or _model
+    models = [_first] + [m for m in [_model] + _CLAUDE_FALLBACK_MODELS if m != _first]
+    mi = 0
     last = "Claude: មិនទាន់ទទួលបានចម្លើយ"
-    for attempt in range(3):
+    for attempt in range(9):
+        payload = {
+            "model": models[mi],
+            "max_tokens": 4096,
+            "system": sys_text,
+            "messages": [{"role": "user", "content": numbered}],
+        }
+        if use_temp:
+            payload["temperature"] = 0.1
+        body = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
             url, data=body, method="POST",
             headers={
@@ -2131,8 +2149,9 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
                 "User-Agent": "Mozilla/5.0",
             },
         )
+        _claude_throttle()
         try:
-            with urllib.request.urlopen(request, timeout=60) as r:
+            with urllib.request.urlopen(request, timeout=90) as r:
                 data = json.loads(r.read().decode("utf-8"))
             content = "".join(b.get("text", "") for b in (data.get("content") or []) if b.get("type") == "text")
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
@@ -2141,6 +2160,7 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
             parsed = json.loads(match.group(0) if match else content)
             items = parsed.get("translations") or []
             if len(items) == len(texts):
+                _CLAUDE_GOOD_MODEL[_key] = models[mi]
                 if raw:
                     return list(items)
                 return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
@@ -2152,12 +2172,28 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
             except Exception:
                 pass
             last = f"Claude HTTP {e.code}: {detail}".strip()
-            if e.code in (429, 500, 502, 503, 529) and attempt < 1:
-                time.sleep(2)
+            if e.code == 400 and use_temp and attempt < 8:
+                use_temp = False          # ម៉ូដែលខ្លះមិនទទួល temperature → សាកដោយគ្មាន
+                continue
+            if e.code in (404, 503, 529) and mi + 1 < len(models):
+                mi += 1                   # model នេះគ្មាន account ទំនេរ → សាក model បន្ទាប់
+                time.sleep(1.2)
+                continue
+            if e.code in (429, 500, 502, 503, 504, 529) and attempt < 8:
+                _wait = 0.0
+                try:
+                    _wait = float(e.headers.get("Retry-After", "0") or 0)
+                except Exception:
+                    _wait = 0.0
+                time.sleep(min(max(_wait, 3.0 * (attempt + 1)), 15.0))   # រង់ចាំកើនឡើង 3,6,9,12វិ
                 continue
             raise RuntimeError(last)
         except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
-            raise RuntimeError(f"Claude បណ្តាញ/Timeout: {e}")
+            last = f"Claude បណ្តាញ/Timeout: {e}"
+            if attempt < 1:
+                time.sleep(2)
+                continue
+            raise RuntimeError(last)
         except Exception as e:
             last = f"Claude: {e}"
     raise RuntimeError(last[:400])
@@ -2365,7 +2401,14 @@ def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKir
             _LAST_AI_ERR[name] = str(e)[:260]   # ទុកមូលហេតុពិត ដើម្បីបង្ហាញអ្នកប្រើ
             if "ចំនួនបន្ទាត់" in str(e):
                 continue   # ម៉ូដែលឆ្លើយខុសចំនួនបន្ទាត់ → សាកម្តងទៀត មិនសម្រាកទាំងមូល
-            cool["until"] = time.time() + 180  # server/បណ្តាញមានបញ្ហា → រំលង ៣ នាទី (កុំឱ្យរង់ចាំម៉ាស៊ីនខូចរាល់ឃ្លា)
+            _m = str(e)
+            if any(f"HTTP {c}" in _m for c in (401, 402, 403, 404)):
+                _cd = 600      # Key/URL/model ខុស → សម្រាកយូរ
+            elif any(f"HTTP {c}" in _m for c in (429, 503, 529)):
+                _cd = 25       # Rate limit បណ្តោះអាសន្ន → សម្រាកខ្លី រួចសាកវិញ
+            else:
+                _cd = 60       # server/បណ្តាញមានបញ្ហា
+            cool["until"] = time.time() + _cd
             return None
     return None
 
@@ -5625,8 +5668,8 @@ def _http_probe(url, headers, payload=None, timeout=30, secret=""):
             pass
         if secret:
             detail = detail.replace(secret, "***")
-        if detail and state in ("error", "bad"):
-            msg += " · " + detail
+        if detail and state in ("error", "bad", "limit"):
+            msg += " · HTTP " + str(e.code) + " · " + detail
         return state, msg, int((time.time() - t0) * 1000)
     except Exception as e:
         return "error", "បណ្តាញ/Timeout: " + str(e)[:120], int((time.time() - t0) * 1000)
@@ -5643,8 +5686,20 @@ def check_claude_key(cfg):
     url = base + ("/messages" if base.endswith("/v1") else "/v1/messages")
     headers = {"x-api-key": key, "Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01",
                "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
-    payload = {"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
-    return _http_probe(url, headers, payload, secret=key)
+    models = [model] + [m for m in _CLAUDE_FALLBACK_MODELS if m != model]
+    res = ("error", "មិនទាន់សាក", 0)
+    for m in models:
+        payload = {"model": m, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
+        res = _http_probe(url, headers, payload, secret=key)
+        if res[0] == "ok":
+            _CLAUDE_GOOD_MODEL[key] = m
+            if m != model:
+                return "ok", f"ប្រើបាន (model «{m}» ដំណើរការ — សូមដាក់ឈ្មោះនេះក្នុងប្រអប់ Model)", res[2]
+            return res
+        if res[0] == "bad" and "មិនត្រឹមត្រូវ" in res[1]:
+            return res      # Key ខុស — មិនបាច់សាក model ផ្សេង
+        time.sleep(1.2)
+    return res[0], res[1] + " · (សាកគ្រប់ model ហើយ៖ " + ", ".join(models) + ")", res[2]
 
 
 def check_openai_key(cfg):
