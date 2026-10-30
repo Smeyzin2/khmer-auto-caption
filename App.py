@@ -1961,7 +1961,7 @@ def groq_chat_models(api_key):
     return ordered
 
 
-TRANS_SYSTEM = (
+TRANS_SYSTEM_FULL = (
     "You are an expert Cambodian Khmer dubbing translator and script editor. Translate the dialogue into natural, "
     "everyday SPOKEN Khmer exactly as a native Phnom Penh speaker would say it in a film or drama, not written/news Khmer "
     "and not word-for-word. The numbered lines are consecutive lines from ONE video: read ALL of them first to understand "
@@ -1997,6 +1997,21 @@ TRANS_SYSTEM = (
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
+
+
+# ប្រើ prompt ខ្លី (សន្សំ token ~៧០%)។ ចង់បាន prompt វែងដើម → ដាក់ FULL_PROMPT=1 ក្នុង Secrets
+TRANS_SYSTEM_LITE = (
+    "You are a Cambodian Khmer dubbing translator. Translate the numbered lines (consecutive lines of ONE video) into natural "
+    "everyday SPOKEN Khmer (Phnom Penh), not written/news Khmer and not word-for-word. "
+    "Rules: keep exact meaning, names, numbers, negations and emotion; never add or drop facts; pick pronouns/politeness by relationship "
+    "and keep them consistent; transliterate foreign names by sound the same way every time; translate idioms by meaning; "
+    "one input line = exactly one complete Khmer sentence, same order, never merge or split. "
+    "A [max N chars] tag is the speaking-time budget: use the shortest natural wording, drop fillers, never drop a fact; never output the tag. "
+    "Output is read by TTS: Khmer script only, end with ។ ? or !, no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
+    "An English hint, if given, is only a hint; the original wins. "
+    'Return JSON {"translations": [...]} with exactly one item per input.'
+)
+TRANS_SYSTEM = TRANS_SYSTEM_LITE
 
 
 def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
@@ -2100,7 +2115,7 @@ def claude_enabled():
     return bool(_CLAUDE_PROVIDERS)
 
 
-_CLAUDE_FALLBACK_MODELS = ["claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5-5", "claude-opus-5"]
+_CLAUDE_FALLBACK_MODELS = ["claude-sonnet-5-5", "claude-sonnet-5"]   # ដក Opus ចេញ (ថ្លៃជាង ៥ដង)
 _CLAUDE_GOOD_MODEL = {}
 _CLAUDE_LAST_CALL = {"t": 0.0}
 _CLAUDE_MIN_GAP = 2.2   # laalaa មាន 30 request/នាទី → ទុកគម្លាត ≥2.2វិ រវាងការហៅ
@@ -2129,10 +2144,10 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
     models = [_first] + [m for m in [_model] + _CLAUDE_FALLBACK_MODELS if m != _first]
     mi = 0
     last = "Claude: មិនទាន់ទទួលបានចម្លើយ"
-    for attempt in range(9):
+    for attempt in range(5):
         payload = {
             "model": models[mi],
-            "max_tokens": 4096,
+            "max_tokens": min(4096, 300 + 160 * len(texts)),
             "system": sys_text,
             "messages": [{"role": "user", "content": numbered}],
         }
@@ -2172,14 +2187,14 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
             except Exception:
                 pass
             last = f"Claude HTTP {e.code}: {detail}".strip()
-            if e.code == 400 and use_temp and attempt < 8:
+            if e.code == 400 and use_temp and attempt < 4:
                 use_temp = False          # ម៉ូដែលខ្លះមិនទទួល temperature → សាកដោយគ្មាន
                 continue
             if e.code in (404, 503, 529) and mi + 1 < len(models):
                 mi += 1                   # model នេះគ្មាន account ទំនេរ → សាក model បន្ទាប់
                 time.sleep(1.2)
                 continue
-            if e.code in (429, 500, 502, 503, 504, 529) and attempt < 8:
+            if e.code in (429, 500, 502, 503, 504, 529) and attempt < 4:
                 _wait = 0.0
                 try:
                     _wait = float(e.headers.get("Retry-After", "0") or 0)
@@ -2240,12 +2255,14 @@ def extra_provider_enabled():
     return bool(_EXTRA_PROVIDERS)
 
 
-OAI_USER_CFG = {}   # Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ (ដាក់ពេលចុច «ចាប់ផ្តើម» ក្នុងរបៀបនេះ មិនលាយជាមួយអ្នកដទៃ)
-
+_API_LOCAL = threading.local()
 
 def oai_cfg():
-    c = OAI_USER_CFG
-    return ((c.get("key") or OAI_KEY), (c.get("base") or OAI_BASE).rstrip("/"), (c.get("model") or OAI_MODEL))
+    # Worker ម្នាក់ៗប្រើ Key របស់ session ខ្លួនឯង មិនចែករំលែក Key រវាងអ្នកប្រើ។
+    c = getattr(_API_LOCAL, "xk_cfg", None)
+    if c is not None:
+        return c
+    return (OAI_KEY, OAI_BASE.rstrip("/"), OAI_MODEL)
 
 
 def xk_enabled():
@@ -2259,89 +2276,54 @@ def oai_enabled():
 
 
 def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
-    """Call xKiro's OpenAI-compatible endpoint with bounded retries for transient upstream errors.
-
-    xKiro can return HTTP 502/503/504 when a model provider is temporarily unavailable.
-    Retry those responses with backoff before allowing the existing Groq fallback to run.
-    """
+    """ការបកប្រែ xKiro ដោយសន្សំ token និងកាត់បន្ថយ API calls។"""
     _key, _base, _model = cfg if cfg else oai_cfg()
     if not (_key and _base and _model):
-        raise RuntimeError("xKiro: សូមកំណត់ XKIRO_API_KEY, XKIRO_BASE_URL និង XKIRO_MODEL ក្នុង Secrets។")
-
-    numbered = "\n".join(
+        raise RuntimeError("សូមបញ្ចូល xKiro API Key ផ្ទាល់ខ្លួន។")
+    numbered = "\\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and i < len(budgets) and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
     )
+    payload = {
+        "model": _model,
+        "temperature": 0,
+        "max_tokens": min(4096, max(256, sum(len(str(t)) for t in texts) * 3 + 160)),
+        "messages": [
+            {"role": "system", "content": system or TRANS_SYSTEM},
+            {"role": "user", "content": numbered},
+        ],
+    }
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     last = "xKiro: មិនទាន់ទទួលបានចម្លើយ"
-    # Try JSON mode first, then normal mode if the selected model rejects response_format.
-    for _mode in ("json", "plain", "merge"):
-        use_json_mode = (_mode == "json")
-        if _mode == "merge":
-            _msgs = [{"role": "user", "content": (system or TRANS_SYSTEM) + "\n\n" + numbered}]
-        else:
-            _msgs = [
-                {"role": "system", "content": system or TRANS_SYSTEM},
-                {"role": "user", "content": numbered},
-            ]
-        payload = {
-            "model": _model,
-            "temperature": 0.1,
-            "messages": _msgs,
-        }
-        if use_json_mode:
-            payload["response_format"] = {"type": "json_object"}
-        body = json.dumps(payload).encode("utf-8")
-
-        # Retry transient provider/server errors; do not loop forever or retry bad credentials.
-        for attempt in range(4):
-            request = urllib.request.Request(
-                _base + "/chat/completions",
-                data=body,
-                method="POST",
-                headers={
-                    "Authorization": f"Bearer {_key}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0",
-                },
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=40) as r:
-                    data = json.loads(r.read().decode("utf-8"))
-                content = data["choices"][0]["message"].get("content") or ""
-                content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
-                content = re.sub(r"^```(?:json)?|```$", "", content.strip(), flags=re.M).strip()
-                match = re.search(r"\{.*\}", content, flags=re.S)
-                parsed = json.loads(match.group(0) if match else content)
-                items = parsed.get("translations") or []
-                if len(items) == len(texts):
-                    if raw:
-                        return list(items)
-                    return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
-                last = "xKiro: ម៉ូដែលឆ្លើយតបមិនគ្រប់ចំនួនបន្ទាត់"
-                break
-            except urllib.error.HTTPError as e:
-                detail = ""
-                try:
-                    detail = e.read().decode("utf-8", "ignore")[:220]
-                except Exception:
-                    pass
-                last = f"xKiro HTTP {e.code}: {detail}".strip()
-
-                # 400/422 can mean this model does not support JSON response_format.
-                if e.code in (400, 422) and _mode != "merge":
-                    break   # JSON mode / system role មិនគាំទ្រ → សាករបៀបបន្ទាប់
-                # Rate limits and temporary upstream failures may recover after a short wait.
-                if e.code in (429, 500, 502, 503, 504) and attempt < 1:
-                    time.sleep(1.5)          # សាកម្តងទៀតតែ ១ ដង រួចឆាប់ប្តូរទៅម៉ាស៊ីនបន្ទាប់
-                    continue
-                raise RuntimeError(last)
-            except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
-                last = f"xKiro បណ្តាញ/Timeout: {e}"
-                raise RuntimeError(last)     # Timeout = ម៉ាស៊ីនយឺត → ប្តូរភ្លាម កុំរង់ចាំ
-            except Exception as e:
-                last = f"xKiro: {e}"
-                break
-    raise RuntimeError(last[:400])
+    for attempt in range(2):
+        request = urllib.request.Request(
+            _base.rstrip("/") + "/chat/completions", data=body, method="POST",
+            headers={"Authorization": f"Bearer {_key}", "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=35) as r:
+                data = json.loads(r.read().decode("utf-8"))
+            content = data["choices"][0]["message"].get("content") or ""
+            content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
+            content = re.sub(r"^```(?:json)?|```$", "", content, flags=re.M).strip()
+            match = re.search(r"\\{.*\\}", content, flags=re.S)
+            parsed = json.loads(match.group(0) if match else content)
+            items = parsed.get("translations") or []
+            if len(items) != len(texts):
+                raise RuntimeError("xKiro: ម៉ូដែលឆ្លើយតបមិនគ្រប់ចំនួនបន្ទាត់")
+            if raw:
+                return list(items)
+            return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
+        except urllib.error.HTTPError as e:
+            detail = e.read().decode("utf-8", "ignore")[:180]
+            last = f"xKiro HTTP {e.code}: {detail}"
+            if e.code in (429, 500, 502, 503, 504) and attempt == 0:
+                time.sleep(1)
+                continue
+            raise RuntimeError(last)
+        except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
+            raise RuntimeError(f"xKiro បណ្តាញ/Timeout: {e}")
+    raise RuntimeError(last)
 
 
 def oai_test(key, base, model):
@@ -2361,7 +2343,7 @@ def oai_test(key, base, model):
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
     """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft → xKiro (ម៉ាស៊ីនបម្រុង)។"""
     groq_err = None
-    if claude_enabled():
+    if claude_enabled() and CLAUDE_FIRST:
         for _cn, _cc in _CLAUDE_PROVIDERS:
             _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
             if _cl.get("until", 0) > time.time():
@@ -2378,6 +2360,14 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
         _r = oai_try(texts, budgets, system, to_english)
         if _r is not None:
             return _r
+    if claude_enabled() and not CLAUDE_FIRST:
+        for _cn, _cc in _CLAUDE_PROVIDERS:
+            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
+            if _cl.get("until", 0) > time.time():
+                continue
+            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
+            if _cr is not None:
+                return _cr
     parts = [f"Groq: {str(groq_err)[:150]}"] if groq_err else []
     if _LAST_AI_ERR:
         parts.append("; ".join(f"{k}: {v}"[:110] for k, v in list(_LAST_AI_ERR.items())[:4]))
@@ -2446,8 +2436,32 @@ def provider_status():
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
     """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft → xKiro
     (មានកំណត់ពេលសរុប ១២០ វិនាទីក្នុងមួយបាច់)។"""
+    if getattr(_API_LOCAL, "isolated", False):
+        _cfg = oai_cfg()
+        if not all(_cfg):
+            return None
+        try:
+            return oai_translate_chunk(texts, budgets, system, to_english, cfg=_cfg, raw=raw)
+        except Exception as e:
+            _API_LOCAL.last_error = str(e)[:200]
+            return None
     t_end = time.time() + 120
-    for _name, _cfg in _CLAUDE_PROVIDERS:
+    def _claude_pass():
+        for _name, _cfg in _CLAUDE_PROVIDERS:
+            if time.time() >= t_end:
+                break
+            _cool = _CLAUDE_COOL.setdefault(_name, {"until": 0.0})
+            if _cool.get("until", 0) > time.time():
+                continue
+            r = _try_provider(_cool, _cfg, texts, budgets, system, to_english, raw, name=_name, fn=claude_translate_chunk)
+            if r is not None:
+                return r
+        return None
+    if CLAUDE_FIRST:
+        r = _claude_pass()
+        if r is not None:
+            return r
+    for _name, _cfg in []:
         if time.time() >= t_end:
             break
         _cool = _CLAUDE_COOL.setdefault(_name, {"until": 0.0})
@@ -2473,6 +2487,8 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
         r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="xKiro")
         if r is not None:
             return r
+    if not CLAUDE_FIRST:
+        return _claude_pass()
     return None
 
 
@@ -2800,6 +2816,16 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
     return result
 
 
+try:
+    TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "10") or 10)))
+except Exception:
+    TRANS_BATCH = 10
+# REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
+REVIEW_MODE = str(get_secret("REVIEW_MODE", "off")).strip().lower()
+# CLAUDE_FIRST=0 (លំនាំដើម): Claude ជាបម្រុងចុងក្រោយ (Groq/ឥតគិតថ្លៃមុន) | 1 = Claude មុនគេ
+CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "0")).strip().lower() in ("1", "true", "yes", "on")
+# FIT_MODE=off (លំនាំដើម): មិនហៅ AI តម្រឹមប្រវែង | on = បង្រួមឃ្លាវែងដោយ AI
+FIT_MODE = str(get_secret("FIT_MODE", "off")).strip().lower() in ("1", "true", "yes", "on")
 FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
 
 
@@ -2848,15 +2874,15 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             synopsis = make_synopsis(english, texts, gemini_key, None)
     # ជំហាន ២: Gemini បកជាខ្មែរមុន (ល្អបំផុតសម្រាប់ខ្មែរ) ដោយមានបរិបទមុន/ក្រោយ
     missing = [i for i, o in enumerate(outs) if o is None]
-    batches = [missing[k:k + 6] for k in range(0, len(missing), 6)]
+    batches = [missing[k:k + TRANS_BATCH] for k in range(0, len(missing), TRANS_BATCH)]
     if (gemini_key or oai_enabled()) and missing:
         def _km(idxs):
             try:
-                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
+                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 3), idxs[0])]
                 story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
                 if synopsis:
                     story = "VIDEO SUMMARY: " + synopsis + " || " + (story or "")
-                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 4))]
+                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 3))]
                 if nxt_ctx:
                     story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)
                 return idxs, gemini_translate_khmer(
@@ -3005,18 +3031,21 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     allidx = list(range(n))
     only_groq = not (gemini_key or oai_enabled())
     _quota_ok = time.time() - _GROQ_LIMIT["t"] > 900   # មិនជួប 429 ក្នុង ១៥ នាទីចុងក្រោយ
-    if allidx and (groq_key or gemini_key or oai_enabled()) and (not only_groq or _quota_ok) and all(o and has_khmer(str(o)) for o in outs):
+    if REVIEW_MODE in ("refine", "full") and allidx and (groq_key or gemini_key or oai_enabled()) and (not only_groq or _quota_ok) and all(o and has_khmer(str(o)) for o in outs):
         try:
             cand_a = list(outs)
             cand_b = refine_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a,
                                   gemini_key, groq_key, progress=progress, shift=1)
             cand_b = [b or a for a, b in zip(cand_a, cand_b)]
-            outs = judge_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a, cand_b,
-                               gemini_key, groq_key, progress=progress, shift=2)
+            if REVIEW_MODE == "full":
+                outs = judge_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a, cand_b,
+                                   gemini_key, groq_key, progress=progress, shift=2)
+            else:
+                outs = cand_b
         except Exception as e:
             errors.append(f"refine/judge: {e}"[:200])
     # តម្រឹមប្រវែងឃ្លាខ្មែរឱ្យសមនឹងពេលមាត់តួអង្គនិយាយ (lip-sync)
-    if budgets and all(o and has_khmer(str(o)) for o in outs):
+    if FIT_MODE and budgets and all(o and has_khmer(str(o)) for o in outs):
         try:
             outs = fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=progress)
         except Exception as e:
@@ -4700,6 +4729,8 @@ def engine_name(engine):
 
 
 def run_worker(job, item, settings, fonts_data):
+    _API_LOCAL.isolated = True
+    _API_LOCAL.xk_cfg = tuple(settings.get("user_xk_cfg") or ("", "", ""))
     rep = Reporter(item)
     item["stage"] = "ក្នុងជួររង់ចាំ..."
     _seq = item.get("seq")
@@ -5710,29 +5741,19 @@ def check_openai_key(cfg):
 
 
 def key_check_targets():
-    """Key ទាំងអស់ (ដែលអ្នកដាក់ + ក្នុង Secrets): (ឈ្មោះ, Key បិទបាំង, ប្រភេទ, cfg, ម៉ូដែល)។"""
+    """ពិនិត្យតែ API Key ផ្ទាល់ខ្លួនរបស់ session នេះប៉ុណ្ណោះ។"""
     ss = st.session_state
     rows = []
     for i, k in enumerate(ss.get("user_claude_keys", []), start=1):
         _b = ss.get("user_claude_base", "https://api.laalaa.me")
         _m = ss.get("user_claude_model", "claude-sonnet-5-5")
-        rows.append((f"Claude #{i} (ដាក់ក្នុងកម្មវិធី)", mask_key(k), "claude", (k, _b, _m), _m))
-    for name, cfg in _CLAUDE_SECRET_PROVIDERS:
-        rows.append((f"{name} (Secrets)", mask_key(cfg[0]), "claude", cfg, cfg[2]))
+        rows.append((f"Claude ផ្ទាល់ខ្លួន #{i}", mask_key(k), "claude", (k, _b, _m), _m))
     for i, k in enumerate(ss.get("user_groq_keys", []), start=1):
-        rows.append((f"Groq #{i} (ដាក់ក្នុងកម្មវិធី)", mask_key(k), "groq", (k,), "whisper + chat"))
-    for i, k in enumerate(split_keys(GROQ_KEY), start=1):
-        rows.append((f"Groq #{i} (Secrets)", mask_key(k), "groq", (k,), "whisper + chat"))
+        rows.append((f"Groq ផ្ទាល់ខ្លួន #{i}", mask_key(k), "groq", (k,), "whisper + chat"))
     if ss.get("user_oai_key"):
         _cfg = (ss["user_oai_key"], ss.get("user_oai_base", "https://api.xkiro.com/v1"),
                 ss.get("user_oai_model", "qwen/qwen3.5-flash"))
-        rows.append(("xKiro (ដាក់ក្នុងកម្មវិធី)", mask_key(_cfg[0]), "openai", _cfg, _cfg[2]))
-    for name, cfg in _EXTRA_PROVIDERS:
-        rows.append((f"{name} (Secrets)", mask_key(cfg[0]), "openai", cfg, cfg[2]))
-    if cc_enabled():
-        rows.append(("CodeCraft (Secrets)", mask_key(CC_KEY), "openai", (CC_KEY, CC_BASE, CC_MODEL), CC_MODEL))
-    if OAI_KEY and OAI_BASE and OAI_MODEL:
-        rows.append(("xKiro (Secrets)", mask_key(OAI_KEY), "openai", (OAI_KEY, OAI_BASE, OAI_MODEL), OAI_MODEL))
+        rows.append(("xKiro ផ្ទាល់ខ្លួន", mask_key(_cfg[0]), "openai", _cfg, _cfg[2]))
     return rows
 
 
@@ -6074,7 +6095,7 @@ with tab_vid:
     with st.container(border=True):
         st.markdown("**✂️ កាត់វីដេអូវែងជាផ្នែកខ្លីៗ មុនបកប្រែ**")
         auto_split = st.toggle("បំបែកវីដេអូវែងជាផ្នែកខ្លីៗ ហើយបកប្រែម្តងមួយផ្នែក",
-                               value=True, key="auto_split_toggle")
+                               value=False, key="auto_split_toggle")
         split_sec = 0
         split_exact = False
         if auto_split:
@@ -6152,7 +6173,8 @@ with tab_cut:
             except Exception:
                 pass
         _cut_opts = list(SPLIT_PRESETS.keys()) + ["✏️ កំណត់ខ្លួនឯង"]
-        _cut_lbl = st.selectbox("ប្រវែងមួយផ្នែក", _cut_opts, index=2, key="cut_len_pick")
+        _cut_default = next((i for i, v in enumerate(_cut_opts) if "១ នាទី" in v or "1 នាទី" in v or "60" in v), 0)
+        _cut_lbl = st.selectbox("ប្រវែងមួយផ្នែក", _cut_opts, index=_cut_default, key="cut_len_pick")
         if _cut_lbl.startswith("✏️"):
             cut_sec = int(st.number_input("ប្រវែងមួយផ្នែក (វិនាទី)", min_value=5, max_value=3600,
                                           value=90, step=5, key="cut_len_custom"))
@@ -6319,7 +6341,7 @@ with tab_voice:
         # Keep only the simple voice choices requested by the user.
         voice_label = st.radio("ជ្រើសសំឡេងនិយាយ", list(TTS_VOICES.keys()), horizontal=True, key="voice_pick")
         st.toggle("🔔 ប្រកាសសំឡេងខ្មែរដោយស្វ័យប្រវត្តិ ពេលវីដេអូនីមួយៗធ្វើរួច", value=True, key="announce_toggle")
-        keep_bg = st.toggle("🎵 រក្សាសំឡេងដើម (សំឡេងផ្ទៃក្រោយ)", value=True, key="keep_bg_toggle")
+        keep_bg = st.toggle("🎵 រក្សាសំឡេងដើម (សំឡេងផ្ទៃក្រោយ)", value=False, key="keep_bg_toggle")
         bg_level = 8
         if keep_bg:
             bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick")
@@ -6384,7 +6406,10 @@ with tab_text:
             style_pick = st.selectbox("បែបអក្សរ", list(STYLE_OPTIONS.keys()), index=0, key="style_pick")
         c1, c2 = st.columns(2)
         with c1:
-            font_size = st.slider("ទំហំអក្សរ", 16, 36, 22)
+            font_size_on = st.toggle("កែទំហំអក្សរ", value=False, key="font_size_on")
+            font_size = st.slider("ទំហំអក្សរ", 16, 36, 16, key="font_size_pick") if font_size_on else 16
+            if not font_size_on:
+                st.caption("លំនាំដើម 16")
         with c2:
             outline_size = st.slider("គែមអក្សរ", 1, 5, 2)
         pos_pick = st.radio("ទីតាំងអក្សរ", list(POS_MAP.keys()), index=7, horizontal=True, key="pos")
@@ -6651,6 +6676,11 @@ if run:
     settings = {
         "engine": "free",
         "gemini_key": "", "groq_key": effective_groq_key(), "fx": fx_settings,
+        "user_xk_cfg": (
+            st.session_state.get("user_oai_key", ""),
+            st.session_state.get("user_oai_base", "https://api.xkiro.com/v1"),
+            st.session_state.get("user_oai_model", "qwen/qwen3.5-flash"),
+        ),
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
@@ -6670,11 +6700,6 @@ if run:
         st.session_state.pop("job", None)
         old = None
         gc.collect()
-    OAI_USER_CFG.clear()
-    if st.session_state.get("user_oai_key"):
-        OAI_USER_CFG.update({"key": st.session_state.get("user_oai_key", ""),
-                             "base": st.session_state.get("user_oai_base", ""),
-                             "model": st.session_state.get("user_oai_model", "")})
     _CLAUDE_PROVIDERS[:] = []
     for _i, _k in enumerate(st.session_state.get("user_claude_keys", []), start=1):
         _CLAUDE_PROVIDERS.append((f"Claude ផ្ទាល់ខ្លួន #{_i}", (
