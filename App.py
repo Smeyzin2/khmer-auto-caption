@@ -753,6 +753,72 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 """
 st.markdown(FINAL_RESPONSIVE_CSS, unsafe_allow_html=True)
 
+# ---------- Runtime usability fix: never clip Streamlit widgets ----------
+# Previous CSS forced the whole app to 100dvh + overflow:hidden. On mobile
+# landscape this clipped the tab panel and left controls visible but unusable.
+USABILITY_FIX_CSS = """
+<style>
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+  height: auto !important; min-height: 100% !important;
+  overflow-x: hidden !important; overflow-y: auto !important;
+}
+[data-testid="stMain"] { overflow: visible !important; }
+.block-container {
+  height: auto !important; min-height: 100dvh !important;
+  max-height: none !important; overflow: visible !important;
+  padding: 4px 10px 14px !important;
+}
+[data-baseweb="tab-panel"] {
+  height: auto !important; max-height: none !important;
+  overflow: visible !important; padding-bottom: 8px !important;
+}
+/* Keep the action button in normal layout so it cannot cover controls. */
+.st-key-startbar {
+  position: relative !important; inset: auto !important;
+  transform: none !important; width: 100% !important;
+  z-index: 5 !important; margin: 8px 0 4px !important;
+  padding: 6px 8px calc(6px + env(safe-area-inset-bottom)) !important;
+  background: linear-gradient(90deg,rgba(255,20,147,.22),rgba(8,18,55,.96),rgba(0,210,255,.22)) !important;
+  border: 1px solid rgba(0,220,255,.72) !important;
+  border-radius: 16px !important; box-shadow: 0 0 18px rgba(0,190,255,.18) !important;
+}
+.st-key-startbar [data-testid="stVerticalBlockBorderWrapper"],
+.st-key-startbar [data-testid="stVerticalBlock"] {
+  background: transparent !important; border: 0 !important; box-shadow: none !important;
+}
+.st-key-startbar .stButton > button,
+.st-key-startbar .stButton > button:disabled {
+  min-height: 44px !important; opacity: 1 !important;
+  color: #fff !important; border: 1px solid #19ddff !important;
+  background: linear-gradient(100deg,#ff1493,#843bff,#00cfff) !important;
+}
+/* API warning should be a compact banner, not consume the whole first screen. */
+[data-testid="stAlert"] {
+  padding: 7px 12px !important; margin: 4px 0 7px !important;
+  border-radius: 12px !important; min-height: 0 !important;
+}
+[data-testid="stAlert"] p { font-size: .88rem !important; line-height: 1.35 !important; margin: 0 !important; }
+/* Remove oversized gaps between header, orientation control and tabs. */
+[data-testid="stVerticalBlock"] { gap: .35rem !important; }
+[data-testid="stElementContainer"] { margin-bottom: 0 !important; }
+@media (orientation: landscape) and (max-height: 700px) {
+  .block-container { padding: 3px 8px 8px !important; }
+  .kvai-head { height: 68px !important; min-height: 68px !important; max-height: 68px !important;
+    margin: 0 0 3px !important; padding: 5px 10px !important; }
+  .kvai-logo { width: 40px !important; height: 40px !important; flex-basis: 40px !important; }
+  .kvai-title h1 { font-size: 1.15rem !important; }
+  .kvai-title p { font-size: .68rem !important; }
+  [data-baseweb="tab-list"] { margin: 2px 0 !important; padding: 3px !important; }
+  button[data-baseweb="tab"] { height: 35px !important; }
+  [data-testid="stWidgetLabel"] p { font-size: .74rem !important; }
+  .stButton > button, .stDownloadButton > button { min-height: 34px !important; }
+}
+</style>
+"""
+st.markdown(USABILITY_FIX_CSS, unsafe_allow_html=True)
+
+
 
 def server_ram_info():
     """បង្ហាញ RAM របស់ម៉ាស៊ីនដែលកម្មវិធីកំពុងរត់ (អាន /proc/meminfo)។"""
@@ -6173,7 +6239,7 @@ document.getElementById('kvaiRotate').addEventListener('click',async()=>{
  }catch(e){msg.textContent='បើមិនបង្វិល សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
 });
 </script>
-""",height=34,scrolling=False)
+""",height=54,scrolling=False)
 ls_sync()
 
 if not GROQ_KEY and not oai_enabled() and not has_user_keys():
