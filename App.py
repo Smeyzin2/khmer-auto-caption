@@ -6435,28 +6435,7 @@ GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិ�
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
-components.html("""
-<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 2px 1px;font-family:system-ui">
-<button id="kvaiRotate" style="cursor:pointer;border:1px solid #25D9FF;border-radius:10px;padding:5px 11px;color:white;font-weight:800;font-size:12px;background:linear-gradient(100deg,#FF279F,#853CFF,#08C8EF);box-shadow:0 0 12px #168ac066">
-📱 ផ្ដេក / ពេញអេក្រង់
-</button><span id="kvaiRotateMsg" style="color:#B9C7F5;font-size:10px"></span>
-</div>
-<script>
-document.getElementById('kvaiRotate').addEventListener('click',async()=>{
- const msg=document.getElementById('kvaiRotateMsg');
- try{
-  const d=window.parent.document;
-  const root=d.documentElement;
-  if(!d.fullscreenElement && root.requestFullscreen) await root.requestFullscreen();
-  const scr=window.parent.screen;
-  if(scr && scr.orientation && scr.orientation.lock){
-    try{await scr.orientation.lock('landscape');msg.textContent='ផ្ដេករួច ✓';}
-    catch(_){msg.textContent='សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
-  } else {msg.textContent='សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
- }catch(e){msg.textContent='បើមិនបង្វិល សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
-});
-</script>
-""",height=34,scrolling=False)
+# Mobile-first interface: landscape/fullscreen rotation control intentionally removed.
 ls_sync()
 
 if not GROQ_KEY and not oai_enabled() and not has_user_keys():
@@ -6624,7 +6603,10 @@ with tab_vid:
                     break
         if _dash_preview is not None:
             try:
-                st.video(_dash_preview)
+                # Use stable bytes for UploadedFile previews so the player can load reliably.
+                _preview_payload = (_dash_preview.getvalue()
+                                    if hasattr(_dash_preview, "getvalue") else _dash_preview)
+                st.video(_preview_payload)
                 if uploaded_files:
                     st.caption(f"🎬 {uploaded_files[0].name}")
             except Exception:
@@ -7502,3 +7484,82 @@ DESKTOP_MODE_VIEWPORT_CSS = r"""
 </style>
 """
 st.markdown(DESKTOP_MODE_VIEWPORT_CSS, unsafe_allow_html=True)
+
+
+# =====================================================================
+# FINAL MOBILE-FIRST RESTORE — normal phone layout, playable video preview
+# Overrides legacy landscape/desktop rules above.
+# =====================================================================
+MOBILE_NORMAL_NEON_CSS = r"""
+<style>
+:root { color-scheme: dark; }
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+  width:100% !important; min-height:100% !important; height:auto !important;
+  max-height:none !important; overflow-x:hidden !important; overflow-y:auto !important;
+  background:radial-gradient(ellipse at 5% 8%,rgba(255,20,147,.22),transparent 32%),
+    radial-gradient(ellipse at 95% 12%,rgba(0,210,255,.20),transparent 34%),
+    linear-gradient(145deg,#03091e 0%,#10133d 52%,#06172e 100%) !important;
+  color:#f7f8ff !important;
+}
+.stApp::before {content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background:linear-gradient(115deg,transparent 35%,rgba(0,220,255,.08) 48%,rgba(255,20,147,.07) 52%,transparent 65%);
+  background-size:240% 100%;animation:kvai-mobile-light 8s linear infinite}
+@keyframes kvai-mobile-light {from{background-position:180% 0}to{background-position:-60% 0}}
+.block-container {width:100% !important;max-width:100% !important;height:auto !important;
+  min-height:0 !important;max-height:none !important;overflow:visible !important;
+  padding:.55rem .65rem 1.2rem !important;margin:0 auto !important;position:relative;z-index:1}
+[data-testid="stMain"] {height:auto !important;min-height:0 !important;overflow:visible !important}
+[data-testid="stVerticalBlock"] {gap:.65rem !important}
+[data-testid="stElementContainer"] {margin:0 !important}
+.kvai-head {height:auto !important;min-height:66px !important;max-height:none !important;
+  margin:0 0 8px !important;padding:8px 10px !important;gap:9px !important;flex-wrap:nowrap !important}
+.kvai-logo {width:42px !important;height:42px !important;flex:0 0 42px !important;font-size:22px !important}
+.kvai-title {min-width:0 !important}
+.kvai-title h1 {font-size:clamp(1.05rem,5vw,1.45rem) !important;line-height:1.15 !important}
+.kvai-title p {display:block !important;font-size:.68rem !important;line-height:1.25 !important}
+.kvai-badge {font-size:.66rem !important;padding:4px 7px !important;white-space:nowrap !important}
+[data-baseweb="tab-list"] {display:flex !important;flex-wrap:nowrap !important;overflow-x:auto !important;
+  overflow-y:hidden !important;gap:4px !important;scrollbar-width:thin !important}
+button[data-baseweb="tab"] {flex:0 0 auto !important;min-width:max-content !important;height:40px !important;padding:0 10px !important}
+button[data-baseweb="tab"] p {font-size:.78rem !important;white-space:nowrap !important}
+[data-baseweb="tab-panel"] {height:auto !important;max-height:none !important;overflow:visible !important;padding:4px 0 !important}
+/* Standard mobile: the three desktop columns become a clean vertical flow. */
+[data-testid="stHorizontalBlock"] {display:flex !important;flex-wrap:wrap !important;flex-direction:column !important;
+  gap:.65rem !important;align-items:stretch !important}
+[data-testid="stColumn"] {width:100% !important;min-width:100% !important;max-width:100% !important;flex:1 1 100% !important}
+.kvai-panel-title {font-size:1rem !important;margin:2px 0 5px !important}
+div[data-testid="stVerticalBlockBorderWrapper"] {padding:7px 6px !important;border-radius:14px !important}
+[data-testid="stWidgetLabel"] p,.stApp label {font-size:.88rem !important;line-height:1.3 !important}
+[data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p {font-size:.75rem !important;line-height:1.35 !important}
+[data-testid="stFileUploaderDropzone"] {min-height:78px !important;padding:12px !important}
+[data-testid="stVideo"] {width:100% !important;max-width:100% !important;overflow:visible !important}
+[data-testid="stVideo"] video {display:block !important;width:100% !important;max-height:min(52vh,360px) !important;
+  height:auto !important;min-height:150px !important;object-fit:contain !important;pointer-events:auto !important;
+  background:#000 !important;border-radius:12px !important}
+.kvai-empty-preview {height:190px !important;max-height:none !important;min-height:150px !important}
+.kvai-play {width:54px !important;height:54px !important;font-size:24px !important}
+.kvai-filmstrip {display:flex !important}
+[data-baseweb="select"]>div {min-height:42px !important}
+.stTextInput input,.stNumberInput input {min-height:42px !important}
+.stTextArea textarea {min-height:76px !important}
+.stButton>button,.stDownloadButton>button {min-height:42px !important;font-size:.88rem !important}
+[data-testid="stExpander"] {margin:5px 0 !important}
+[data-testid="stExpander"] details {overflow:visible !important}
+/* Start button is in normal flow, never fixed over the video player. */
+.st-key-startbar {position:static !important;left:auto !important;right:auto !important;bottom:auto !important;
+  transform:none !important;width:100% !important;z-index:1 !important;margin:8px 0 0 !important;
+  padding:5px 0 !important;background:transparent !important;border:0 !important;backdrop-filter:none !important}
+.st-key-startbar [data-testid="stVerticalBlockBorderWrapper"],
+.st-key-startbar [data-testid="stVerticalBlock"] {background:transparent !important;border:0 !important;box-shadow:none !important}
+.st-key-startbar .stButton>button {min-height:48px !important;font-size:.95rem !important}
+.stApp::before {pointer-events:none !important}
+/* Wider screens keep the original desktop columns; phone widths stay mobile-first. */
+@media (min-width:760px) {
+  .block-container {max-width:1200px !important;padding:1rem 1.2rem 2rem !important}
+  [data-testid="stHorizontalBlock"] {flex-direction:row !important;flex-wrap:nowrap !important}
+  [data-testid="stColumn"] {min-width:0 !important;max-width:none !important;flex:1 1 0 !important}
+}
+</style>
+"""
+st.markdown(MOBILE_NORMAL_NEON_CSS, unsafe_allow_html=True)
