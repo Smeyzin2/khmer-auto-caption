@@ -5,6 +5,7 @@ import json
 import gc
 import time
 import uuid
+import hmac
 import shutil
 import asyncio
 import zipfile
@@ -5715,9 +5716,44 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម (ជាប់ខាងក្រោម) — បំពេញនៅខាងក្រោយ
 start_slot = st.container(key="startbar")
 
-tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
-)
+# =====================================================================
+#  ផ្ទាំងអ្នកគ្រប់គ្រង (ឃើញតែម្ចាស់កម្មវិធីម្នាក់ប៉ុណ្ណោះ)
+#  ► ដាក់ ADMIN_KEY ក្នុង Secrets (ឧ. ADMIN_KEY = "លេខសម្ងាត់ខ្លួនឯង")
+#  ► បើកកម្មវិធីដោយតំណ  https://កម្មវិធីរបស់អ្នក/?admin=លេខសម្ងាត់  ម្តង
+#    ក្រោយមកផ្ទាំង «🔐 Admin» នឹងលេចឡើង (អ្នកផ្សេងមើលមិនឃើញទេ)
+#  ► បើមិនបានដាក់ ADMIN_KEY ផ្ទាំងនេះមិនបង្ហាញទាល់តែសោះ
+# =====================================================================
+ADMIN_KEY = str(get_secret("ADMIN_KEY", "") or "").strip()
+
+
+def admin_unlocked():
+    if not ADMIN_KEY:
+        return False
+    if st.session_state.get("_kadmin"):
+        return True
+    try:
+        q = st.query_params.get("admin")
+        if isinstance(q, list):
+            q = q[0] if q else ""
+        if q and hmac.compare_digest(str(q), ADMIN_KEY):
+            st.session_state["_kadmin"] = True
+            try:
+                del st.query_params["admin"]
+            except Exception:
+                pass
+            return True
+    except Exception:
+        pass
+    return False
+
+
+IS_ADMIN = admin_unlocked()
+_tab_labels = ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+if IS_ADMIN:
+    _tab_labels.append("🔐 Admin")
+_all_tabs = st.tabs(_tab_labels)
+tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = _all_tabs[:7]
+tab_admin = _all_tabs[7] if IS_ADMIN else None
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
@@ -6504,4 +6540,138 @@ with tab_out:
                 shutil.rmtree(job.folder, ignore_errors=True)
                 st.session_state.pop("job", None)
                 gc.collect()
+                st.rerun()
+
+
+# =====================================================================
+#  ពិនិត្យ API Key ថាណាប្រើបាន ណាប្រើមិនបាន (សម្រាប់ម្ចាស់ម្នាក់ឯង)
+# =====================================================================
+def _classify_http(code):
+    if code == 200:
+        return "ok", "ប្រើបាន"
+    if code in (401, 403):
+        return "bad", "Key មិនត្រឹមត្រូវ ឬត្រូវបានបិទ"
+    if code == 402:
+        return "bad", "អស់ credit / ត្រូវបង់ប្រាក់"
+    if code == 404:
+        return "bad", "URL ឬឈ្មោះម៉ូដែលខុស"
+    if code == 429:
+        return "limit", "Key ត្រឹមត្រូវ តែអស់កូតា ឬ Rate limit បណ្តោះអាសន្ន"
+    return "error", f"HTTP {code}"
+
+
+def _http_probe(url, headers, payload=None, timeout=30, secret=""):
+    """ហៅម្តង (គ្មាន retry) ហើយត្រឡប់ (state, សារ, ms)។ មិនបង្ហាញ Key ក្នុងសារ។"""
+    t0 = time.time()
+    body = json.dumps(payload).encode("utf-8") if payload is not None else None
+    req = urllib.request.Request(url, data=body, method="POST" if body else "GET", headers=headers)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            r.read(2000)
+        return "ok", "ប្រើបាន", int((time.time() - t0) * 1000)
+    except urllib.error.HTTPError as e:
+        state, msg = _classify_http(e.code)
+        detail = ""
+        try:
+            detail = e.read().decode("utf-8", "ignore")[:160].replace("\n", " ")
+        except Exception:
+            pass
+        if secret:
+            detail = detail.replace(secret, "***")
+        if detail and state in ("error", "bad"):
+            msg += " · " + detail
+        return state, msg, int((time.time() - t0) * 1000)
+    except Exception as e:
+        return "error", "បណ្តាញ/Timeout: " + str(e)[:120], int((time.time() - t0) * 1000)
+
+
+def check_groq_key(cfg):
+    key = cfg[0]
+    return _http_probe(GROQ_MODELS_URL, {"Authorization": f"Bearer {key}", "User-Agent": "Mozilla/5.0"}, secret=key)
+
+
+def check_claude_key(cfg):
+    key, base, model = cfg
+    url = base + ("/messages" if base.endswith("/v1") else "/v1/messages")
+    headers = {"x-api-key": key, "Authorization": f"Bearer {key}", "anthropic-version": "2023-06-01",
+               "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    payload = {"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
+    return _http_probe(url, headers, payload, secret=key)
+
+
+def check_openai_key(cfg):
+    key, base, model = cfg
+    headers = {"Authorization": f"Bearer {key}", "Content-Type": "application/json", "User-Agent": "Mozilla/5.0"}
+    payload = {"model": model, "max_tokens": 8, "messages": [{"role": "user", "content": "hi"}]}
+    return _http_probe(base.rstrip("/") + "/chat/completions", headers, payload, secret=key)
+
+
+def admin_key_targets():
+    """បញ្ជី Key ទាំងអស់ដែលបានដាក់ក្នុង Secrets: (ឈ្មោះ, Key បិទបាំង, ប្រភេទ, cfg, ម៉ូដែល)។"""
+    rows = []
+    for i, k in enumerate(split_keys(GROQ_KEY), start=1):
+        rows.append((f"Groq #{i}", mask_key(k), "groq", (k,), "whisper + chat"))
+    for name, cfg in _CLAUDE_PROVIDERS:
+        rows.append((name, mask_key(cfg[0]), "claude", cfg, cfg[2]))
+    for name, cfg in _EXTRA_PROVIDERS:
+        rows.append((name, mask_key(cfg[0]), "openai", cfg, cfg[2]))
+    if cc_enabled():
+        rows.append(("CodeCraft", mask_key(CC_KEY), "openai", (CC_KEY, CC_BASE, CC_MODEL), CC_MODEL))
+    if OAI_KEY and OAI_BASE and OAI_MODEL:
+        rows.append(("xKiro", mask_key(OAI_KEY), "openai", (OAI_KEY, OAI_BASE, OAI_MODEL), OAI_MODEL))
+    return rows
+
+
+def run_key_checks():
+    targets = admin_key_targets()
+    fn = {"groq": check_groq_key, "claude": check_claude_key, "openai": check_openai_key}
+
+    def one(t):
+        name, masked, kind, cfg, model = t
+        try:
+            state, msg, ms = fn[kind](cfg)
+        except Exception as e:
+            state, msg, ms = "error", str(e)[:140], 0
+        return {"name": name, "key": masked, "model": model, "state": state, "msg": msg, "ms": ms}
+
+    if not targets:
+        return []
+    with ThreadPoolExecutor(max_workers=min(8, len(targets))) as pool:
+        return list(pool.map(one, targets))
+
+
+if IS_ADMIN and tab_admin is not None:
+    with tab_admin:
+        with st.container(border=True):
+            st.markdown("**🔐 ពិនិត្យ API Key (ម្ចាស់ម្នាក់ឯង)**")
+            st.caption("ផ្ទាំងនេះបង្ហាញតែអ្នកដែលបើកដោយ ?admin=... ប៉ុណ្ណោះ។ Key ត្រូវបានបិទបាំង (បង្ហាញតែដើម និងចុង)។ "
+                       "ការពិនិត្យនីមួយៗប្រើ token តិចតួចបំផុត (៨ token)។")
+            _n_t = len(admin_key_targets())
+            if _n_t == 0:
+                st.warning("មិនមាន API Key ណាមួយក្នុង Secrets ទេ។")
+            if st.button(f"🔍 ពិនិត្យ Key ទាំងអស់ ({_n_t})", type="primary", use_container_width=True,
+                         disabled=(_n_t == 0), key="admin_check_btn"):
+                with st.spinner("កំពុងពិនិត្យ..."):
+                    st.session_state["_admin_results"] = {"t": time.time(), "rows": run_key_checks()}
+            _res_a = st.session_state.get("_admin_results")
+            if _res_a:
+                _rows = _res_a["rows"]
+                _ok = sum(1 for r in _rows if r["state"] == "ok")
+                _lim = sum(1 for r in _rows if r["state"] == "limit")
+                _bad = sum(1 for r in _rows if r["state"] in ("bad", "error"))
+                _m1, _m2, _m3 = st.columns(3)
+                _m1.metric("✅ ប្រើបាន", _ok)
+                _m2.metric("⚠️ អស់កូតា", _lim)
+                _m3.metric("❌ ប្រើមិនបាន", _bad)
+                _icon = {"ok": "✅ ប្រើបាន", "limit": "⚠️ អស់កូតា/Limit", "bad": "❌ មិនត្រឹមត្រូវ", "error": "❌ កំហុស"}
+                st.dataframe(
+                    [{"ស្ថានភាព": _icon[r["state"]], "Provider": r["name"], "Key": r["key"],
+                      "ម៉ូដែល": r["model"], "ms": r["ms"], "ព័ត៌មាន": r["msg"]} for r in _rows],
+                    use_container_width=True, hide_index=True)
+                st.caption("ពិនិត្យនៅម៉ោង " + time.strftime("%H:%M:%S", time.localtime(_res_a["t"]))
+                           + " · ⚠️ មានន័យថា Key ត្រឹមត្រូវ ហើយនឹងប្រើបានវិញពេលកូតាត្រឡប់មកវិញ។")
+            st.caption("ស្ថានភាពម៉ាស៊ីនបច្ចុប្បន្ន៖ " + provider_status())
+            if st.button("🔒 ចាក់សោវិញ (លាក់ផ្ទាំងនេះ)", use_container_width=True, key="admin_lock_btn"):
+                st.session_state.pop("_kadmin", None)
+                st.session_state.pop("_admin_results", None)
                 st.rerun()
