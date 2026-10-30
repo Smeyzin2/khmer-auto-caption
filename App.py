@@ -7418,3 +7418,94 @@ button[data-baseweb="tab"] p {font-size:.78rem !important;white-space:nowrap !im
 </style>
 """
 st.markdown(SCREENSHOT_LAYOUT_CORRECTION_CSS, unsafe_allow_html=True)
+
+# =====================================================================
+# FINAL DESKTOP MODE — landscape phone behaves like a compact desktop UI
+# Keep the three-column workspace, shrink the whole interface to the viewport,
+# collapse optional settings, and reserve a small non-overlapping action bar.
+# =====================================================================
+DESKTOP_MODE_VIEWPORT_CSS = r"""
+<style>
+@media screen and (orientation: landscape) and (max-height: 650px) and (min-width: 600px) {
+  html, body, .stApp, [data-testid="stAppViewContainer"],
+  [data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+    width:100% !important; height:100dvh !important; min-height:100dvh !important;
+    max-height:100dvh !important; overflow:hidden !important;
+  }
+  /* Scale the entire page proportionally instead of letting widgets run below the fold. */
+  html { zoom: .8 !important; }
+  .block-container {
+    width:125vw !important; max-width:none !important;
+    height:125dvh !important; min-height:0 !important; max-height:125dvh !important;
+    overflow:hidden !important; padding:3px 8px 48px !important; margin:0 !important;
+  }
+  [data-testid="stHeader"], [data-testid="stToolbar"],
+  [data-testid="stDecoration"], [data-testid="stStatusWidget"] {display:none !important;height:0 !important}
+
+  /* Tight top section — no oversized blank spaces. */
+  .kvai-head {height:54px !important;min-height:54px !important;max-height:54px !important;
+    margin:0 0 2px !important;padding:3px 9px !important;gap:7px !important}
+  .kvai-logo {width:36px !important;height:36px !important;flex:0 0 36px !important;font-size:19px !important}
+  .kvai-title h1 {font-size:1.15rem !important;line-height:1.05 !important}
+  .kvai-title p {display:none !important}
+  .kvai-badge {font-size:.65rem !important;padding:3px 8px !important}
+  iframe[title="streamlit.components.v1.html"] {height:22px !important;max-height:22px !important}
+  [data-testid="stElementContainer"]:has(iframe[title="streamlit.components.v1.html"]) {
+    height:22px !important;min-height:22px !important;margin:0 !important;padding:0 !important
+  }
+  [data-testid="stVerticalBlock"] {gap:.18rem !important}
+  [data-testid="stElementContainer"] {margin-bottom:0 !important}
+
+  /* Tabs remain a single desktop-style row. */
+  [data-baseweb="tab-list"] {display:flex !important;flex-wrap:nowrap !important;
+    gap:3px !important;padding:2px !important;margin:1px 0 3px !important;overflow:hidden !important}
+  button[data-baseweb="tab"] {flex:1 1 0 !important;min-width:0 !important;height:30px !important;
+    padding:0 3px !important;border-radius:7px !important}
+  button[data-baseweb="tab"] p {font-size:.68rem !important;white-space:nowrap !important;
+    overflow:hidden !important;text-overflow:ellipsis !important}
+  [data-baseweb="tab-panel"] {height:auto !important;max-height:none !important;
+    overflow:hidden !important;padding:0 0 2px !important}
+
+  /* Preserve the three desktop columns and make every control compact but clickable. */
+  [data-testid="stHorizontalBlock"] {display:flex !important;flex-wrap:nowrap !important;gap:.28rem !important}
+  [data-testid="stColumn"] {min-width:0 !important;flex:1 1 0 !important}
+  .kvai-panel-title {font-size:.72rem !important;padding:3px 6px !important;margin:0 0 2px !important}
+  .kvai-step {width:20px !important;height:20px !important;font-size:.68rem !important}
+  div[data-testid="stVerticalBlockBorderWrapper"] {padding:2px !important;border-radius:8px !important}
+  [data-testid="stWidgetLabel"] p, .stApp label {font-size:.64rem !important;margin:0 !important;line-height:1.05 !important}
+  [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+    font-size:.56rem !important;line-height:1.05 !important;margin:0 !important}
+  [data-testid="stFileUploaderDropzone"] {min-height:34px !important;padding:1px 4px !important}
+  [data-testid="stFileUploaderDropzoneInstructions"] {padding:0 !important}
+  [data-testid="stFileUploaderDropzoneInstructions"] span,
+  [data-testid="stFileUploaderDropzoneInstructions"] small {font-size:.56rem !important}
+  [data-testid="stVideo"] video, .kvai-empty-preview {height:82px !important;max-height:82px !important}
+  .kvai-play {width:32px !important;height:32px !important;font-size:15px !important}
+  .kvai-filmstrip {display:none !important}
+  [data-baseweb="select"]>div {min-height:27px !important}
+  .stTextInput input, .stNumberInput input {min-height:26px !important}
+  .stTextArea textarea {height:38px !important;min-height:38px !important}
+  .stButton>button, .stDownloadButton>button {min-height:27px !important;padding:1px 5px !important;
+    font-size:.62rem !important;border-radius:7px !important}
+  [data-testid="stRadio"] [role="radiogroup"] {gap:2px !important;flex-wrap:nowrap !important}
+  [data-testid="stRadio"] label {padding:2px 4px !important;font-size:.58rem !important}
+  [data-testid="stToggle"], [data-testid="stCheckbox"], [data-testid="stSlider"] {padding:0 !important}
+  [data-testid="stExpander"] summary {min-height:24px !important;padding:2px 6px !important}
+  [data-testid="stExpander"] summary p {font-size:.62rem !important}
+  [data-testid="stAlert"] {padding:3px 6px !important;margin:1px 0 !important}
+  [data-testid="stAlert"] p {font-size:.6rem !important;line-height:1.05 !important}
+
+  /* Start button stays at the bottom, with enough reserved space so it never covers controls. */
+  .st-key-startbar {position:fixed !important;left:0 !important;right:0 !important;bottom:0 !important;
+    transform:none !important;width:100% !important;z-index:1000 !important;margin:0 !important;
+    padding:3px 7px !important;border-radius:0 !important;
+    background:linear-gradient(90deg,rgba(255,20,147,.25),rgba(4,9,30,.97),rgba(0,210,255,.25)) !important;
+    border-top:1px solid rgba(0,220,255,.55) !important;backdrop-filter:blur(8px) !important}
+  .st-key-startbar [data-testid="stVerticalBlockBorderWrapper"],
+  .st-key-startbar [data-testid="stVerticalBlock"] {background:transparent !important;border:0 !important;box-shadow:none !important}
+  .st-key-startbar .stButton>button {min-height:32px !important;font-size:.72rem !important;
+    padding:2px 6px !important;color:#fff !important;opacity:1 !important}
+}
+</style>
+"""
+st.markdown(DESKTOP_MODE_VIEWPORT_CSS, unsafe_allow_html=True)
