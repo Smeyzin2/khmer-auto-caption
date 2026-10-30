@@ -6493,7 +6493,7 @@ with tab_vid:
                     "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
                     key="link_text_area",
                     placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
-                    height=54)
+                    height=68)
                 _all_links = extract_links(link_text)
                 _link_lines = _all_links[:link_limit]
                 if _all_links:
