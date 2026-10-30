@@ -915,6 +915,124 @@ div[data-testid="stVerticalBlockBorderWrapper"] {padding:3px 4px !important;bord
 st.markdown(LANDSCAPE_DESKTOP_FINAL_CSS, unsafe_allow_html=True)
 
 
+# ---------- Mobile landscape: fit the dashboard to one screen ----------
+MOBILE_LANDSCAPE_FIT_CSS = """
+<style>
+@media (orientation: landscape) and (min-width: 600px) and (max-height: 900px) {
+  /* Other tabs remain naturally usable; the Home dashboard is locked to one screen below. */
+  html, body, .stApp, [data-testid="stAppViewContainer"],
+  [data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+    height: auto !important; min-height: 100dvh !important;
+    overflow-x: hidden !important; overflow-y: auto !important;
+  }
+  [data-testid="stHeader"], [data-testid="stToolbar"] { height: 0 !important; display: none !important; }
+  [data-testid="stMain"] { overflow: visible !important; }
+  .block-container {
+    height: auto !important; min-height: 100dvh !important; max-height: none !important;
+    overflow: visible !important; padding: 2px 7px 43px !important;
+    max-width: 1800px !important;
+  }
+  .kvai-head {
+    height: 54px !important; min-height: 54px !important; max-height: 54px !important;
+    margin: 0 0 2px !important; padding: 3px 8px !important; gap: 7px !important;
+    border-radius: 12px !important;
+  }
+  .kvai-logo { width: 34px !important; height: 34px !important; flex: 0 0 34px !important; font-size: 18px !important; }
+  .kvai-title h1 { font-size: clamp(.9rem, 2.1vw, 1.25rem) !important; line-height: 1.05 !important; }
+  .kvai-title p { font-size: .58rem !important; line-height: 1 !important; margin: 1px 0 0 !important; }
+  .kvai-badge { padding: 3px 7px !important; font-size: .6rem !important; }
+  iframe[title="streamlit.components.v1.html"] { height: 24px !important; max-height: 24px !important; }
+  [data-baseweb="tab-list"] {
+    display: flex !important; flex-wrap: nowrap !important; gap: 3px !important;
+    padding: 2px !important; margin: 1px 0 3px !important; overflow: hidden !important;
+  }
+  button[data-baseweb="tab"] {
+    flex: 1 1 0 !important; min-width: 0 !important; height: 30px !important;
+    padding: 0 2px !important; border-radius: 7px !important;
+  }
+  button[data-baseweb="tab"] p {
+    font-size: clamp(.55rem, .9vw, .7rem) !important;
+    white-space: nowrap !important; overflow: hidden !important; text-overflow: ellipsis !important;
+  }
+  [data-baseweb="tab-panel"] {
+    height: auto !important; max-height: none !important;
+    overflow: visible !important; padding: 0 !important;
+  }
+  /* Home is a true one-screen dashboard: no page or panel scrolling. */
+  html:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]),
+  body:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]),
+  html:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) .stApp,
+  body:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) .stApp,
+  html:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) [data-testid="stAppViewContainer"],
+  body:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) [data-testid="stAppViewContainer"],
+  html:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) [data-testid="stMain"],
+  body:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) [data-testid="stMain"] {
+    height: 100dvh !important; min-height: 100dvh !important; overflow: hidden !important;
+  }
+  html:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) .block-container,
+  body:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) .block-container {
+    height: 100dvh !important; min-height: 0 !important; max-height: 100dvh !important;
+    overflow: hidden !important;
+  }
+  html:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) [data-baseweb="tab-panel"],
+  body:has(button[data-baseweb="tab"]:first-of-type[aria-selected="true"]) [data-baseweb="tab-panel"] {
+    height: calc(100dvh - 125px) !important; max-height: calc(100dvh - 125px) !important;
+    overflow: hidden !important;
+  }
+  [data-testid="stVerticalBlock"] { gap: .18rem !important; }
+  [data-testid="stElementContainer"] { margin-bottom: 0 !important; }
+  [data-testid="stHorizontalBlock"] { gap: .3rem !important; flex-wrap: nowrap !important; }
+  [data-testid="stColumn"] { min-width: 0 !important; }
+  .kvai-panel-title { margin: 0 0 2px !important; padding: 3px 6px !important; font-size: .72rem !important; }
+  .kvai-step { width: 19px !important; height: 19px !important; font-size: .65rem !important; }
+  div[data-testid="stVerticalBlockBorderWrapper"] { padding: 2px 3px !important; border-radius: 9px !important; }
+  [data-testid="stWidgetLabel"] p, .stApp label { font-size: .62rem !important; margin: 0 !important; }
+  [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+    font-size: .56rem !important; line-height: 1.05 !important; margin: 0 !important;
+  }
+  [data-testid="stFileUploaderDropzone"] { min-height: 35px !important; padding: 1px 4px !important; }
+  [data-testid="stFileUploaderDropzoneInstructions"] { padding: 0 !important; }
+  [data-testid="stFileUploaderDropzoneInstructions"] span,
+  [data-testid="stFileUploaderDropzoneInstructions"] small { font-size: .58rem !important; }
+  .stTextArea textarea { min-height: 42px !important; height: 42px !important; }
+  [data-testid="stVideo"] video, .kvai-empty-preview { max-height: 92px !important; height: 92px !important; }
+  .kvai-play { width: 34px !important; height: 34px !important; font-size: 16px !important; }
+  .kvai-filmstrip { display: none !important; }
+  [data-baseweb="select"] > div { min-height: 28px !important; }
+  .stTextInput input, .stNumberInput input { min-height: 27px !important; }
+  .stButton > button, .stDownloadButton > button {
+    min-height: 28px !important; padding: 2px 5px !important; font-size: .62rem !important;
+  }
+  [data-testid="stRadio"] [role="radiogroup"] { gap: 2px !important; }
+  [data-testid="stRadio"] label { padding: 2px 5px !important; font-size: .6rem !important; }
+  [data-testid="stToggle"], [data-testid="stCheckbox"], [data-testid="stSlider"] { padding: 0 !important; }
+  [data-testid="stExpander"] summary { min-height: 26px !important; padding: 3px 7px !important; }
+  [data-testid="stExpander"] summary p { font-size: .65rem !important; }
+  [data-testid="stAlert"] { padding: 3px 6px !important; margin: 1px 0 !important; }
+  [data-testid="stAlert"] p { font-size: .62rem !important; line-height: 1.1 !important; }
+  .st-key-startbar {
+    position: fixed !important; left: 50% !important; bottom: 0 !important;
+    transform: translateX(-50%) !important; width: 100% !important; z-index: 1000 !important;
+    margin: 0 !important; padding: 3px 7px !important; border-radius: 0 !important;
+    background: linear-gradient(90deg,rgba(255,20,147,.18),rgba(4,9,30,.97),rgba(0,210,255,.18)) !important;
+  }
+  .st-key-startbar .stButton > button { min-height: 33px !important; font-size: .78rem !important; }
+}
+@media (orientation: landscape) and (min-width: 600px) and (max-height: 520px) {
+  .kvai-head { height: 43px !important; min-height: 43px !important; max-height: 43px !important; }
+  .kvai-logo { width: 28px !important; height: 28px !important; flex-basis: 28px !important; }
+  .kvai-title p, .kvai-badge { display: none !important; }
+  iframe[title="streamlit.components.v1.html"] { height: 19px !important; max-height: 19px !important; }
+  button[data-baseweb="tab"] { height: 26px !important; }
+  [data-baseweb="tab-panel"] { height: calc(100dvh - 105px) !important; max-height: calc(100dvh - 105px) !important; }
+  [data-testid="stVideo"] video, .kvai-empty-preview { max-height: 72px !important; height: 72px !important; }
+  .st-key-startbar .stButton > button { min-height: 28px !important; }
+}
+</style>
+"""
+st.markdown(MOBILE_LANDSCAPE_FIT_CSS, unsafe_allow_html=True)
+
+
 def server_ram_info():
     """បង្ហាញ RAM របស់ម៉ាស៊ីនដែលកម្មវិធីកំពុងរត់ (អាន /proc/meminfo)។"""
     try:
@@ -6397,7 +6515,7 @@ with tab_vid:
                     "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
                     key="link_text_area",
                     placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
-                    height=170)
+                    height=54)
                 _all_links = extract_links(link_text)
                 _link_lines = _all_links[:link_limit]
                 if _all_links:
@@ -6475,23 +6593,24 @@ with tab_vid:
             _ram_txt = server_ram_info()
             if _ram_txt:
                 st.caption(_ram_txt)
-        with st.container(border=True):
-            quality_label = st.radio("📈 គុណភាពវីដេអូ", list(QUALITY.keys()), index=1,
-                                     horizontal=True, key="quality_pick")
-        with st.container(border=True):
-            st.markdown("**✂️ កាត់វីដេអូវែងជាផ្នែកខ្លីៗ មុនបកប្រែ**")
-            auto_split = st.toggle("បំបែកវីដេអូវែងជាផ្នែកខ្លីៗ ហើយបកប្រែម្តងមួយផ្នែក",
-                                   value=False, key="auto_split_toggle")
-            split_sec = 0
-            split_exact = False
-            if auto_split:
-                _split_labels = list(SPLIT_PRESETS.keys())
-                _split_lbl = st.selectbox("ប្រវែងមួយផ្នែក", _split_labels,
-                                          index=_split_labels.index("៦ នាទី"), key="split_len_pick")
-                split_sec = SPLIT_PRESETS[_split_lbl]
-                split_exact = st.checkbox("🎯 កាត់ឱ្យចំពេលវេលា (យឺតជាង — encode ឡើងវិញ)", key="split_exact_pick")
-                st.caption(f"វីដេអូវែងជាង {fmt_len(split_sec + 20)} នឹងត្រូវបំបែក ហើយផ្នែកនីមួយៗបកប្រែតាមលំដាប់។ "
-                           "ចង់កាត់ទាញយកទុកតែមួយៗ សូមប្រើផ្ទាំង «✂️ កាត់»។")
+        with st.expander("⚙️ ការកំណត់វីដេអូបន្ថែម", expanded=False):
+            with st.container(border=True):
+                quality_label = st.radio("📈 គុណភាពវីដេអូ", list(QUALITY.keys()), index=1,
+                                         horizontal=True, key="quality_pick")
+            with st.container(border=True):
+                st.markdown("**✂️ កាត់វីដេអូវែងជាផ្នែកខ្លីៗ មុនបកប្រែ**")
+                auto_split = st.toggle("បំបែកវីដេអូវែងជាផ្នែកខ្លីៗ ហើយបកប្រែម្តងមួយផ្នែក",
+                                       value=False, key="auto_split_toggle")
+                split_sec = 0
+                split_exact = False
+                if auto_split:
+                    _split_labels = list(SPLIT_PRESETS.keys())
+                    _split_lbl = st.selectbox("ប្រវែងមួយផ្នែក", _split_labels,
+                                              index=_split_labels.index("៦ នាទី"), key="split_len_pick")
+                    split_sec = SPLIT_PRESETS[_split_lbl]
+                    split_exact = st.checkbox("🎯 កាត់ឱ្យចំពេលវេលា (យឺតជាង — encode ឡើងវិញ)", key="split_exact_pick")
+                    st.caption(f"វីដេអូវែងជាង {fmt_len(split_sec + 20)} នឹងត្រូវបំបែក ហើយផ្នែកនីមួយៗបកប្រែតាមលំដាប់។ "
+                               "ចង់កាត់ទាញយកទុកតែមួយៗ សូមប្រើផ្ទាំង «✂️ កាត់»។")
 
  
     with col_preview:
@@ -6523,8 +6642,7 @@ with tab_vid:
             bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick") if keep_bg else 8
             auto_gender = True
             st.caption("AI បង្កើតសំឡេងខ្មែរដោយស្វ័យប្រវត្តិ")
-        with st.container(border=True):
-            st.markdown("**🔤 កំណត់ Subtitle**")
+        with st.expander("🔤 កំណត់ Subtitle និងរូបរាងអក្សរ", expanded=False):
             review_on = st.toggle("✏️ ពិនិត្យអក្សរមុនបង្កើត", value=False, key="review_toggle")
             _f1, _f2 = st.columns(2)
             with _f1:
@@ -7300,4 +7418,3 @@ button[data-baseweb="tab"] p {font-size:.78rem !important;white-space:nowrap !im
 </style>
 """
 st.markdown(SCREENSHOT_LAYOUT_CORRECTION_CSS, unsafe_allow_html=True)
-
