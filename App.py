@@ -7731,3 +7731,107 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
 </style>
 """
 st.markdown(POLISHED_MOBILE_LAYOUT_CSS, unsafe_allow_html=True)
+
+
+# =====================================================================
+# FINAL MOBILE READABILITY PATCH
+# Keep the three main workflow panels side-by-side and swipe horizontally
+# on phones instead of squeezing all controls into unreadably narrow columns.
+# Also improve contrast for labels, captions, inputs, and progress indicators.
+# =====================================================================
+MOBILE_READABILITY_PATCH_CSS = r"""
+<style>
+@media (max-width: 759px) {
+  /* Only the main Upload / Preview / AI panels: horizontal swipe, not stacking. */
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) {
+    display:flex !important;
+    flex-direction:row !important;
+    flex-wrap:nowrap !important;
+    align-items:stretch !important;
+    gap:10px !important;
+    width:100% !important;
+    max-width:100% !important;
+    overflow-x:auto !important;
+    overflow-y:visible !important;
+    padding:2px 2px 10px !important;
+    scroll-snap-type:x proximity !important;
+    -webkit-overflow-scrolling:touch !important;
+    scrollbar-width:thin !important;
+  }
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) > [data-testid="stColumn"] {
+    flex:0 0 76vw !important;
+    width:76vw !important;
+    min-width:76vw !important;
+    max-width:76vw !important;
+    scroll-snap-align:start !important;
+  }
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) > [data-testid="stColumn"] > div {
+    min-width:0 !important;
+  }
+
+  /* Readable type inside the three workflow panels. */
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) .kvai-panel-title {
+    font-size:clamp(.9rem,3.8vw,1.05rem) !important;
+    line-height:1.3 !important;
+  }
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) [data-testid="stWidgetLabel"] p,
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) label {
+    color:#FFE7A3 !important;
+    font-size:.88rem !important;
+    line-height:1.35 !important;
+  }
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) [data-testid="stCaptionContainer"],
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title) [data-testid="stCaptionContainer"] p {
+    color:#C8DFFF !important;
+    font-size:.78rem !important;
+    line-height:1.4 !important;
+  }
+}
+
+/* Strong readable contrast: avoid white text disappearing on pale controls. */
+.stApp [data-testid="stMarkdownContainer"],
+.stApp [data-testid="stText"],
+.stApp .stMarkdown p,
+.stApp li {
+  color:#EAF3FF !important;
+}
+.stApp [data-testid="stWidgetLabel"] p,
+.stApp label {
+  color:#FFE7A3 !important;
+}
+.stApp [data-testid="stCaptionContainer"],
+.stApp [data-testid="stCaptionContainer"] p {
+  color:#C5D9F7 !important;
+}
+.stTextInput input,
+.stTextArea textarea,
+.stNumberInput input,
+[data-baseweb="input"] input,
+[data-baseweb="textarea"] textarea {
+  color:#FFFFFF !important;
+  caret-color:#42E6FF !important;
+  background:#0B173B !important;
+}
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+  color:#AFC4E8 !important;
+  opacity:1 !important;
+}
+/* Progress track and progress text must not be pale-on-white. */
+[data-testid="stProgress"] > div > div {
+  background:#26365F !important;
+}
+[data-testid="stProgress"] [data-testid="stMarkdownContainer"],
+[data-testid="stProgress"] p {
+  color:#FFE7A3 !important;
+}
+/* Native metric values remain bright; their labels use a warm readable tone. */
+[data-testid="stMetricValue"], [data-testid="stMetricValue"] * {
+  color:#FFFFFF !important;
+}
+[data-testid="stMetricLabel"] p {
+  color:#FFE7A3 !important;
+}
+</style>
+"""
+st.markdown(MOBILE_READABILITY_PATCH_CSS, unsafe_allow_html=True)
