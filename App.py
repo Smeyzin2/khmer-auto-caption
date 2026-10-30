@@ -7563,3 +7563,171 @@ div[data-testid="stVerticalBlockBorderWrapper"] {padding:7px 6px !important;bord
 </style>
 """
 st.markdown(MOBILE_NORMAL_NEON_CSS, unsafe_allow_html=True)
+
+
+# =====================================================================
+# FINAL POLISHED MOBILE LAYOUT
+# Keep the existing feature locations and horizontal dashboard grouping.
+# No orientation lock, no fixed overlays, and no forced vertical stacking.
+# =====================================================================
+POLISHED_MOBILE_LAYOUT_CSS = r"""
+<style>
+/* Always let the normal mobile page size itself naturally; do not clip content. */
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+  height:auto !important; min-height:100% !important; max-height:none !important;
+  overflow-x:hidden !important; overflow-y:auto !important;
+}
+[data-testid="stMain"] { overflow:visible !important; }
+.block-container { height:auto !important; max-height:none !important; overflow:visible !important; }
+
+/* Tight, consistent page frame */
+.block-container {
+  width:100% !important; max-width:100% !important;
+  padding: .42rem .5rem .8rem !important;
+  margin: 0 auto !important;
+}
+[data-testid="stVerticalBlock"] { gap:.38rem !important; }
+[data-testid="stElementContainer"] { margin:0 !important; }
+
+/* Header: slightly larger, aligned in one row */
+.kvai-head {
+  display:flex !important; flex-direction:row !important; flex-wrap:nowrap !important;
+  align-items:center !important; justify-content:flex-start !important;
+  width:100% !important; min-height:78px !important; height:78px !important;
+  max-height:78px !important; box-sizing:border-box !important;
+  gap:10px !important; margin:0 0 5px !important; padding:7px 10px !important;
+}
+.kvai-logo {
+  flex:0 0 46px !important; width:46px !important; height:46px !important;
+  font-size:24px !important;
+}
+.kvai-title { flex:1 1 auto !important; min-width:0 !important; }
+.kvai-title h1 {
+  font-size:clamp(1.05rem,4.3vw,1.42rem) !important;
+  line-height:1.1 !important; white-space:nowrap !important;
+}
+.kvai-title p {
+  display:block !important; font-size:clamp(.58rem,2.3vw,.72rem) !important;
+  line-height:1.15 !important; margin:2px 0 0 !important;
+  white-space:nowrap !important; overflow:hidden !important; text-overflow:ellipsis !important;
+}
+.kvai-badge {
+  flex:0 0 auto !important; padding:4px 7px !important;
+  font-size:clamp(.58rem,2.2vw,.7rem) !important; white-space:nowrap !important;
+}
+
+/* Keep all seven feature tabs in their original horizontal navigation row */
+[data-baseweb="tab-list"] {
+  display:flex !important; flex-direction:row !important; flex-wrap:nowrap !important;
+  gap:3px !important; margin:2px 0 4px !important; padding:3px !important;
+  overflow-x:auto !important; overflow-y:hidden !important;
+  scrollbar-width:thin !important;
+}
+button[data-baseweb="tab"] {
+  flex:0 0 auto !important; min-width:max-content !important;
+  height:38px !important; padding:0 9px !important;
+}
+button[data-baseweb="tab"] p { font-size:.76rem !important; white-space:nowrap !important; }
+[data-baseweb="tab-panel"] {
+  height:auto !important; max-height:none !important;
+  overflow:visible !important; padding:3px 0 5px !important;
+}
+
+/* Keep the main upload / preview / AI-control panels side-by-side.
+   Other feature controls remain in their original tabs and order. */
+[data-testid="stHorizontalBlock"] {
+  display:flex !important; flex-direction:row !important; flex-wrap:nowrap !important;
+  align-items:stretch !important; gap:.32rem !important; width:100% !important;
+}
+[data-testid="stColumn"] {
+  min-width:0 !important; max-width:none !important;
+  flex:1 1 0 !important; width:0 !important;
+}
+[data-testid="stColumn"] > div { min-width:0 !important; }
+.kvai-panel-title {
+  display:flex !important; align-items:center !important;
+  gap:5px !important; font-size:clamp(.68rem,2.8vw,.9rem) !important;
+  line-height:1.15 !important; margin:1px 0 3px !important; padding:5px 6px !important;
+}
+.kvai-step { width:24px !important; height:24px !important; flex:0 0 24px !important; font-size:.76rem !important; }
+
+/* Compact controls, but preserve usable touch targets */
+div[data-testid="stVerticalBlockBorderWrapper"] {
+  padding:4px !important; border-radius:11px !important;
+}
+[data-testid="stWidgetLabel"] p, .stApp label {
+  font-size:clamp(.62rem,2.4vw,.78rem) !important;
+  line-height:1.15 !important; margin-bottom:2px !important;
+}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+  font-size:clamp(.56rem,2.1vw,.68rem) !important;
+  line-height:1.2 !important; margin:1px 0 !important;
+}
+[data-testid="stFileUploaderDropzone"] { min-height:54px !important; padding:5px !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] { padding:0 !important; }
+[data-testid="stFileUploaderDropzoneInstructions"] span,
+[data-testid="stFileUploaderDropzoneInstructions"] small { font-size:.62rem !important; }
+[data-testid="stVideo"] { width:100% !important; max-width:100% !important; }
+[data-testid="stVideo"] video {
+  width:100% !important; height:auto !important; min-height:90px !important;
+  max-height:clamp(105px,30vh,190px) !important; object-fit:contain !important;
+  pointer-events:auto !important; background:#000 !important;
+}
+.kvai-empty-preview { height:clamp(105px,30vh,170px) !important; min-height:100px !important; }
+.kvai-play { width:42px !important; height:42px !important; font-size:19px !important; }
+.kvai-filmstrip { margin:3px 0 !important; padding:3px !important; font-size:.7rem !important; }
+[data-baseweb="select"] > div { min-height:34px !important; }
+.stTextInput input, .stNumberInput input { min-height:34px !important; }
+.stTextArea textarea { min-height:48px !important; }
+.stButton > button, .stDownloadButton > button {
+  min-height:36px !important; padding:4px 6px !important;
+  font-size:clamp(.65rem,2.5vw,.8rem) !important; white-space:normal !important;
+}
+[data-testid="stExpander"] { margin:2px 0 !important; }
+[data-testid="stExpander"] summary { min-height:34px !important; padding:4px 7px !important; }
+[data-testid="stExpander"] details { overflow:visible !important; }
+
+/* Keep start action in normal page flow; never cover other controls */
+.st-key-startbar {
+  position:static !important; inset:auto !important; transform:none !important;
+  width:100% !important; margin:3px 0 5px !important; padding:3px 5px !important;
+  z-index:2 !important; border:1px solid rgba(0,220,255,.55) !important;
+  border-radius:12px !important;
+  background:linear-gradient(100deg,rgba(255,20,147,.20),rgba(8,18,53,.96),rgba(0,210,255,.20)) !important;
+  box-shadow:0 0 14px rgba(0,210,255,.16) !important;
+}
+.st-key-startbar [data-testid="stVerticalBlockBorderWrapper"],
+.st-key-startbar [data-testid="stVerticalBlock"] {
+  background:transparent !important; border:0 !important; box-shadow:none !important;
+}
+.st-key-startbar .stButton > button { min-height:42px !important; font-size:.86rem !important; }
+
+/* Very narrow phones: retain row layout and reduce only visual scale */
+@media (max-width:420px) {
+  .block-container { padding:.3rem .32rem .65rem !important; }
+  .kvai-head { min-height:72px !important; height:72px !important; max-height:72px !important;
+    gap:6px !important; padding:5px 6px !important; }
+  .kvai-logo { flex-basis:38px !important; width:38px !important; height:38px !important; font-size:20px !important; }
+  .kvai-title h1 { font-size:1rem !important; }
+  .kvai-title p { font-size:.55rem !important; }
+  .kvai-badge { font-size:.55rem !important; padding:3px 5px !important; }
+  [data-testid="stHorizontalBlock"] { gap:.22rem !important; }
+  .kvai-panel-title { font-size:.65rem !important; padding:4px !important; }
+  .kvai-step { width:20px !important; height:20px !important; flex-basis:20px !important; font-size:.65rem !important; }
+  div[data-testid="stVerticalBlockBorderWrapper"] { padding:3px !important; }
+  [data-testid="stWidgetLabel"] p, .stApp label { font-size:.59rem !important; }
+  [data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p { font-size:.53rem !important; }
+  [data-testid="stFileUploaderDropzone"] { min-height:46px !important; padding:3px !important; }
+  [data-testid="stVideo"] video, .kvai-empty-preview { max-height:112px !important; min-height:88px !important; }
+  .stButton > button, .stDownloadButton > button { min-height:33px !important; font-size:.61rem !important; }
+}
+/* On tablets and desktop keep the same feature positions with comfortable sizing */
+@media (min-width:760px) {
+  .block-container { max-width:1500px !important; padding:.7rem 1rem 1.2rem !important; }
+  [data-testid="stHorizontalBlock"] { gap:.55rem !important; }
+  .kvai-head { min-height:84px !important; height:84px !important; max-height:84px !important; }
+}
+</style>
+"""
+st.markdown(POLISHED_MOBILE_LAYOUT_CSS, unsafe_allow_html=True)
