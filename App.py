@@ -5905,17 +5905,20 @@ def user_key_box():
             if not _kc["rows"]:
                 st.info("មិនទាន់មាន Key ណាមួយទេ។")
             else:
-                _icon = {"ok": "✅ ប្រើបាន", "limit": "⚠️ អស់កូតា/Limit", "bad": "❌ មិនត្រឹមត្រូវ", "error": "❌ កំហុស"}
+                _icon = {"ok": "✅ ប្រើបាន", "limit": "⚠️ Limit/រវល់", "bad": "❌ មិនត្រឹមត្រូវ", "error": "❌ កំហុស"}
                 _c1, _c2, _c3 = st.columns(3)
                 _c1.metric("✅ ប្រើបាន", sum(1 for r in _kc["rows"] if r["state"] == "ok"))
-                _c2.metric("⚠️ អស់កូតា", sum(1 for r in _kc["rows"] if r["state"] == "limit"))
+                _c2.metric("⚠️ Limit/រវល់", sum(1 for r in _kc["rows"] if r["state"] == "limit"))
                 _c3.metric("❌ ប្រើមិនបាន", sum(1 for r in _kc["rows"] if r["state"] in ("bad", "error")))
                 st.dataframe(
                     [{"ស្ថានភាព": _icon[r["state"]], "Provider": r["name"], "Key": r["key"],
                       "ម៉ូដែល": r["model"], "ms": r["ms"], "ព័ត៌មាន": r["msg"]} for r in _kc["rows"]],
                     use_container_width=True, hide_index=True)
+                for _r in _kc["rows"]:
+                    if _r["state"] != "ok":
+                        st.warning(f"{_r['name']} · {_r['key']} · {_r['model']}\n\n{_r['msg']}")
                 st.caption("ពិនិត្យនៅម៉ោង " + time.strftime("%H:%M:%S", time.localtime(_kc["t"]))
-                           + " · ⚠️ = Key ត្រឹមត្រូវ តែអស់កូតាបណ្តោះអាសន្ន។")
+                           + " · ⚠️ = Key ត្រឹមត្រូវ តែ Rate limit/ម៉ាស៊ីនមេរវល់បណ្តោះអាសន្ន (មិនទាន់ច្បាស់ថាអស់កូតាទេ)។")
         if any_saved and st.button("🧹 លុប Key ផ្ទាល់ខ្លួនទាំងអស់ (រួមទាំងក្នុង Browser)", key="user_key_clear_all", use_container_width=True):
             for _k in ("user_groq_keys", "user_oai_key", "user_oai_base", "user_oai_model",
                        "user_claude_keys", "user_claude_base", "user_claude_model"):
