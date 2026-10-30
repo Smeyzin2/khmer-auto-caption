@@ -819,6 +819,101 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 st.markdown(USABILITY_FIX_CSS, unsafe_allow_html=True)
 
 
+# ---------- Final landscape desktop-mode layout (last CSS wins) ----------
+LANDSCAPE_DESKTOP_FINAL_CSS = """
+<style>
+/* Rich full-screen canvas with the Angkor artwork and animated neon beams. */
+html, body, .stApp, [data-testid="stAppViewContainer"],
+[data-testid="stMain"], [data-testid="stMainBlockContainer"] {
+  background-color:#05091d !important;
+  background-color:#05091d !important;
+  color:#f7f8ff !important;
+}
+/* The existing page background already embeds the Angkor image in FINAL_RESPONSIVE_CSS;
+   keep it visible and animate light streaks above it without blocking clicks. */
+.stApp::before {
+  content:""; position:fixed; inset:0; z-index:0; pointer-events:none;
+  background:repeating-linear-gradient(112deg,transparent 0 14%,rgba(0,220,255,.08) 14.1%,transparent 14.5% 29%),
+    linear-gradient(105deg,transparent 34%,rgba(255,25,170,.13) 48%,transparent 61%);
+  background-size:220% 100%,240% 100%; animation:kvai-final-beams 8s linear infinite;
+}
+@keyframes kvai-final-beams { from {background-position:220% 0,200% 0} to {background-position:-20% 0,-40% 0} }
+[data-testid="stMain"] > div, .block-container {position:relative;z-index:1}
+[data-testid="stHeader"], [data-testid="stToolbar"] {background:transparent !important}
+.block-container {max-width:1800px !important;padding:3px 9px 54px !important}
+.kvai-head {height:70px !important;min-height:70px !important;max-height:70px !important;
+  margin:0 0 3px !important;padding:5px 12px !important}
+.kvai-logo {width:43px !important;height:43px !important;flex:0 0 43px !important}
+.kvai-title h1 {font-size:clamp(1.05rem,2vw,1.55rem) !important}
+.kvai-title p {font-size:.72rem !important;margin:0 !important}
+.kvai-badge {padding:4px 10px !important;font-size:.72rem !important}
+/* Compact orientation button: no large blank band under the header. */
+iframe[title="streamlit.components.v1.html"] {max-height:34px !important}
+[data-baseweb="tab-list"] {display:flex !important;gap:4px !important;padding:3px !important;margin:2px 0 4px !important}
+button[data-baseweb="tab"] {height:37px !important;min-width:0 !important;padding:0 9px !important}
+button[data-baseweb="tab"] p {font-size:.82rem !important;white-space:nowrap !important}
+[data-baseweb="tab-panel"] {padding:2px 0 6px !important}
+[data-testid="stVerticalBlock"] {gap:.28rem !important}
+[data-testid="stElementContainer"] {margin-bottom:0 !important}
+[data-testid="stHorizontalBlock"] {gap:.45rem !important;flex-wrap:nowrap !important}
+[data-testid="stColumn"] {min-width:0 !important}
+.kvai-panel-title {margin:0 0 4px !important;padding:5px 8px !important;font-size:.92rem !important}
+.kvai-step {width:25px !important;height:25px !important;font-size:.82rem !important}
+div[data-testid="stVerticalBlockBorderWrapper"] {padding:3px 4px !important;border-radius:12px !important}
+[data-testid="stWidgetLabel"] p, .stApp label {font-size:.76rem !important;margin-bottom:1px !important}
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {font-size:.68rem !important;line-height:1.2 !important;margin:1px 0 !important}
+[data-testid="stFileUploaderDropzone"] {min-height:48px !important;padding:3px 7px !important}
+[data-testid="stFileUploaderDropzoneInstructions"] {padding:0 !important}
+[data-testid="stVideo"] video {max-height:145px !important;object-fit:contain !important}
+.kvai-empty-preview {height:145px !important;gap:5px !important}
+.kvai-play {width:42px !important;height:42px !important;font-size:20px !important}
+.kvai-filmstrip {margin:3px 0 !important;padding:3px !important;letter-spacing:3px !important}
+[data-baseweb="select"] > div {min-height:34px !important}
+.stTextInput input, .stNumberInput input {min-height:32px !important}
+.stButton > button, .stDownloadButton > button {min-height:34px !important;padding:3px 8px !important;font-size:.78rem !important}
+[data-testid="stRadio"] [role="radiogroup"] {gap:4px !important}
+[data-testid="stRadio"] label {padding:4px 7px !important;font-size:.72rem !important}
+[data-testid="stToggle"] {padding:0 !important}
+[data-testid="stSlider"] {padding-top:0 !important;padding-bottom:0 !important}
+[data-testid="stAlert"] {padding:5px 9px !important;margin:2px 0 !important}
+[data-testid="stAlert"] p {font-size:.72rem !important;line-height:1.2 !important}
+/* The start action stays visible, but its footer never covers the controls. */
+.st-key-startbar {position:fixed !important;left:50% !important;bottom:0 !important;
+  transform:translateX(-50%) !important;width:min(100%,1800px) !important;z-index:1000 !important;
+  margin:0 !important;padding:4px 9px calc(4px + env(safe-area-inset-bottom)) !important;
+  background:linear-gradient(180deg,rgba(4,9,30,0),rgba(4,9,30,.96) 35%) !important;
+  border-top:1px solid rgba(0,220,255,.5) !important;backdrop-filter:blur(9px) !important}
+.st-key-startbar [data-testid="stVerticalBlockBorderWrapper"],
+.st-key-startbar [data-testid="stVerticalBlock"] {background:transparent !important;border:0 !important;box-shadow:none !important}
+.st-key-startbar .stButton > button {min-height:39px !important;font-size:.9rem !important;
+  background:linear-gradient(100deg,#ff1493,#843bff,#00cfff) !important;color:#fff !important;
+  border:1px solid #20dfff !important;box-shadow:0 0 15px rgba(0,207,255,.3) !important}
+@media (orientation:landscape) and (max-height:600px) {
+  .block-container {padding:2px 7px 47px !important}
+  .kvai-head {height:58px !important;min-height:58px !important;max-height:58px !important;padding:4px 9px !important}
+  .kvai-logo {width:36px !important;height:36px !important;flex-basis:36px !important}
+  .kvai-title h1 {font-size:1.08rem !important}
+  .kvai-title p {display:none !important}
+  .kvai-badge {font-size:.64rem !important;padding:3px 7px !important}
+  button[data-baseweb="tab"] {height:31px !important;padding:0 6px !important}
+  button[data-baseweb="tab"] p {font-size:.7rem !important}
+  .kvai-panel-title {font-size:.78rem !important;padding:3px 6px !important}
+  .kvai-step {width:21px !important;height:21px !important}
+  [data-testid="stVideo"] video, .kvai-empty-preview {max-height:105px !important;height:105px !important}
+  [data-testid="stFileUploaderDropzone"] {min-height:38px !important;padding:1px 5px !important}
+  [data-testid="stWidgetLabel"] p, .stApp label {font-size:.67rem !important}
+  .stButton > button, .stDownloadButton > button {min-height:29px !important;font-size:.68rem !important}
+  .st-key-startbar .stButton > button {min-height:34px !important}
+}
+/* Portrait stays naturally scrollable and usable; landscape is compact desktop mode. */
+@media (orientation:portrait) {
+  .block-container {padding-bottom:16px !important}
+  .st-key-startbar {position:relative !important;left:auto !important;bottom:auto !important;transform:none !important;width:100% !important}
+}
+</style>
+"""
+st.markdown(LANDSCAPE_DESKTOP_FINAL_CSS, unsafe_allow_html=True)
+
 
 def server_ram_info():
     """បង្ហាញ RAM របស់ម៉ាស៊ីនដែលកម្មវិធីកំពុងរត់ (អាន /proc/meminfo)។"""
@@ -6223,27 +6318,32 @@ GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
 components.html("""
-<div style="display:flex;justify-content:flex-end;padding:0 2px 2px;font-family:system-ui">
-<button id="kvaiRotate" style="cursor:pointer;border:1px solid #25D9FF;border-radius:12px;padding:9px 15px;color:white;font-weight:800;background:linear-gradient(100deg,#FF279F,#853CFF,#08C8EF);box-shadow:0 0 15px #168ac066">
-📱 បង្វិលទូរសព្ទផ្ដេក / ពេញអេក្រង់
-</button><span id="kvaiRotateMsg" style="color:#B9C7F5;font-size:11px;margin:auto 8px"></span>
+<div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;padding:0 2px 1px;font-family:system-ui">
+<button id="kvaiRotate" style="cursor:pointer;border:1px solid #25D9FF;border-radius:10px;padding:5px 11px;color:white;font-weight:800;font-size:12px;background:linear-gradient(100deg,#FF279F,#853CFF,#08C8EF);box-shadow:0 0 12px #168ac066">
+📱 ផ្ដេក / ពេញអេក្រង់
+</button><span id="kvaiRotateMsg" style="color:#B9C7F5;font-size:10px"></span>
 </div>
 <script>
 document.getElementById('kvaiRotate').addEventListener('click',async()=>{
  const msg=document.getElementById('kvaiRotateMsg');
  try{
   const d=window.parent.document;
-  if(!d.fullscreenElement && d.documentElement.requestFullscreen) await d.documentElement.requestFullscreen();
-  if(window.parent.screen?.orientation?.lock){await window.parent.screen.orientation.lock('landscape');msg.textContent='ផ្ដេករួច ✓';}
-  else{msg.textContent='សូមបង្វិលទូរសព្ទទៅផ្ដេក';}
+  const root=d.documentElement;
+  if(!d.fullscreenElement && root.requestFullscreen) await root.requestFullscreen();
+  const scr=window.parent.screen;
+  if(scr && scr.orientation && scr.orientation.lock){
+    try{await scr.orientation.lock('landscape');msg.textContent='ផ្ដេករួច ✓';}
+    catch(_){msg.textContent='សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
+  } else {msg.textContent='សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
  }catch(e){msg.textContent='បើមិនបង្វិល សូមបើក Auto-rotate ហើយផ្ដេកទូរសព្ទ';}
 });
 </script>
-""",height=54,scrolling=False)
+""",height=34,scrolling=False)
 ls_sync()
 
 if not GROQ_KEY and not oai_enabled() and not has_user_keys():
-    st.warning("កម្មវិធីមិនមាន API ទេ។ សូមដាក់ API Key ផ្ទាល់ខ្លួននៅផ្ទាំង «🌐 បកប្រែ» ឬទាក់ទងម្ចាស់កម្មវិធី។")
+    # Keep the missing-key notice compact so it does not push the dashboard below the fold.
+    st.caption("⚠️ មិនទាន់មាន API Key — បញ្ចូលនៅផ្ទាំង «🌐 បកប្រែ» ដើម្បីចាប់ផ្ដើមប្រើ AI។")
 
 ENGINE_FREE = "⭐ Groq សម្គាល់សំឡេង + AI API បកប្រែ (Fallback ស្វ័យប្រវត្តិ)"
 
