@@ -2077,7 +2077,7 @@ def cc_enabled():
 #  Claude (Anthropic) API — ម៉ាស៊ីនបកប្រែល្អបំផុត (ត្រូវបានសាកមុនគេ បើមាន Key)
 #  Secrets:
 #    ANTHROPIC_API_KEY  (ឬ CLAUDE_API_KEY)  ← ដាក់បានច្រើន Key: ANTHROPIC_API_KEYS ឬ ANTHROPIC_API_KEY_1, _2 ...
-#    ANTHROPIC_BASE_URL (មិនចាំបាច់ — លំនាំដើម https://api.anthropic.com
+#    ANTHROPIC_BASE_URL (មិនចាំបាច់ — លំនាំដើម https://api.laalaa.me
 #                        បើប្រើ Claude Code API ពីហាង/proxy សូមដាក់ Base URL ដែលហាងផ្តល់ឱ្យ)
 #    ANTHROPIC_MODEL    (មិនចាំបាច់ — លំនាំដើម claude-sonnet-5-5)
 # =====================================================================
@@ -2088,8 +2088,8 @@ _claude_vals = [
 for _ci in range(1, 21):
     _claude_vals.append(get_secret(f"ANTHROPIC_API_KEY_{_ci}", ""))
 CLAUDE_KEYS = split_keys(_claude_vals)
-CLAUDE_BASE = (str(get_secret("ANTHROPIC_BASE_URL", "https://api.anthropic.com") or "").strip().rstrip("/")
-               or "https://api.anthropic.com")
+CLAUDE_BASE = (str(get_secret("ANTHROPIC_BASE_URL", "https://api.laalaa.me") or "").strip().rstrip("/")
+               or "https://api.laalaa.me")
 CLAUDE_MODEL = (str(get_secret("ANTHROPIC_MODEL", "claude-sonnet-5-5") or "").strip() or "claude-sonnet-5-5")
 _CLAUDE_SECRET_PROVIDERS = [(f"Claude #{_i}", (_k, CLAUDE_BASE, CLAUDE_MODEL)) for _i, _k in enumerate(CLAUDE_KEYS, start=1)]
 _CLAUDE_PROVIDERS = list(_CLAUDE_SECRET_PROVIDERS)   # បញ្ជីដែលកំពុងប្រើ (Key ផ្ទាល់ខ្លួនមុន រួច Secrets) — ធ្វើបច្ចុប្បន្នភាពពេលចុច «ចាប់ផ្តើម»
@@ -5522,7 +5522,7 @@ def _ls_persist():
     oai = {"key": ss.get("user_oai_key", ""), "base": ss.get("user_oai_base", "https://api.xkiro.com/v1"),
            "model": ss.get("user_oai_model", "qwen/qwen3.5-flash")}
     claude = {"keys": list(ss.get("user_claude_keys", [])),
-              "base": ss.get("user_claude_base", "https://api.anthropic.com"),
+              "base": ss.get("user_claude_base", "https://api.laalaa.me"),
               "model": ss.get("user_claude_model", "claude-sonnet-5-5")}
     if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"]):
         payload = ""
@@ -5657,7 +5657,7 @@ def key_check_targets():
     ss = st.session_state
     rows = []
     for i, k in enumerate(ss.get("user_claude_keys", []), start=1):
-        _b = ss.get("user_claude_base", "https://api.anthropic.com")
+        _b = ss.get("user_claude_base", "https://api.laalaa.me")
         _m = ss.get("user_claude_model", "claude-sonnet-5-5")
         rows.append((f"Claude #{i} (ដាក់ក្នុងកម្មវិធី)", mask_key(k), "claude", (k, _b, _m), _m))
     for name, cfg in _CLAUDE_SECRET_PROVIDERS:
@@ -5739,7 +5739,7 @@ def user_key_box():
             typed = st.text_area("Claude API Key (មួយបន្ទាត់ ១ Key — ដាក់បានច្រើន)",
                                  placeholder="sk-...", height=100, key="user_claude_bulk")
             oai_base_in = st.text_input("Base URL (ដាក់តាមហាង បើមិនមាន ទុកលំនាំដើម)",
-                                        value=st.session_state.get("user_claude_base", "https://api.anthropic.com"),
+                                        value=st.session_state.get("user_claude_base", "https://api.laalaa.me"),
                                         key="user_claude_base_input")
             oai_model_in = st.text_input("ឈ្មោះម៉ូដែល",
                                          value=st.session_state.get("user_claude_model", "claude-sonnet-5-5"),
@@ -5762,7 +5762,7 @@ def user_key_box():
         if st.button("✅ ពិនិត្យ និងបន្ថែម Key", key="user_key_save", use_container_width=True):
             if provider == "Claude":
                 _new = split_keys(typed)[:20]
-                _base = (oai_base_in or "https://api.anthropic.com").strip().rstrip("/")
+                _base = (oai_base_in or "https://api.laalaa.me").strip().rstrip("/")
                 _model = (oai_model_in or "claude-sonnet-5-5").strip()
                 _have = list(st.session_state.get("user_claude_keys", []))
                 if not _new:
@@ -6618,7 +6618,7 @@ if run:
     _CLAUDE_PROVIDERS[:] = []
     for _i, _k in enumerate(st.session_state.get("user_claude_keys", []), start=1):
         _CLAUDE_PROVIDERS.append((f"Claude ផ្ទាល់ខ្លួន #{_i}", (
-            _k, st.session_state.get("user_claude_base", "https://api.anthropic.com"),
+            _k, st.session_state.get("user_claude_base", "https://api.laalaa.me"),
             st.session_state.get("user_claude_model", "claude-sonnet-5-5"))))
     _CLAUDE_PROVIDERS.extend(_CLAUDE_SECRET_PROVIDERS)
     _CLAUDE_COOL.clear()
