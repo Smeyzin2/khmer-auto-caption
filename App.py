@@ -5600,6 +5600,8 @@ def _classify_http(code):
         return "bad", "អស់ credit / ត្រូវបង់ប្រាក់"
     if code == 404:
         return "bad", "URL ឬឈ្មោះម៉ូដែលខុស"
+    if code in (503, 529):
+        return "limit", "Key ត្រឹមត្រូវ តែម៉ាស៊ីនមេរវល់ ឬគ្មាន account ទំនេរបណ្តោះអាសន្ន"
     if code == 429:
         return "limit", "Key ត្រឹមត្រូវ តែអស់កូតា ឬ Rate limit បណ្តោះអាសន្ន"
     return "error", f"HTTP {code}"
@@ -5761,7 +5763,7 @@ def user_key_box():
                    "កុំប្រើលើកុំព្យូទ័រ/ទូរស័ព្ទសាធារណៈ។ បើលុបទិន្នន័យ Browser Key នឹងបាត់។")
         if st.button("✅ ពិនិត្យ និងបន្ថែម Key", key="user_key_save", use_container_width=True):
             if provider == "Claude":
-                _new = split_keys(typed)[:20]
+                _new = [_x for _x in split_keys(typed) if _x.startswith("sk-") and "=" not in _x][:20]
                 _base = (oai_base_in or "https://api.laalaa.me").strip().rstrip("/")
                 _model = (oai_model_in or "claude-sonnet-5-5").strip()
                 _have = list(st.session_state.get("user_claude_keys", []))
