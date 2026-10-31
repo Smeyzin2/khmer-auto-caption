@@ -2400,8 +2400,28 @@ def google_translate_request(text, retries=3):
             raise
 
 
+_LEAK_TAG_RE = re.compile(r"\[\s*(?:speaker|max|SPEAKER)[^\]]*\]\s*", re.I)
+
+
+def spk_tag(g):
+    """ស្លាកភេទអ្នកនិយាយ ដែលផ្ញើទៅអ្នកបកប្រែ (M=ប្រុស, F=ស្រី)។ មិនស្គាល់ = គ្មានស្លាក។"""
+    return {"M": "[speaker: male] ", "F": "[speaker: female] "}.get(g, "")
+
+
+def _spk_differs(fn, a0, a1, b0, b1):
+    """True ប្រសិនបើឃ្លាពីរមានអ្នកនិយាយផ្សេងភេទគ្នាច្បាស់លាស់ (មិនត្រូវបញ្ចូលគ្នា)។"""
+    if fn is None:
+        return False
+    try:
+        ga, gb = fn(a0, a1), fn(b0, b1)
+    except Exception:
+        return False
+    return bool(ga and gb and ga != gb)
+
+
 def clean_translation(out):
     out = str(out or "")
+    out = _LEAK_TAG_RE.sub("", out)
     out = CJK_RE.sub("", out)
     out = fix_khmer(out)
     if out and not khmer_dominant(out):
@@ -2477,12 +2497,16 @@ TRANS_SYSTEM_FULL = (
     "Chinese address terms depend on the relationship: 哥/大哥/姐 = បង, 弟/妹 = ប្អូន, 老板 = ថៅកែ, 老公 = ប្តី, 老婆 = ប្រពន្ធ, 妈 = ម៉ែ/ម៉ាក់, 爸 = ប៉ា/ឪពុក, 少爷/小姐 = ប្រើតាមបរិបទ; choose the Khmer word a real family or friend would use, never a stiff dictionary word. "
     "Preserve the feeling: crying, pleading, shouting, laughing and sighing lines must sound emotional in Khmer (short broken sentences for panic, soft long sentences for sadness) while still being one clean grammatical sentence. "
     "If an English hint and the original disagree, the original wins. If a word is unclear choose the most common meaning that fits the scene, never invent or censor content, and never output nonsense words. "
+    "(15) SPEAKER GENDER: a line may start with the tag [speaker: male] or [speaker: female]. It is the TRUE gender of the person speaking, "
+    "measured from the audio, so trust it over any guess from the text. Write Khmer that fits that speaker: the polite answer yes is បាទ for a man and ចាស for a woman; "
+    "formal I is ខ្ញុំបាទ for a man and នាងខ្ញុំ for a woman (ordinary I is ខ្ញុំ for both); a man ends polite sentences with បាទ and a woman with ចាស. "
+    "Never give a woman male-only words or a man female-only words, and keep each speaker consistent across all lines. If a line has no tag, stay gender-neutral. Never output the tag. "
     "Output Khmer script only (no English, no Chinese, no romanization). "
     "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
 )
 
 
-# ប្រើ prompt ខ្លី (សន្សំ token ~៧០%)។ ចង់បាន prompt វែងដើម → ដាក់ FULL_PROMPT=1 ក្នុង Secrets
+# លំនាំដើម = prompt ពេញ (ត្រឹមត្រូវបំផុត)។ ចង់សន្សំ token → ដាក់ LITE_PROMPT=1 ក្នុង Secrets
 TRANS_SYSTEM_LITE = (
     "You are a Cambodian Khmer dubbing translator. Translate the numbered lines (consecutive lines of ONE video) into natural "
     "everyday SPOKEN Khmer (Phnom Penh), not written/news Khmer and not word-for-word. "
@@ -2491,10 +2515,12 @@ TRANS_SYSTEM_LITE = (
     "one input line = exactly one complete Khmer sentence, same order, never merge or split. "
     "A [max N chars] tag is the speaking-time budget: use the shortest natural wording, drop fillers, never drop a fact; never output the tag. "
     "Output is read by TTS: Khmer script only, end with ។ ? or !, no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
+    "A [speaker: male] or [speaker: female] tag is the true gender of the speaker: use បាទ / ខ្ញុំបាទ for a man and ចាស / នាងខ្ញុំ (formal) for a woman, never swap them; never output the tag. "
     "An English hint, if given, is only a hint; the original wins. "
     'Return JSON {"translations": [...]} with exactly one item per input.'
 )
-TRANS_SYSTEM = TRANS_SYSTEM_LITE
+LITE_PROMPT = str(get_secret("LITE_PROMPT", "0")).strip().lower() in ("1", "true", "yes", "on")
+TRANS_SYSTEM = TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL
 
 
 def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
@@ -2985,11 +3011,11 @@ EN_SYSTEM = (
 )
 
 
-def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None, groq_key=None):
+def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None, groq_key=None, speakers=None):
     """បកជាខ្មែរ៖ Groq មុន រួច OpenRouter → CodeCraft → xKiro ជាបម្រុង (មិនហៅ Gemini)។"""
     rows = []
     for i, text in enumerate(texts):
-        row = str(text)
+        row = spk_tag(speakers[i] if speakers and i < len(speakers) else None) + str(text)
         if english and i < len(english) and english[i] and "[unclear]" not in str(english[i]):
             row += f" (English meaning: {english[i]})"
         rows.append(row)
@@ -3021,7 +3047,7 @@ REFINE_SYSTEM = (
 )
 
 
-def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, shift=1):
+def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, shift=1, speakers=None):
     """ពិនិត្យការបកប្រែខ្មែរម្តងទៀតប្រៀបធៀបនឹងអត្ថបទដើម ហើយកែឱ្យត្រូវន័យ និងស្ទួនភាសាខ្មែរធម្មជាតិ។"""
     n = len(drafts)
     result = list(drafts)
@@ -3033,6 +3059,8 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
             row = f"ORIGINAL: {str(texts[i]).strip()}"
             if englishes[i] and "[unclear]" not in englishes[i]:
                 row += f" | ENGLISH: {englishes[i]}"
+            if speakers and i < len(speakers) and speakers[i]:
+                row += " | SPEAKER: " + ("male" if speakers[i] == "M" else "female")
             row += f" | KHMER DRAFT: {drafts[i]}"
             rows.append(row)
         return rows
@@ -3113,7 +3141,16 @@ JUDGE_SYSTEM = (
 )
 
 
-def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress=None, shift=2):
+SPEAKER_NOTE = (
+    " If an item has SPEAKER: male or SPEAKER: female, that is the TRUE gender of the speaker measured from the audio. "
+    "The Khmer must fit it: male uses បាទ and ខ្ញុំបាទ (formal I); female uses ចាស and នាងខ្ញុំ (formal I); never use the other gender's polite words. "
+    "Fix any line where the particles do not match the speaker. Never output the SPEAKER field."
+)
+REFINE_SYSTEM = REFINE_SYSTEM + SPEAKER_NOTE
+JUDGE_SYSTEM = JUDGE_SYSTEM + SPEAKER_NOTE
+
+
+def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress=None, shift=2, speakers=None):
     """ប្រៀបធៀបឃ្លាបកពីរបែប ហើយជ្រើស/កែយកមួយល្អបំផុត (ត្រឹមត្រូវតាមអត្ថន័យដើម និងធម្មជាតិ)។"""
     n = len(cand_a)
     result = list(cand_a)
@@ -3125,6 +3162,8 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
             row = f"ORIGINAL: {str(texts[i]).strip()}"
             if englishes[i] and "[unclear]" not in englishes[i]:
                 row += f" | ENGLISH: {englishes[i]}"
+            if speakers and i < len(speakers) and speakers[i]:
+                row += " | SPEAKER: " + ("male" if speakers[i] == "M" else "female")
             row += f" | A: {cand_a[i]} | B: {cand_b[i]}"
             rows.append(row)
         prev = [str(cand_a[j]) for j in range(max(0, idxs[0] - 3), idxs[0]) if cand_a[j]]
@@ -3300,19 +3339,19 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
 
 
 try:
-    TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "10") or 10)))
+    TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "8") or 8)))
 except Exception:
-    TRANS_BATCH = 10
+    TRANS_BATCH = 8
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
-REVIEW_MODE = str(get_secret("REVIEW_MODE", "off")).strip().lower()
+REVIEW_MODE = str(get_secret("REVIEW_MODE", "full")).strip().lower()
 # CLAUDE_FIRST=0 (លំនាំដើម): Claude ជាបម្រុងចុងក្រោយ (Groq/ឥតគិតថ្លៃមុន) | 1 = Claude មុនគេ
 CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "0")).strip().lower() in ("1", "true", "yes", "on")
 # FIT_MODE=off (លំនាំដើម): មិនហៅ AI តម្រឹមប្រវែង | on = បង្រួមឃ្លាវែងដោយ AI
 FIT_MODE = str(get_secret("FIT_MODE", "off")).strip().lower() in ("1", "true", "yes", "on")
-FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
+FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "0")).strip().lower() not in ("0", "false", "no", "off")
 
 
-def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None):
+def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None, speakers=None):
     n = len(texts)
     errors = []
     outs = [None] * n
@@ -3372,6 +3411,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
                     story=story, groq_key=groq_key,
+                    speakers=[speakers[i] for i in idxs] if speakers else None,
                 ), None
             except Exception as e:
                 return idxs, None, e
@@ -3399,7 +3439,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                     story = "VIDEO SUMMARY: " + synopsis + " || " + story
                 lines_ = []
                 for i in idxs:
-                    row = str(texts[i]).strip()
+                    row = spk_tag(speakers[i] if speakers else None) + str(texts[i]).strip()
                     if english[i] and "[unclear]" not in english[i]:
                         row += f" (English meaning: {english[i]})"
                     lines_.append(row)
@@ -3443,6 +3483,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                     [english[i] for i in idxs],
                     [budgets[i] for i in idxs] if budgets else None,
                     groq_key=groq_key,
+                    speakers=[speakers[i] for i in idxs] if speakers else None,
                 )
                 for i, r in zip(idxs, res):
                     if r and has_khmer(str(r)):
@@ -3456,7 +3497,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             idxs = missing[k:k + 8]
             try:
                 res = groq_translate_chunk(
-                    groq_key, [str(texts[i]).strip() for i in idxs],
+                    groq_key, [spk_tag(speakers[i] if speakers else None) + str(texts[i]).strip() for i in idxs],
                     [budgets[i] for i in idxs] if budgets else None,
                 )
                 for i, r in zip(idxs, res):
@@ -3484,16 +3525,17 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 return i, None
             one = [str(texts[i]).strip()]
             bud = [budgets[i]] if budgets else None
+            spk_ = [speakers[i]] if speakers else None
             r = None
             if (gemini_key or oai_enabled()) and dead["gemini"] < 2:
                 try:
-                    r = gemini_translate_khmer(gemini_key, one, [english[i]], bud, groq_key=groq_key)[0]
+                    r = gemini_translate_khmer(gemini_key, one, [english[i]], bud, groq_key=groq_key, speakers=spk_)[0]
                     dead["gemini"] = 0
                 except Exception as e:
                     _fail("gemini", f"gemini-1: {e}")
             if (not r or not has_khmer(str(r))) and groq_key and dead["groq"] < 2 and time.time() < t_end:
                 try:
-                    r = groq_translate_chunk(groq_key, one, bud)[0]
+                    r = groq_translate_chunk(groq_key, [spk_tag(spk_[0] if spk_ else None) + one[0]], bud)[0]
                     dead["groq"] = 0
                 except Exception as e:
                     _fail("groq", f"groq-1: {e}")
@@ -3518,11 +3560,11 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         try:
             cand_a = list(outs)
             cand_b = refine_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a,
-                                  gemini_key, groq_key, progress=progress, shift=1)
+                                  gemini_key, groq_key, progress=progress, shift=1, speakers=speakers)
             cand_b = [b or a for a, b in zip(cand_a, cand_b)]
             if REVIEW_MODE == "full":
                 outs = judge_khmer([texts[i] for i in allidx], [english[i] for i in allidx], cand_a, cand_b,
-                                   gemini_key, groq_key, progress=progress, shift=2)
+                                   gemini_key, groq_key, progress=progress, shift=2, speakers=speakers)
             else:
                 outs = cand_b
         except Exception as e:
@@ -3801,7 +3843,7 @@ def lip_budgets(segs):
     return out
 
 
-def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0):
+def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0, gender_fn=None):
     """បញ្ចូលបំណែក Whisper ដែលដាច់កណ្តាលប្រយោគ ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ
     (បកទាំងប្រយោគ ត្រឹមត្រូវជាងបកបំណែកខ្លីៗ)។"""
     strong_end = ".!?។…。！？"
@@ -3818,6 +3860,8 @@ def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0):
             tiny_cur = len(t) < 8
             starts_lower = t[:1].islower()              # ចាប់ផ្តើមអក្សរតូច = បន្តប្រយោគមុន
             cont = (not ended) or tiny_prev or tiny_cur or starts_lower
+            if _spk_differs(gender_fn, ps, pe, s, e):
+                cont = False   # អ្នកនិយាយប្តូរភេទ → មិនបញ្ចូលគ្នា (ឃ្លានីមួយៗមានសំឡេងតែមួយ)
             gap_ok = (s - pe) <= (max_gap if not ended else 0.5)
             if cont and gap_ok and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
                 out[-1] = (ps, max(pe, e), (pt + " " + t).strip())
@@ -3826,7 +3870,7 @@ def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0):
     return out
 
 
-def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False, gemini_key=None, keep_failed=False):
+def transcribe_free(groq_key, audio_path, duration, source_language, status, speech=None, khmer_ok=True, dub=False, gemini_key=None, keep_failed=False, gender_fn=None):
     code = WHISPER_LANG.get(source_language) if source_language else None
     if source_language == "Khmer" and khmer_ok:
         try:
@@ -3880,13 +3924,21 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
             segs = retime_by_speech(segs, speech, duration)
     else:
         status.write("៣/៤ កំពុងបកប្រែជាភាសាខ្មែរ...")
-        keep = merge_for_translate(keep)
+        keep = merge_for_translate(keep, gender_fn=gender_fn)
+        speakers = None
+        if gender_fn is not None:
+            try:
+                speakers = [gender_fn(_s, _e) for _s, _e, _t in keep]
+                if not any(speakers):
+                    speakers = None
+            except Exception:
+                speakers = None
         # បកប្រែតាមប្រវែងឃ្លាចិន៖ ឃ្លាខ្លីអាចពន្យល់ខ្មែរបន្ថែម,
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         # ប្រវែងគោល (soft hint): ~១០ តួអក្សរខ្មែរ/វិនាទី តាមពេលមាត់និយាយ ឱ្យស្របចង្វាក់ lip-sync
         # (prompt ហាមកាត់អត្ថន័យ ដូច្នេះនេះគ្រាន់តែជាការណែនាំ)
         budgets = lip_budgets(keep)  # ប្រវែងអក្សរតាមពេលមាត់និយាយ ឱ្យសំឡេងចប់ត្រូវមាត់
-        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m))
+        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m), speakers=speakers)
         segs = []
         for (s, e, orig), out in zip(keep, outs):
             if out:
@@ -4116,8 +4168,7 @@ def gender_timeline(pcm, duration, default_voice, sr=16000, tracks=None):
         s1 = float(lg[hi].std())
         sep = (c1 - c0) / (0.5 * (s0 + s1) + 1e-6)
         if hz1 / hz0 >= 1.3 and sep >= 2.0:
-            g0 = "M" if hz0 < 175 else "F"
-            g1 = "F" if hz1 >= 165 else "M"
+            g0, g1 = _label_clusters(hz0, hz1)
             if g0 != g1:
                 two = True
             else:
@@ -4136,6 +4187,7 @@ def gender_timeline(pcm, duration, default_voice, sr=16000, tracks=None):
         med = float(np.median(hz))
         if not info["summary"]:
             info["summary"] = f"ស្គាល់ឃើញអ្នកនិយាយ ១ នាក់៖ {names[single]} (~{int(med)}Hz)"
+        info.update({"two": False, "single": single})
         return [(0.0, duration + 1.0, single)], info
     nb = int(duration / BIN) + 2
     isf = np.where(hi, 1 if g1 == "F" else 0, 1 if g0 == "F" else 0)
@@ -4176,6 +4228,7 @@ def gender_timeline(pcm, duration, default_voice, sr=16000, tracks=None):
         f"ប្រុស (~{int(hz_m)}Hz) និងស្រី (~{int(hz_f)}Hz) "
         f"ប្តូរអ្នកនិយាយ {len(runs) - 1} ដង"
     )
+    info.update({"two": True, "hz_m": hz_m, "hz_f": hz_f})
     return [(a, b, g) for a, b, g in runs], info
 
 
@@ -4257,6 +4310,137 @@ def plan_dub_voices(segments, pcm, default_voice, duration, tracks=None):
         mark = "♂" if v == VOICE_MALE else "♀"
         lines.append(f"{mark} {int(hz) if hz else '?'}Hz  {t}")
     return dub, lines, info, runs
+
+
+def _label_clusters(hz0, hz1):
+    """កំណត់ភេទនៃក្រុមសំឡេង ២ (ទាប/ខ្ពស់)។ មិនយកក្រុមខ្ពស់ជាស្រី ប្រសិនបើប្រុស ២ នាក់ដែលសំឡេងខុសគ្នាបន្តិច
+    (ឧ. ប្រុស 130Hz + ប្រុស 170Hz ត្រូវតែនៅជាប្រុសទាំងពីរ)។"""
+    r = hz1 / max(hz0, 1.0)
+    if hz0 <= 150:
+        g0 = "M"
+    elif hz0 >= 185:
+        g0 = "F"
+    else:
+        g0 = "M" if (r >= 1.3 and hz1 >= 190) else "F"
+    if hz1 >= 180:
+        g1 = "F"
+    elif hz1 <= 150:
+        g1 = "M"
+    else:
+        g1 = "F" if (hz0 <= 150 and r >= 1.4) else g0
+    return g0, g1
+
+
+class SpeakerMap:
+    """ផែនទីអ្នកនិយាយ ប្រុស/ស្រី តាមពេលវេលា។ វាស់តាមឃ្លានីមួយៗ (មិនត្រូវការ MIN_TURN ២វិ ដូច timeline)
+    ដូច្នេះប្រុស/ស្រីឆ្លើយគ្នាលឿនៗ ក៏មិនច្រឡំសំឡេងដែរ។ អ្នកប្រើអាចបង្ខំភេទបាន (overrides)។"""
+
+    def __init__(self, times=None, f0=None, mode="none", hz_m=None, hz_f=None, single=None):
+        self.t = times
+        self.f0 = f0
+        self.mode = mode          # "two" | "single" | "none"
+        self.hz_m = hz_m
+        self.hz_f = hz_f
+        self.single = single
+        self.over = []
+        self.summary = ""
+        self._cache = {}
+
+    def set_overrides(self, items):
+        self.over = [(float(a), float(b), g) for a, b, g in (items or []) if g in ("M", "F")]
+        self._cache = {}
+
+    def _forced(self, a, b):
+        if not self.over:
+            return None
+        tot = {"M": 0.0, "F": 0.0}
+        for x, y, g in self.over:
+            ov = min(b, y) - max(a, x)
+            if ov > 0:
+                tot[g] += ov
+        best = "M" if tot["M"] >= tot["F"] else "F"
+        span = max(0.05, b - a)
+        return best if tot[best] >= 0.4 * span else None
+
+    def _measure(self, a, b):
+        if self.mode == "single":
+            return self.single
+        if self.mode != "two" or self.t is None or len(self.t) == 0:
+            return None
+        import numpy as np
+        m = (self.t >= a) & (self.t <= b) & (self.f0 > 0)
+        n = int(m.sum())
+        if n < 4:
+            return None
+        lg = np.log2(self.f0[m])
+        cut = 0.5 * (np.log2(self.hz_m) + np.log2(self.hz_f))
+        nf = int((lg > cut).sum())
+        nm = n - nf
+        if abs(nf - nm) / float(n) < 0.2:
+            return None
+        return "F" if nf > nm else "M"
+
+    def gender_at(self, a, b):
+        key = (round(float(a), 2), round(float(b), 2))
+        if key in self._cache:
+            return self._cache[key]
+        g = self._forced(a, b)
+        if g is None:
+            g = self._measure(a, b)
+        self._cache[key] = g
+        return g
+
+    def fill(self, segs, default=None, max_gap=2.5):
+        """ភេទរបស់ឃ្លានីមួយៗ។ ឃ្លាខ្លីពេកដែលវាស់មិនបាន ប្រើអ្នកនិយាយជិតបំផុតតាមពេល។"""
+        raw = [self.gender_at(sg[0], sg[1]) for sg in segs]
+        out = list(raw)
+        for i in range(len(segs)):
+            if out[i] is not None:
+                continue
+            best, bd = None, 1e9
+            for j in range(len(segs)):
+                if raw[j] is None:
+                    continue
+                d = max(segs[i][0] - segs[j][1], segs[j][0] - segs[i][1], 0.0)
+                if d < bd:
+                    best, bd = raw[j], d
+            out[i] = best if (best and bd <= max_gap) else default
+        return out
+
+
+def build_speaker_map(tracks, duration, default_voice):
+    try:
+        times, f0, rms = tracks
+        runs, info = gender_timeline(None, duration, default_voice, tracks=tracks)
+    except Exception:
+        return None
+    if runs is None or "two" not in info:
+        return None
+    if info["two"]:
+        sm = SpeakerMap(times, f0, "two", hz_m=info["hz_m"], hz_f=info["hz_f"])
+    else:
+        sm = SpeakerMap(times, f0, "single", single=info["single"])
+    sm.summary = info.get("summary", "")
+    return sm
+
+
+def voices_from_map(smap, segs, default_voice, runs=None):
+    """សំឡេង (ប្រុស/ស្រី) សម្រាប់ឃ្លានីមួយៗ។ ប្រុស → Piseth, ស្រី → Sreymom ជានិច្ច។"""
+    if smap is None:
+        if runs is None:
+            return None
+        return [dominant_voice(a, b, runs, default_voice) for a, b, _t in segs]
+    out = []
+    for g, (a, b, _t) in zip(smap.fill(segs, default=None), segs):
+        if g == "M":
+            out.append(VOICE_MALE)
+        elif g == "F":
+            out.append(VOICE_FEMALE)
+        elif runs is not None:
+            out.append(dominant_voice(a, b, runs, default_voice))
+        else:
+            out.append(default_voice)
+    return out
 
 
 MATCH_MIN = 0.8
@@ -4621,7 +4805,7 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=260, max_gap=1.6, max_len=18.0):
+def merge_for_dub(segments, max_chars=260, max_gap=1.6, max_len=18.0, gender_fn=None):
     """បញ្ចូលតែបំណែកខ្លីៗដែលដាច់កណ្តាលប្រយោគ ដើម្បីអានរលូន ហើយនៅជិតម៉ោងសំឡេងដើម"""
     out = []
     for s, e, t in segments:
@@ -4634,7 +4818,8 @@ def merge_for_dub(segments, max_chars=260, max_gap=1.6, max_len=18.0):
             tiny_prev = len(pt) < 18
             tiny_cur = len(t) < 10
             if ((not ended) or tiny_prev or tiny_cur) and (s - pe) <= max_gap \
-                    and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len:
+                    and len(pt) + len(t) + 1 <= max_chars and e - ps <= max_len \
+                    and not _spk_differs(gender_fn, ps, pe, s, e):
                 out[-1] = (ps, max(pe, e), fix_khmer(pt + " " + t))
                 continue
         out.append((s, e, t))
@@ -4719,8 +4904,14 @@ def condense_for_slot(text, slot, client, model, groq_key):
 VOICE_POLISH = ("highpass=f=70,"
                 "acompressor=threshold=0.14:ratio=2:attack=12:release=180,"
                 "equalizer=f=180:t=q:w=1:g=1.5,"
-                "equalizer=f=3200:t=q:w=1.2:g=1.5,"
-                "aecho=0.85:0.9:28:0.10")
+                "equalizer=f=3200:t=q:w=1.2:g=2.0")
+
+# ល្បឿនអតិបរមា ដើម្បីឱ្យសំឡេងច្បាស់ មិនលឿនពេកស្តាប់មិនទាន់ (ប្តូរបានក្នុង Secrets)
+try:
+    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.25") or 1.25)))
+    MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "35") or 35)))
+except Exception:
+    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.25, 35
 
 
 def assign_characters(dub_segments, chars, info):
@@ -4824,7 +5015,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                             base_ = -4
                         goal_ = hi_ * 0.97 if d_cur > hi_ * 1.03 else min(hi_, mouth_ * 0.95)
                         mult_ = (1.0 + base_ / 100.0) * (d_cur / max(0.3, goal_))
-                        new_rate = int(round(max(-30, min(60, (mult_ - 1.0) * 100))))
+                        new_rate = int(round(max(-30, min(MAX_TTS_RATE, (mult_ - 1.0) * 100))))
                         if new_rate == base_:
                             break
                         p2_ = {"rate": f"{new_rate:+d}%",
@@ -4920,7 +5111,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
-        speed = min(1.4, max(1.0, speed))
+        speed = min(MAX_DUB_SPEEDUP, max(1.0, speed))
         # តួអង្គនិយាយយឺត/បន្ថយសំឡេង៖ បើសំឡេង AI ខ្លីជាងពេលមាត់ ច្រើន ធ្វើឱ្យយឺតបន្តិច (មិនឱ្យសំឡេងចប់មុនមាត់)
         mouth = max(0.5, e - s)
         if d < mouth * 0.82 and speed == 1.0:
@@ -5253,13 +5444,33 @@ def run_worker(job, item, settings, fonts_data):
             speech = detect_speech(master_path, duration)
             analysis_pool = None
             analysis_future = None
-            if (settings["dub_on"] and duration <= 600
-                    and (settings["auto_gender"] or settings["voice_match"] or settings["emotion"] or settings.get("timbre"))):
+            if (duration <= 600
+                    and (settings["auto_gender"]
+                         or (settings["dub_on"] and (settings["voice_match"] or settings["emotion"] or settings.get("timbre"))))):
                 analysis_pool = ThreadPoolExecutor(max_workers=1)
                 def _analyze():
                     pcm_ = load_pcm(master_path)
                     return pcm_, pitch_track(pcm_)
                 analysis_future = analysis_pool.submit(_analyze)
+            _smap_cache = {}
+
+            def get_smap():
+                """ផែនទីអ្នកនិយាយ (ប្រុស/ស្រី) សាងសង់ម្តងគត់ ពីការវិភាគ pitch ដែលរត់ស្របពេលស្តាប់សំឡេង។"""
+                if "v" not in _smap_cache:
+                    v_ = None
+                    if analysis_future is not None and settings["auto_gender"]:
+                        try:
+                            _pcm_, _trk_ = analysis_future.result()
+                            v_ = build_speaker_map(_trk_, duration, settings["voice"])
+                        except Exception:
+                            v_ = None
+                    _smap_cache["v"] = v_
+                return _smap_cache["v"]
+
+            def _gender_fn(a_, b_):
+                sm_ = get_smap()
+                return sm_.gender_at(a_, b_) if sm_ is not None else None
+
             item["pct"] = 0.25
             rep.write("៣/៤ កំពុងស្តាប់ និងបកប្រែជាភាសាខ្មែរ...")
             order = ["free"] if settings["groq_key"] else []
@@ -5271,7 +5482,7 @@ def run_worker(job, item, settings, fonts_data):
             for idx, engine in enumerate(order):
                 try:
                     if engine == "free":
-                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"], keep_failed=False)
+                        segments, used_model, failed_chunks = transcribe_free(settings["groq_key"], audio_path, duration, settings["language"], rep, speech=speech, dub=settings["dub_on"], gemini_key=settings["gemini_key"], keep_failed=False, gender_fn=_gender_fn)
                     else:
                         raise RuntimeError("ម៉ាស៊ីនសម្គាល់សំឡេងនេះត្រូវបានបិទ។")
                     used_engine = engine
@@ -5292,7 +5503,14 @@ def run_worker(job, item, settings, fonts_data):
             segments = snap_segments(segments, speech, duration)
             if settings.get("review_on"):
                 item["pct"] = 0.56
-                segments = review_segments_wait(item, segments)
+                _sm_r = get_smap()
+                _gens_r = [(_sm_r.gender_at(a_, b_) if _sm_r is not None else None) for a_, b_, _t_ in segments]
+                segments = review_segments_wait(item, segments, genders=_gens_r)
+                _forced_r = item.pop("forced_voices", None)
+                if _forced_r:
+                    if get_smap() is None:
+                        _smap_cache["v"] = SpeakerMap()
+                    get_smap().set_overrides(_forced_r)
                 rep.write("កំពុងបន្តជាមួយអក្សរដែលអ្នកបានកែ...")
             captions, sync_mode = build_captions(segments, duration)
             if not captions:
@@ -5304,7 +5522,8 @@ def run_worker(job, item, settings, fonts_data):
                 try:
                     client = None
                     dub_model = used_model
-                    dub_segments = merge_for_dub(segments)
+                    _sm_d = get_smap()
+                    dub_segments = merge_for_dub(segments, gender_fn=(_sm_d.gender_at if _sm_d is not None else None))
                     seg_voices = None
                     targets = None
                     emotions = None
@@ -5328,7 +5547,7 @@ def run_worker(job, item, settings, fonts_data):
                                 try:
                                     runs_, _info = gender_timeline(pcm, duration, settings["voice"], tracks=tracks)
                                     if runs_ is not None:
-                                        seg_voices = [dominant_voice(a_, b_, runs_, settings["voice"]) for a_, b_, _t in dub_segments]
+                                        seg_voices = voices_from_map(get_smap(), dub_segments, settings["voice"], runs_)
                                         voice_notes = voice_notes + [f"🗣 ប្រុស {sum(1 for v_ in seg_voices if v_ == VOICE_MALE)} / ស្រី {sum(1 for v_ in seg_voices if v_ == VOICE_FEMALE)} ឃ្លា"]
                                 except Exception:
                                     seg_voices = None
@@ -5372,6 +5591,10 @@ def run_worker(job, item, settings, fonts_data):
                             seg_char = None
                             char_bands = None
                             item["warn"].append("វិភាគសំឡេងអ្នកនិយាយមិនបាន ប្រើសំឡេងតែមួយតាមដែលបានជ្រើស។")
+                    if seg_voices is None:
+                        _smf = get_smap()
+                        if _smf is not None and (_smf.over or _smf.mode != "none"):
+                            seg_voices = voices_from_map(_smf, dub_segments, settings["voice"], None)
                     if settings["emotion"]:
                         try:
                             rep.write("🎭 កំពុងវិភាគអារម្មណ៍...")
@@ -5440,10 +5663,12 @@ def run_worker(job, item, settings, fonts_data):
         gc.collect()
 
 
-def review_segments_wait(item, segments, timeout=900):
+def review_segments_wait(item, segments, timeout=900, genders=None):
     """ផ្អាកដើម្បីឱ្យអ្នកប្រើកែអក្សរ Subtitle (ខ្មែរ) មុនបង្កើតសំឡេង និងដាក់ចូលវីដេអូ។"""
     ev = threading.Event()
     item["review_final"] = None
+    item["review_final_genders"] = None
+    item["review_genders"] = list(genders) if genders else [None] * len(segments)
     item["review_segments"] = [[float(a), float(b), str(t)] for a, b, t in segments]
     item["review_event"] = ev
     item["stage"] = "✏️ រង់ចាំអ្នកពិនិត្យ និងកែអក្សរ..."
@@ -5461,10 +5686,18 @@ def review_segments_wait(item, segments, timeout=900):
     if not got or not final:
         return segments
     out = []
-    for a, b, t in final:
+    forced = []
+    picks = item.get("review_final_genders") or []
+    for k_, (a, b, t) in enumerate(final):
         t = fix_khmer(t)
         if t:
             out.append((float(a), float(b), t))
+            g_ = picks[k_] if k_ < len(picks) else None
+            if g_ in ("M", "F"):
+                forced.append((float(a), float(b), g_))
+    item["forced_voices"] = forced
+    item["review_genders"] = None
+    item["review_final_genders"] = None
     return out or segments
 
 
@@ -5782,15 +6015,24 @@ def work_area(job, was_running, reviewing=False):
                 st.info("✏️ ពិនិត្យ និងកែអក្សរខ្មែរ រួចចុច «បន្ត» ដើម្បីបង្កើតសំឡេង និងដាក់អក្សរចូលវីដេអូ។ លុបអក្សរឃ្លាណាឱ្យទទេ ដើម្បីរំលងឃ្លានោះ។")
                 with st.form(key=f"rvform_{job.id}_{i}"):
                     _edited = []
+                    _picks = []
+                    _gl = it.get("review_genders") or []
+                    _gopts = ["🤖 ស្វ័យប្រវត្តិ", "♂ សំឡេងប្រុស", "♀ សំឡេងស្រី"]
                     for _k, (_a, _b, _t) in enumerate(it["review_segments"]):
                         _new = st.text_area(f"{_k + 1}. {fmt_clock(_a)} → {fmt_clock(_b)}", value=_t,
                                             key=f"rv_{job.id}_{i}_{_k}", height=80)
+                        _g0 = _gl[_k] if _k < len(_gl) else None
+                        _pick = st.selectbox("🎙 សំឡេងអាន (ប្រុស/ស្រី)", _gopts,
+                                             index={"M": 1, "F": 2}.get(_g0, 0),
+                                             key=f"rvg_{job.id}_{i}_{_k}")
+                        _picks.append({"♂ សំឡេងប្រុស": "M", "♀ សំឡេងស្រី": "F"}.get(_pick))
                         _edited.append((_a, _b, _new))
                     _fc1, _fc2 = st.columns(2)
                     _go = _fc1.form_submit_button("✅ បន្ត (ប្រើអក្សរដែលកែ)", type="primary", use_container_width=True)
                     _skip = _fc2.form_submit_button("⏭ បន្តដោយមិនកែ", use_container_width=True)
                 if _go or _skip:
                     it["review_final"] = _edited if _go else None
+                    it["review_final_genders"] = _picks if _go else None
                     it["state"] = "running"
                     it["stage"] = "កំពុងបន្តជាមួយអក្សរដែលបានកែ..."
                     _ev = it.get("review_event")
