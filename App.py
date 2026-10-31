@@ -4805,7 +4805,7 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=260, max_gap=1.6, max_len=18.0, gender_fn=None):
+def merge_for_dub(segments, max_chars=140, max_gap=0.5, max_len=8.0, gender_fn=None):
     """បញ្ចូលតែបំណែកខ្លីៗដែលដាច់កណ្តាលប្រយោគ ដើម្បីអានរលូន ហើយនៅជិតម៉ោងសំឡេងដើម"""
     out = []
     for s, e, t in segments:
@@ -4908,10 +4908,10 @@ VOICE_POLISH = ("highpass=f=70,"
 
 # ល្បឿនអតិបរមា ដើម្បីឱ្យសំឡេងច្បាស់ មិនលឿនពេកស្តាប់មិនទាន់ (ប្តូរបានក្នុង Secrets)
 try:
-    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.25") or 1.25)))
+    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.35") or 1.35)))
     MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "35") or 35)))
 except Exception:
-    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.25, 35
+    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.35, 35
 
 
 def assign_characters(dub_segments, chars, info):
@@ -5097,7 +5097,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         d, f0, _tb = res
         next_s = segments[i + 1][0] if i + 1 < n_seg else duration
         prev_end = segments[i - 1][1] if i > 0 else 0.0
-        lead = max(0.0, min(0.15, s - prev_end - 0.05))   # ចាប់ផ្តើមមុនបន្តិច តាមការបើកមាត់
+        lead = 0.0   # SYNC: មិនឱ្យសំឡេងចេញមុនមាត់ (កែបញ្ហា សំឡេងមកមុនរូបភាព)
         start = max(s + offset - lead, 0.0)
         if start >= duration - 0.3:
             break
@@ -5106,8 +5106,8 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         # possible. atempo > 1 speeds up; < 1 slows down. Avoid extreme rates
         # that make Khmer hard to understand.
         # Previous line still talking? Start right after it, never overlap.
-        if start < cursor:
-            start = cursor
+        if start < cursor - 0.25:   # SYNC: អនុញ្ញាតត្រួតគ្នាបន្តិច កុំរុញបន្តបន្ទាប់ (កុំឱ្យសំឡេងយឺតជាងរូបភាព)
+            start = cursor - 0.25
             slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
@@ -5116,7 +5116,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         mouth = max(0.5, e - s)
         if d < mouth * 0.82 and speed == 1.0:
             speed = max(0.85, d / (mouth * 0.92))
-        cursor = max(cursor, start + d / speed + 0.08)
+        cursor = max(cursor, start + d / speed + 0.02)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
@@ -5160,7 +5160,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
     labels += "".join(f"[a{k}]" for k in range(first_voice, n))
     limiter = ",alimiter=limit=0.95" if emotions is not None else ""
     fc = (";".join(filters) + f";{labels}amix=inputs={n}:dropout_transition=0," f"volume={n}{limiter}[out]")
-    run_ffmpeg(inputs + ["-filter_complex", fc, "-map", "[out]", "-t", f"{duration:.2f}", "dub.wav"], cwd=folder)
+    run_ffmpeg(inputs + ["-filter_complex", fc + ";[out]aresample=24000:async=1:first_pts=0,apad[outp]", "-map", "[outp]", "-t", f"{duration:.3f}", "-ar", "24000", "dub.wav"], cwd=folder)
     return os.path.exists(os.path.join(folder, "dub.wav"))
 
 
@@ -5304,7 +5304,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         else:
             args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
                      "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1]]
-        args += ["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", "output.mp4"]
+        args += ["-c:a", "aac", "-b:a", "128k", "-af", "aresample=async=1:first_pts=0", "-shortest", "-movflags", "+faststart", "output.mp4"]
         log = run_ffmpeg(args, cwd=folder)
         return output_path, "-", log, ["មិនដាក់អក្សរ"]
     conf_env = make_fontconfig_env(folder)
@@ -5350,7 +5350,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
     args += extra_in + vf_args
     args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
              "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1],
-             "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", "output.mp4"]
+             "-c:a", "aac", "-b:a", "96k", "-af", "aresample=async=1:first_pts=0", "-shortest", "-movflags", "+faststart", "output.mp4"]
     try:
         total_dur = probe_media(os.path.join(folder, "input.mp4"))[0]
     except Exception:
