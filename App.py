@@ -2579,7 +2579,9 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
 #  Secrets: CODECRAFT_API_KEY, CODECRAFT_BASE_URL (ចាំបាច់ បញ្ចប់ត្រឹម /v1), CODECRAFT_MODEL (ចាំបាច់)
 # =====================================================================
 OAI_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
-OAI_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
+# CodeCraft API documentation default. Can still be overridden in Secrets.
+OAI_BASE = (get_secret("CODECRAFT_BASE_URL", "https://codecraftapi.com/v1") or
+            "https://codecraftapi.com/v1").strip().rstrip("/")
 OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
 
 
@@ -2821,6 +2823,33 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
         except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
             raise RuntimeError(f"CodeCraft បណ្តាញ/Timeout: {e}")
     raise RuntimeError(last)
+
+
+def fetch_codecraft_models(key, base, timeout=18):
+    """ទាញបញ្ជី Model ID ពី CodeCraft GET /v1/models។"""
+    key = str(key or "").strip()
+    base = str(base or "https://codecraftapi.com/v1").strip().rstrip("/")
+    if not key:
+        raise RuntimeError("សូមបញ្ចូល CodeCraft API Key ជាមុន។")
+    if not base.startswith("https://"):
+        raise RuntimeError("Base URL ត្រូវចាប់ផ្តើមដោយ https://")
+    req = urllib.request.Request(
+        base + "/models",
+        headers={"Authorization": f"Bearer {key}", "Accept": "application/json",
+                 "User-Agent": "Mozilla/5.0"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        payload = json.loads(response.read().decode("utf-8"))
+    rows = payload.get("data", []) if isinstance(payload, dict) else []
+    models = []
+    for row in rows:
+        if isinstance(row, dict):
+            mid = str(row.get("id") or row.get("model") or "").strip()
+            if mid and mid not in models:
+                models.append(mid)
+    if not models:
+        raise RuntimeError("API ឆ្លើយតបបាន ប៉ុន្តែមិនមាន Model ID ក្នុង data។")
+    return sorted(models)
 
 
 def oai_test(key, base, model):
@@ -6532,11 +6561,40 @@ def user_key_box():
                                          key="user_claude_model_input")
             st.caption("Claude ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទជាខ្មែរ (សាកមុនគេ)។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq Key ព្រោះ Claude មិនស្តាប់សំឡេងទេ។")
         elif provider == "CodeCraft":
-            typed = st.text_input("CodeCraft API Key", type="password", placeholder="API Key", key="user_key_input")
-            oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", ""),
-                                        key="user_oai_base_input")
-            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", ""),
-                                         key="user_oai_model_input")
+            typed = st.text_input("CodeCraft API Key", type="password",
+                                  placeholder="cc_...", key="user_key_input")
+            oai_base_in = st.text_input(
+                "Base URL",
+                value=st.session_state.get("user_oai_base") or OAI_BASE or "https://codecraftapi.com/v1",
+                key="user_oai_base_input",
+                help="តាមឯកសារ CodeCraft៖ https://codecraftapi.com/v1",
+            )
+            _fetch_col, _model_col = st.columns([1, 2])
+            with _fetch_col:
+                if st.button("📥 ទាញ Model", key="codecraft_fetch_models", use_container_width=True):
+                    _fetch_key = (typed or st.session_state.get("user_oai_key", "")).strip()
+                    try:
+                        with st.spinner("កំពុងទាញបញ្ជី Model ពី CodeCraft..."):
+                            st.session_state["_codecraft_models"] = fetch_codecraft_models(_fetch_key, oai_base_in)
+                            st.session_state["_codecraft_models_base"] = oai_base_in.strip().rstrip("/")
+                        st.success(f"រកឃើញ {len(st.session_state['_codecraft_models'])} Model")
+                    except Exception as _e:
+                        st.error("ទាញ Model មិនបាន៖ " + str(_e)[:220])
+            _cc_models = st.session_state.get("_codecraft_models", [])
+            if _cc_models and st.session_state.get("_codecraft_models_base") == oai_base_in.strip().rstrip("/"):
+                _old_model = st.session_state.get("user_oai_model") or OAI_MODEL
+                _default_idx = _cc_models.index(_old_model) if _old_model in _cc_models else 0
+                oai_model_in = st.selectbox(
+                    "ជ្រើសរើស Model ID", _cc_models, index=_default_idx,
+                    key="codecraft_model_select",
+                )
+            else:
+                oai_model_in = st.text_input(
+                    "Model ID (ចុច «ទាញ Model» ដើម្បីជ្រើសពីបញ្ជី)",
+                    value=st.session_state.get("user_oai_model") or OAI_MODEL,
+                    placeholder="ឧ. claude-opus-4.8",
+                    key="user_oai_model_input",
+                )
             st.caption("CodeCraft ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទ។ ការសម្គាល់សំឡេងវីដេអូនៅតែត្រូវការ Groq ព្រោះ CodeCraft មិនមាន Speech-to-Text API។")
         else:
             typed = st.text_area("Groq API Key (មួយបន្ទាត់ ១ Key ឬបំបែកដោយក្បៀស — ដាក់បានច្រើន)",
@@ -6583,10 +6641,11 @@ def user_key_box():
                         st.session_state["_clear_key_input"] = True
                     st.rerun()
             elif provider == "CodeCraft":
-                ok, msg = oai_test(typed, oai_base_in or "", oai_model_in or "")
+                _cc_base = (oai_base_in or "https://codecraftapi.com/v1").strip().rstrip("/")
+                ok, msg = oai_test(typed, _cc_base, oai_model_in or "")
                 if ok:
                     st.session_state["user_oai_key"] = typed.strip()
-                    st.session_state["user_oai_base"] = (oai_base_in or "").strip().rstrip("/")
+                    st.session_state["user_oai_base"] = _cc_base
                     st.session_state["user_oai_model"] = (oai_model_in or "").strip()
                     _ls_persist()
                     st.session_state["_clear_key_input"] = True
