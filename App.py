@@ -1117,7 +1117,7 @@ try:
 except Exception:
     ST_VER = (1, 0)
 
-# Gemini models are no longer used. xKiro handles text translation; Groq handles STT.
+# Gemini models are no longer used. CodeCraft handles text translation; Groq handles STT.
 PREFERRED_MODELS = []
 
 GF = "https://raw.githubusercontent.com/google/fonts/main/ofl/"
@@ -2575,26 +2575,12 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
 
 
 # =====================================================================
-#  xKiro API (OpenAI-compatible) — សម្រាប់ការងារអត្ថបទ/បកប្រែ
-#  Secrets: XKIRO_API_KEY, XKIRO_BASE_URL (optional), XKIRO_MODEL
+#  CodeCraft API (OpenAI-compatible) — សម្រាប់ការងារអត្ថបទ/បកប្រែ (ជំនួស CodeCraft)
+#  Secrets: CODECRAFT_API_KEY, CODECRAFT_BASE_URL (ចាំបាច់ បញ្ចប់ត្រឹម /v1), CODECRAFT_MODEL (ចាំបាច់)
 # =====================================================================
-OAI_KEY = get_secret("XKIRO_API_KEY", "").strip()
-OAI_BASE = (get_secret("XKIRO_BASE_URL", "https://api.xkiro.com/v1").strip().rstrip("/") or "https://api.xkiro.com/v1")
-OAI_MODEL = get_secret("XKIRO_MODEL", "qwen/qwen3.5-flash").strip()
-
-
-# =====================================================================
-#  CodeCraft API (OpenAI-compatible) — ម៉ាស៊ីនបកប្រែទី២ (ប្រើជាបម្រុង បន្ទាប់ពី xKiro)
-#  Secrets: CODECRAFT_API_KEY, CODECRAFT_BASE_URL (ចាំបាច់), CODECRAFT_MODEL (ចាំបាច់)
-#  ឧ. CODECRAFT_BASE_URL = "https://.../v1"  (ត្រូវបញ្ចប់ត្រឹម /v1 មុន /chat/completions)
-# =====================================================================
-CC_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
-CC_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
-CC_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
-
-
-def cc_enabled():
-    return bool(CC_KEY and CC_BASE.startswith("http") and CC_MODEL)
+OAI_KEY = get_secret("CODECRAFT_API_KEY", "").strip()
+OAI_BASE = get_secret("CODECRAFT_BASE_URL", "").strip().rstrip("/")
+OAI_MODEL = get_secret("CODECRAFT_MODEL", "").strip()
 
 
 # =====================================================================
@@ -2781,14 +2767,14 @@ def xk_enabled():
 
 def oai_enabled():
     """មានម៉ាស៊ីនបកប្រែ OpenAI-compatible យ៉ាងហោចណាស់មួយ។"""
-    return claude_enabled() or xk_enabled() or cc_enabled() or extra_provider_enabled()
+    return claude_enabled() or xk_enabled() or extra_provider_enabled()
 
 
 def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
-    """ការបកប្រែ xKiro ដោយសន្សំ token និងកាត់បន្ថយ API calls។"""
+    """ការបកប្រែ CodeCraft ដោយសន្សំ token និងកាត់បន្ថយ API calls។"""
     _key, _base, _model = cfg if cfg else oai_cfg()
     if not (_key and _base and _model):
-        raise RuntimeError("សូមបញ្ចូល xKiro API Key ផ្ទាល់ខ្លួន។")
+        raise RuntimeError("សូមបញ្ចូល CodeCraft API Key ផ្ទាល់ខ្លួន។")
     numbered = "\\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and i < len(budgets) and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
@@ -2803,7 +2789,7 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
         ],
     }
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    last = "xKiro: មិនទាន់ទទួលបានចម្លើយ"
+    last = "CodeCraft: មិនទាន់ទទួលបានចម្លើយ"
     for attempt in range(2):
         request = urllib.request.Request(
             _base.rstrip("/") + "/chat/completions", data=body, method="POST",
@@ -2819,24 +2805,24 @@ def oai_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=
             parsed = json.loads(match.group(0) if match else content)
             items = parsed.get("translations") or []
             if len(items) != len(texts):
-                raise RuntimeError("xKiro: ម៉ូដែលឆ្លើយតបមិនគ្រប់ចំនួនបន្ទាត់")
+                raise RuntimeError("CodeCraft: ម៉ូដែលឆ្លើយតបមិនគ្រប់ចំនួនបន្ទាត់")
             if raw:
                 return list(items)
             return [((str(x).strip() or None) if to_english else clean_translation(x)) for x in items]
         except urllib.error.HTTPError as e:
             detail = e.read().decode("utf-8", "ignore")[:180]
-            last = f"xKiro HTTP {e.code}: {detail}"
+            last = f"CodeCraft HTTP {e.code}: {detail}"
             if e.code in (429, 500, 502, 503, 504) and attempt == 0:
                 time.sleep(1)
                 continue
             raise RuntimeError(last)
         except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
-            raise RuntimeError(f"xKiro បណ្តាញ/Timeout: {e}")
+            raise RuntimeError(f"CodeCraft បណ្តាញ/Timeout: {e}")
     raise RuntimeError(last)
 
 
 def oai_test(key, base, model):
-    """សាកល្បង xKiro: ត្រឡប់ (True/False, សារ)។"""
+    """សាកល្បង CodeCraft: ត្រឡប់ (True/False, សារ)។"""
     key, base, model = str(key).strip(), str(base).strip().rstrip("/"), str(model).strip()
     if not (key and base and model):
         return False, "សូមបំពេញ Key, Base URL និងឈ្មោះម៉ូដែលឱ្យគ្រប់។"
@@ -2850,7 +2836,7 @@ def oai_test(key, base, model):
 
 
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
-    """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft → xKiro (ម៉ាស៊ីនបម្រុង)។"""
+    """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft (ម៉ាស៊ីនបម្រុង)។"""
     groq_err = None
     if claude_enabled() and CLAUDE_FIRST:
         for _cn, _cc in _CLAUDE_PROVIDERS:
@@ -2885,14 +2871,13 @@ def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=F
 
 
 _OAI_COOL = {"until": 0.0}
-_CC_COOL = {"until": 0.0}
 _EXTRA_COOL = {}
 
 
 _LAST_AI_ERR = {}
 
 
-def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="xKiro", fn=None):
+def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="CodeCraft", fn=None):
     for attempt in range(2):
         try:
             return (fn or oai_translate_chunk)(texts, budgets, system, to_english, cfg=cfg, raw=raw)
@@ -2933,17 +2918,17 @@ def provider_status():
     for n in names:
         if not n.startswith("OpenRouter"):
             out.append(f"{n} ✓" + _cool(_EXTRA_COOL.get(n, {})))
-    if cc_enabled():
-        out.append("CodeCraft ✓" + _cool(_CC_COOL))
+    if xk_enabled():
+        out.append("CodeCraft ✓" + _cool(_OAI_COOL))
     else:
-        miss = [k for k, v in (("API_KEY", CC_KEY), ("BASE_URL", CC_BASE.startswith("http") and CC_BASE), ("MODEL", CC_MODEL)) if not v]
+        _k, _b, _m = oai_cfg()
+        miss = [n for n, v in (("API_KEY", _k), ("BASE_URL", _b.startswith("http") and _b), ("MODEL", _m)) if not v]
         out.append("CodeCraft ✗ (ខ្វះ CODECRAFT_" + ", CODECRAFT_".join(miss) + ")")
-    out.append("xKiro ✓" + _cool(_OAI_COOL) if xk_enabled() else "xKiro ✗ (គ្មាន XKIRO_API_KEY)")
     return " · ".join(out)
 
 
 def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
-    """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft → xKiro
+    """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft
     (មានកំណត់ពេលសរុប ១២០ វិនាទីក្នុងមួយបាច់)។"""
     if getattr(_API_LOCAL, "isolated", False):
         _cfg = oai_cfg()
@@ -2988,12 +2973,8 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
         r = _try_provider(_cool, _cfg, texts, budgets, system, to_english, raw, name=_name)
         if r is not None:
             return r
-    if cc_enabled() and _CC_COOL.get("until", 0) <= time.time() and time.time() < t_end:
-        r = _try_provider(_CC_COOL, (CC_KEY, CC_BASE, CC_MODEL), texts, budgets, system, to_english, raw, name="CodeCraft")
-        if r is not None:
-            return r
     if xk_enabled() and _OAI_COOL.get("until", 0) <= time.time() and time.time() < t_end:
-        r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="xKiro")
+        r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="CodeCraft")
         if r is not None:
             return r
     if not CLAUDE_FIRST:
@@ -3012,7 +2993,7 @@ EN_SYSTEM = (
 
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None, groq_key=None, speakers=None):
-    """បកជាខ្មែរ៖ Groq មុន រួច OpenRouter → CodeCraft → xKiro ជាបម្រុង (មិនហៅ Gemini)។"""
+    """បកជាខ្មែរ៖ Groq មុន រួច OpenRouter → CodeCraft ជាបម្រុង (មិនហៅ Gemini)។"""
     rows = []
     for i, text in enumerate(texts):
         row = spk_tag(speakers[i] if speakers and i < len(speakers) else None) + str(text)
@@ -3419,14 +3400,14 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         with ThreadPoolExecutor(max_workers=5) as pool:
             for idxs, res, err in pool.map(_km, batches):
                 if err:
-                    errors.append(f"xKiro: {err}"[:200])
+                    errors.append(f"CodeCraft: {err}"[:200])
                 else:
                     for i, r in zip(idxs, res):
                         outs[i] = r
                 done += len(idxs)
                 _say(f"កំពុងបកជាខ្មែរ {done}/{n} ឃ្លា...")
-    xkiro_ok = {i for i, o in enumerate(outs) if o is not None}
-    # ជំហាន ២ខ: Groq ជាបម្រុង ប្រសិនបើ xKiro មិនបាន
+    cc_ok = {i for i, o in enumerate(outs) if o is not None}
+    # ជំហាន ២ខ: Groq ជាបម្រុង ប្រសិនបើ CodeCraft មិនបាន
     missing = [i for i, o in enumerate(outs) if o is None]
     if missing and groq_key:
         _say(f"កំពុងបកជាខ្មែរតាមសាច់រឿង (Groq ជាបម្រុង) 0/{len(missing)} ឃ្លា...")
@@ -5399,7 +5380,7 @@ class Job:
 
 
 def engine_name(engine):
-    return "Groq + xKiro"
+    return "Groq + CodeCraft"
 
 
 def run_worker(job, item, settings, fonts_data):
@@ -6318,8 +6299,8 @@ def _ls_persist():
     """រៀបចំទិន្នន័យ Key ដើម្បីសរសេរចូល localStorage នៅពេល rerun បន្ទាប់។"""
     ss = st.session_state
     groq = list(ss.get("user_groq_keys", []))
-    oai = {"key": ss.get("user_oai_key", ""), "base": ss.get("user_oai_base", "https://api.xkiro.com/v1"),
-           "model": ss.get("user_oai_model", "qwen/qwen3.5-flash")}
+    oai = {"key": ss.get("user_oai_key", ""), "base": ss.get("user_oai_base", ""),
+           "model": ss.get("user_oai_model", "")}
     claude = {"keys": list(ss.get("user_claude_keys", [])),
               "base": ss.get("user_claude_base", "https://api.laalaa.me"),
               "model": ss.get("user_claude_model", "claude-sonnet-5-5")}
@@ -6476,9 +6457,9 @@ def key_check_targets():
     for i, k in enumerate(ss.get("user_groq_keys", []), start=1):
         rows.append((f"Groq ផ្ទាល់ខ្លួន #{i}", mask_key(k), "groq", (k,), "whisper + chat"))
     if ss.get("user_oai_key"):
-        _cfg = (ss["user_oai_key"], ss.get("user_oai_base", "https://api.xkiro.com/v1"),
-                ss.get("user_oai_model", "qwen/qwen3.5-flash"))
-        rows.append(("xKiro ផ្ទាល់ខ្លួន", mask_key(_cfg[0]), "openai", _cfg, _cfg[2]))
+        _cfg = (ss["user_oai_key"], ss.get("user_oai_base", ""),
+                ss.get("user_oai_model", ""))
+        rows.append(("CodeCraft ផ្ទាល់ខ្លួន", mask_key(_cfg[0]), "openai", _cfg, _cfg[2]))
     return rows
 
 
@@ -6501,14 +6482,14 @@ def run_key_checks():
 
 
 def user_key_box():
-    """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួនបានច្រើន (Groq / xKiro) ហើយសេវទុកក្នុង Browser។"""
+    """ប្រអប់ឱ្យអ្នកប្រើដាក់ API Key ផ្ទាល់ខ្លួនបានច្រើន (Groq / CodeCraft) ហើយសេវទុកក្នុង Browser។"""
     if st.session_state.pop("_clear_key_input", False):
         st.session_state.pop("user_key_input", None)
         st.session_state.pop("user_keys_bulk", None)
         st.session_state.pop("user_claude_bulk", None)
     with st.container(border=True):
         st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន (ដាក់បានច្រើន Key)**")
-        st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq Key សម្រាប់សម្គាល់សំឡេង និង xKiro Key សម្រាប់បកប្រែ។ "
+        st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq Key សម្រាប់សម្គាល់សំឡេង និង CodeCraft Key សម្រាប់បកប្រែ។ "
                    "ដាក់បានច្រើន Key — Key មួយអស់កូតា កម្មវិធីប្តូរទៅ Key បន្ទាប់ដោយស្វ័យប្រវត្តិ។")
         _msg = st.session_state.pop("_key_msg", None)
         if _msg:
@@ -6529,13 +6510,13 @@ def user_key_box():
                     st.rerun()
         if st.session_state.get("user_oai_key"):
             any_saved = True
-            st.success(f"✅ កំពុងប្រើ xKiro Key របស់អ្នក (…{st.session_state['user_oai_key'][-4:]})")
-            if st.button("🗑 ឈប់ប្រើ xKiro Key", key="remove_user_oai_key"):
+            st.success(f"✅ កំពុងប្រើ CodeCraft Key របស់អ្នក (…{st.session_state['user_oai_key'][-4:]})")
+            if st.button("🗑 ឈប់ប្រើ CodeCraft Key", key="remove_user_oai_key"):
                 for _k in ("user_oai_key", "user_oai_base", "user_oai_model"):
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "xKiro"], horizontal=True, key="user_key_provider")
+        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
         if provider == "Claude":
@@ -6548,13 +6529,13 @@ def user_key_box():
                                          value=st.session_state.get("user_claude_model", "claude-sonnet-5-5"),
                                          key="user_claude_model_input")
             st.caption("Claude ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទជាខ្មែរ (សាកមុនគេ)។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq Key ព្រោះ Claude មិនស្តាប់សំឡេងទេ។")
-        elif provider == "xKiro":
-            typed = st.text_input("xKiro API Key", type="password", placeholder="xkiro_...", key="user_key_input")
-            oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", "https://api.xkiro.com/v1"),
+        elif provider == "CodeCraft":
+            typed = st.text_input("CodeCraft API Key", type="password", placeholder="API Key", key="user_key_input")
+            oai_base_in = st.text_input("Base URL", value=st.session_state.get("user_oai_base", ""),
                                         key="user_oai_base_input")
-            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", "qwen/qwen3.5-flash"),
+            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល", value=st.session_state.get("user_oai_model", ""),
                                          key="user_oai_model_input")
-            st.caption("xKiro ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទ។ ការសម្គាល់សំឡេងវីដេអូនៅតែត្រូវការ Groq ព្រោះ xKiro មិនមាន Speech-to-Text API។")
+            st.caption("CodeCraft ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទ។ ការសម្គាល់សំឡេងវីដេអូនៅតែត្រូវការ Groq ព្រោះ CodeCraft មិនមាន Speech-to-Text API។")
         else:
             typed = st.text_area("Groq API Key (មួយបន្ទាត់ ១ Key ឬបំបែកដោយក្បៀស — ដាក់បានច្រើន)",
                                  placeholder="gsk_...\ngsk_...", height=120, key="user_keys_bulk")
@@ -6599,15 +6580,15 @@ def user_key_box():
                     if _added:
                         st.session_state["_clear_key_input"] = True
                     st.rerun()
-            elif provider == "xKiro":
-                ok, msg = oai_test(typed, oai_base_in or "https://api.xkiro.com/v1", oai_model_in or "qwen/qwen3.5-flash")
+            elif provider == "CodeCraft":
+                ok, msg = oai_test(typed, oai_base_in or "", oai_model_in or "")
                 if ok:
                     st.session_state["user_oai_key"] = typed.strip()
-                    st.session_state["user_oai_base"] = (oai_base_in or "https://api.xkiro.com/v1").strip().rstrip("/")
-                    st.session_state["user_oai_model"] = (oai_model_in or "qwen/qwen3.5-flash").strip()
+                    st.session_state["user_oai_base"] = (oai_base_in or "").strip().rstrip("/")
+                    st.session_state["user_oai_model"] = (oai_model_in or "").strip()
                     _ls_persist()
                     st.session_state["_clear_key_input"] = True
-                    st.session_state["_key_msg"] = ("ok", "បានបន្ថែម xKiro Key ✅")
+                    st.session_state["_key_msg"] = ("ok", "បានបន្ថែម CodeCraft Key ✅")
                     st.rerun()
                 else:
                     st.error(msg)
@@ -7244,13 +7225,12 @@ with tab_trans:
     with st.container(border=True):
         engine_options = [ENGINE_FREE]
         if not effective_groq_key():
-            st.warning("សូមដាក់ Groq API Key សម្រាប់សម្គាល់សំឡេង និងកំណត់ API បកប្រែយ៉ាងហោចណាស់មួយក្នុង Secrets ឬបញ្ចូល xKiro Key ផ្ទាល់ខ្លួន។")
+            st.warning("សូមដាក់ Groq API Key សម្រាប់សម្គាល់សំឡេង និងកំណត់ API បកប្រែយ៉ាងហោចណាស់មួយក្នុង Secrets ឬបញ្ចូល CodeCraft Key ផ្ទាល់ខ្លួន។")
         engine_label = st.selectbox("ម៉ាស៊ីនដំណើរការ", engine_options, index=0, disabled=True)
-        st.caption("Groq ប្រើសម្រាប់សម្គាល់សំឡេង។ ការបកប្រែសាកល្បង Claude (បើមាន Key) មុនគេ រួច xKiro និង CodeCraft រួចបន្តទៅ Provider ផ្សេងៗដែលម្ចាស់កម្មវិធីបានកំណត់ក្នុង Secrets។")
+        st.caption("Groq ប្រើសម្រាប់សម្គាល់សំឡេង។ ការបកប្រែសាកល្បង Claude (បើមាន Key) មុនគេ រួច CodeCraft រួចបន្តទៅ Provider ផ្សេងៗដែលម្ចាស់កម្មវិធីបានកំណត់ក្នុង Secrets។")
         with st.expander("🌐 API ដែលអាចភ្ជាប់តាម Secrets"):
             st.markdown("""
             - `ANTHROPIC_API_KEY` (ឬ `ANTHROPIC_API_KEYS = ["key1", "key2"]` / `ANTHROPIC_API_KEY_1`, `_2`), `ANTHROPIC_BASE_URL` (មិនចាំបាច់), `ANTHROPIC_MODEL` (មិនចាំបាច់)
-            - `XKIRO_API_KEY`, `XKIRO_BASE_URL`, `XKIRO_MODEL`
             - `CODECRAFT_API_KEY`, `CODECRAFT_BASE_URL`, `CODECRAFT_MODEL`
             - `OPENROUTER_API_KEYS = ["key1", "key2", ...]` ឬ `OPENROUTER_API_KEY_1`, `OPENROUTER_API_KEY_2` និង `OPENROUTER_MODEL` (Base URL លំនាំដើម `https://openrouter.ai/api/v1`)
             - `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_BASE_URL`, `CLOUDFLARE_MODEL` (Base URL ត្រូវមាន Account ID)
@@ -7582,8 +7562,8 @@ if run:
         "gemini_key": "", "groq_key": effective_groq_key(), "fx": fx_settings,
         "user_xk_cfg": (
             st.session_state.get("user_oai_key", ""),
-            st.session_state.get("user_oai_base", "https://api.xkiro.com/v1"),
-            st.session_state.get("user_oai_model", "qwen/qwen3.5-flash"),
+            st.session_state.get("user_oai_base", ""),
+            st.session_state.get("user_oai_model", ""),
         ),
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
