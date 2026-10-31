@@ -3352,16 +3352,16 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
 
 
 try:
-    TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "8") or 8)))
+    TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "12") or 12)))
 except Exception:
     TRANS_BATCH = 8
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
-REVIEW_MODE = str(get_secret("REVIEW_MODE", "full")).strip().lower()
+REVIEW_MODE = str(get_secret("REVIEW_MODE", "refine")).strip().lower()
 # CLAUDE_FIRST=1 (លំនាំដើម): Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ | 0 = ប្រើ Provider ផ្សេងមុន
 CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "1")).strip().lower() in ("1", "true", "yes", "on")
 # FIT_MODE=1 (លំនាំដើម): បង្រួមឃ្លាវែងដោយ AI ដើម្បីសមពេលនិយាយ
 FIT_MODE = str(get_secret("FIT_MODE", "1")).strip().lower() in ("1", "true", "yes", "on")
-FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "0")).strip().lower() not in ("0", "false", "no", "off")
+FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
 
 
 def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None, speakers=None):
@@ -4839,7 +4839,7 @@ def merge_for_dub(segments, max_chars=95, max_gap=0.28, max_len=4.8, gender_fn=N
     return out
 
 
-def tts_retry(text, voice, path, prosody=None, tries=5):
+def tts_retry(text, voice, path, prosody=None, tries=3):
     last = None
     for k in range(tries):
         try:
@@ -4856,7 +4856,7 @@ def tts_retry(text, voice, path, prosody=None, tries=5):
                     return True
             except Exception as e:
                 last = e
-        time.sleep(0.5 * (k + 1))
+        time.sleep(0.25 * (k + 1))
     return False
 
 
@@ -5018,7 +5018,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 return max(0.0, x - hi_ * 1.03) + max(0.0, lo_ - x)
 
             def _fit_rate(text_, d_cur, p_cur):
-                for _k in range(3):
+                for _k in range(2):
                     if _miss(d_cur) <= 0:
                         break
                     try:
