@@ -3024,7 +3024,7 @@ EN_SYSTEM = (
 
 
 def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=None, groq_key=None, speakers=None):
-    """បកជាខ្មែរ៖ Groq មុន រួច OpenRouter → CodeCraft ជាបម្រុង (មិនហៅ Gemini)។"""
+    """បកជាខ្មែរ៖ Claude ជាមុនគេ (តាម CLAUDE_FIRST) រួច provider បម្រុង។"""
     rows = []
     for i, text in enumerate(texts):
         row = spk_tag(speakers[i] if speakers and i < len(speakers) else None) + str(text)
@@ -3033,8 +3033,9 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
         rows.append(row)
     system = (
         TRANS_SYSTEM
-        + " Some lines include an English meaning in parentheses to help you understand; "
-          "translate the true meaning into Khmer and never output English text or tags."
+        + " The ORIGINAL source-language transcript is authoritative; English in parentheses is only a secondary meaning hint. "
+          "Translate every line into accurate, natural spoken Cambodian Khmer. Preserve all facts, names, relationships, pronouns, numbers, negation, conditions, subject/object roles, intent, humor, sarcasm and emotion. "
+          "Use the surrounding story only to resolve ambiguity; never invent missing dialogue. Never omit or add meaning. Output Khmer only; never output English text or tags."
         + ((" STORY SO FAR (context only, do NOT translate): " + story) if story else "")
     )
     if groq_key:
@@ -3356,10 +3357,10 @@ except Exception:
     TRANS_BATCH = 8
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
 REVIEW_MODE = str(get_secret("REVIEW_MODE", "full")).strip().lower()
-# CLAUDE_FIRST=0 (លំនាំដើម): Claude ជាបម្រុងចុងក្រោយ (Groq/ឥតគិតថ្លៃមុន) | 1 = Claude មុនគេ
-CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "0")).strip().lower() in ("1", "true", "yes", "on")
-# FIT_MODE=off (លំនាំដើម): មិនហៅ AI តម្រឹមប្រវែង | on = បង្រួមឃ្លាវែងដោយ AI
-FIT_MODE = str(get_secret("FIT_MODE", "off")).strip().lower() in ("1", "true", "yes", "on")
+# CLAUDE_FIRST=1 (លំនាំដើម): Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ | 0 = ប្រើ Provider ផ្សេងមុន
+CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "1")).strip().lower() in ("1", "true", "yes", "on")
+# FIT_MODE=1 (លំនាំដើម): បង្រួមឃ្លាវែងដោយ AI ដើម្បីសមពេលនិយាយ
+FIT_MODE = str(get_secret("FIT_MODE", "1")).strip().lower() in ("1", "true", "yes", "on")
 FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "0")).strip().lower() not in ("0", "false", "no", "off")
 
 
@@ -4817,7 +4818,7 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
-def merge_for_dub(segments, max_chars=140, max_gap=0.5, max_len=8.0, gender_fn=None):
+def merge_for_dub(segments, max_chars=95, max_gap=0.28, max_len=4.8, gender_fn=None):
     """បញ្ចូលតែបំណែកខ្លីៗដែលដាច់កណ្តាលប្រយោគ ដើម្បីអានរលូន ហើយនៅជិតម៉ោងសំឡេងដើម"""
     out = []
     for s, e, t in segments:
@@ -4920,10 +4921,10 @@ VOICE_POLISH = ("highpass=f=70,"
 
 # ល្បឿនអតិបរមា ដើម្បីឱ្យសំឡេងច្បាស់ មិនលឿនពេកស្តាប់មិនទាន់ (ប្តូរបានក្នុង Secrets)
 try:
-    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.35") or 1.35)))
+    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.45") or 1.45)))
     MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "35") or 35)))
 except Exception:
-    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.35, 35
+    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.45, 35
 
 
 def assign_characters(dub_segments, chars, info):
@@ -5118,9 +5119,10 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         # possible. atempo > 1 speeds up; < 1 slows down. Avoid extreme rates
         # that make Khmer hard to understand.
         # Previous line still talking? Start right after it, never overlap.
-        if start < cursor - 0.25:   # SYNC: អនុញ្ញាតត្រួតគ្នាបន្តិច កុំរុញបន្តបន្ទាប់ (កុំឱ្យសំឡេងយឺតជាងរូបភាព)
-            start = cursor - 0.25
-            slot = max(0.6, min(next_s - 0.04, e + 1.2) - start)
+        # Anchor every dub line to its own detected source-speech start.
+        # Do not shift later lines forward when a previous TTS line is long;
+        # that creates cumulative audio/video drift. The speed/slot logic below
+        # handles overlap locally while keeping the original start timestamp.
         # Too long for its slot -> speed up (max 1.35x) so it never talks over the next line.
         speed = d / slot if d > slot else 1.0
         speed = min(MAX_DUB_SPEEDUP, max(1.0, speed))
@@ -7288,7 +7290,7 @@ with tab_trans:
         if not effective_groq_key():
             st.warning("សូមដាក់ Groq API Key សម្រាប់សម្គាល់សំឡេង និងកំណត់ API បកប្រែយ៉ាងហោចណាស់មួយក្នុង Secrets ឬបញ្ចូល CodeCraft Key ផ្ទាល់ខ្លួន។")
         engine_label = st.selectbox("ម៉ាស៊ីនដំណើរការ", engine_options, index=0, disabled=True)
-        st.caption("Groq ប្រើសម្រាប់សម្គាល់សំឡេង។ ការបកប្រែសាកល្បង Claude (បើមាន Key) មុនគេ រួច CodeCraft រួចបន្តទៅ Provider ផ្សេងៗដែលម្ចាស់កម្មវិធីបានកំណត់ក្នុង Secrets។")
+        st.caption("Groq ប្រើសម្រាប់សម្គាល់សំឡេង។ Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ (ត្រូវការ Claude API Key) រួចបន្តទៅ Provider បម្រុងដែលម្ចាស់កម្មវិធីបានកំណត់ក្នុង Secrets។")
         with st.expander("🌐 API ដែលអាចភ្ជាប់តាម Secrets"):
             st.markdown("""
             - `ANTHROPIC_API_KEY` (ឬ `ANTHROPIC_API_KEYS = ["key1", "key2"]` / `ANTHROPIC_API_KEY_1`, `_2`), `ANTHROPIC_BASE_URL` (មិនចាំបាច់), `ANTHROPIC_MODEL` (មិនចាំបាច់)
@@ -7309,6 +7311,7 @@ with tab_trans:
             st.selectbox("បកប្រែទៅ", ["🇰🇭 ខ្មែរ"], disabled=True, key="target_lang")
     with st.container(border=True):
         st.caption("✅ អក្សររត់ខ្មែរ និងសំឡេងអានខ្មែរ ត្រូវបានបើកដោយស្វ័យប្រវត្តិ។")
+        st.caption("🎙️ Claude បកប្រែជាខ្មែរមុនគេ។ សំឡេងខ្មែរត្រូវបានតម្រឹមស្វ័យប្រវត្តិតាមពេលវេលាសំឡេងនិយាយដើម និងកាត់បន្ថយការយឺតកកស្ទះ។")
     user_key_box()
 
 # ============================ ផ្ទាំង ៣: សំឡេង ============================
