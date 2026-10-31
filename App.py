@@ -6431,10 +6431,123 @@ def user_key_box():
             st.rerun()
 
 
+# =====================================================================
+#  ចូលប្រើតាមគណនី Google (Gmail) — ត្រូវចូលមុនទើបប្រើកម្មវិធីបាន
+#  ► បិទបាន៖ ដាក់ REQUIRE_LOGIN = "0" ក្នុង Secrets
+#  ► កំណត់អ្នកអនុញ្ញាត (មិនចាំបាច់)៖ ALLOWED_EMAILS = "a@gmail.com, b@gmail.com"
+# =====================================================================
+REQUIRE_LOGIN = str(get_secret("REQUIRE_LOGIN", "1")).strip().lower() not in ("0", "false", "no", "off")
+
+_AUTH_SETUP_HELP = """# .streamlit/secrets.toml (ឬ Streamlit Cloud → Settings → Secrets)
+[auth]
+redirect_uri = "https://ឈ្មោះកម្មវិធីរបស់អ្នក.streamlit.app/oauth2callback"
+cookie_secret = "ដាក់អក្សរចៃដន្យវែងៗ ៣២ តួឡើង"
+
+[auth.google]
+client_id = "xxxx.apps.googleusercontent.com"
+client_secret = "xxxx"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+"""
+
+
+def _auth_configured():
+    try:
+        _a = st.secrets["auth"]
+        return bool(_a.get("cookie_secret")) and bool(_a.get("redirect_uri")) and "google" in _a
+    except Exception:
+        return False
+
+
+def _user_field(key, default=""):
+    try:
+        v = st.user.get(key)
+        return default if v is None else v
+    except Exception:
+        try:
+            v = getattr(st.user, key)
+            return default if v is None else v
+        except Exception:
+            return default
+
+
+def _allowed_email_set():
+    raw = get_secret("ALLOWED_EMAILS", "")
+    if isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = re.split(r"[,\n;\s]+", str(raw or ""))
+    return {str(x).strip().lower() for x in items if str(x).strip()}
+
+
+def _login_card(title, lines):
+    st.markdown(
+        f"""
+<div style="max-width:480px;margin:6vh auto 14px;padding:30px 24px;text-align:center;
+border:1px solid rgba(177,60,255,.45);border-radius:24px;background:rgba(255,255,255,.96);
+box-shadow:0 8px 34px rgba(100,80,200,.18);color:#1F2A44;">
+  <div style="font-size:54px;line-height:1">🔐</div>
+  <h2 style="margin:14px 0 8px;font-size:24px;color:#1F2A44">{title}</h2>
+  {''.join(f'<p style="margin:6px 0;font-size:16px;line-height:1.7;color:#44506E">{l}</p>' for l in lines)}
+</div>
+""",
+        unsafe_allow_html=True,
+    )
+
+
+def require_login():
+    """បិទមិនឱ្យប្រើកម្មវិធី ទាល់តែចូលតាមគណនី Google។ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិពេលចូលលើកដំបូង។"""
+    if not REQUIRE_LOGIN:
+        return
+    if not (hasattr(st, "login") and hasattr(st, "user")):
+        st.error("Streamlit ចាស់ពេក — សូមដាក់ `streamlit>=1.42.0` និង `Authlib>=1.3.2` ក្នុង requirements.txt។")
+        st.stop()
+    if not _auth_configured():
+        _login_card("កម្មវិធីកំពុងរៀបចំការចូលប្រើ", ["អ្នកគ្រប់គ្រងមិនទាន់កំណត់ Google Login ទេ។ សូមត្រឡប់មកវិញពេលក្រោយ។"])
+        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
+            st.markdown(
+                "1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** (Web application)។\n"
+                "2. ដាក់ **Authorized redirect URI** ជា `https://ឈ្មោះកម្មវិធី.streamlit.app/oauth2callback` "
+                "(ក្នុងម៉ាស៊ីនខ្លួនឯង៖ `http://localhost:8501/oauth2callback`)។\n"
+                "3. ដាក់ Secrets ដូចខាងក្រោម ហើយដាក់ `Authlib>=1.3.2` ក្នុង requirements.txt។"
+            )
+            st.code(_AUTH_SETUP_HELP, language="toml")
+        st.stop()
+
+    if not _user_field("is_logged_in", False):
+        _login_card("សូមចូលតាមគណនី Google", [
+            "ត្រូវចូលតាម Gmail ទើបប្រើកម្មវិធីបាន។",
+            "បើមិនទាន់មានគណនីក្នុងកម្មវិធី វានឹងត្រូវបានបង្កើតស្វ័យប្រវត្តិ។",
+        ])
+        _c1, _c2, _c3 = st.columns([1, 2, 1])
+        with _c2:
+            st.button("🔐 ចូលតាម Google / Gmail", key="kv_login_btn", type="primary",
+                      use_container_width=True, on_click=st.login, args=("google",))
+        st.stop()
+
+    _email = str(_user_field("email", "")).strip().lower()
+    if not _email or _user_field("email_verified", True) is False:
+        _login_card("អ៊ីមែលមិនទាន់បញ្ជាក់", ["គណនី Google នេះមិនទាន់បញ្ជាក់អ៊ីមែលទេ។ សូមប្រើគណនីផ្សេង។"])
+        st.button("🚪 ចាកចេញ", key="kv_logout_unverified", on_click=st.logout)
+        st.stop()
+    _allowed = _allowed_email_set()
+    if _allowed and _email not in _allowed:
+        _login_card("គ្មានសិទ្ធិប្រើ", [f"គណនី <b>{_email}</b> មិនមានក្នុងបញ្ជីអនុញ្ញាតទេ។"])
+        st.button("🚪 ចាកចេញ", key="kv_logout_denied", on_click=st.logout)
+        st.stop()
+
+    _name = str(_user_field("name", "") or _email)
+    _a, _b = st.columns([5, 2])
+    with _a:
+        st.caption(f"👤 {_name} · {_email}")
+    with _b:
+        st.button("🚪 ចាកចេញ", key="kv_logout_btn", on_click=st.logout, use_container_width=True)
+
+
 GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
+require_login()
 # Mobile-first interface: landscape/fullscreen rotation control intentionally removed.
 ls_sync()
 
