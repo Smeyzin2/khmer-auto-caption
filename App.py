@@ -2479,8 +2479,9 @@ TRANS_SYSTEM_FULL = (
     "no word salad. Write numbers and units the way Khmer speakers say them. Transliterate foreign names naturally. "
     "(6) If a line is garbled or uncertain, keep the closest clear meaning, do not invent dialogue. "
     "(7) A [max N chars] tag is the SPEAKING-TIME budget of the on-screen speaker's mouth (Khmer TTS speaks about 12 characters per second). "
-    "Make the dubbed line end when the mouth stops: choose the shortest natural everyday wording, drop filler words, repeated words and pronouns a native would omit, "
-    "and keep the same rhythm as the original. NEVER drop a fact, name, number, negation or the emotional point just to fit; if the meaning truly cannot fit, keep the meaning and exceed the budget slightly. Never output the tag. "
+    "Make the dubbed line end when the mouth stops, so treat N as a TARGET length (aim for 80-105% of N): if your natural Khmer is longer than N, use the shortest everyday wording and drop fillers; "
+    "if it is clearly shorter than ~70% of N (the speaker talks for a long time), make it fuller and more natural with common connecting words, polite particles and a fuller phrasing of the SAME meaning, without inventing any new fact. "
+    "NEVER drop a fact, name, number, negation or the emotional point just to fit; if the meaning truly cannot fit, keep the meaning and exceed the budget slightly. Never output the tag. "
     "(8) Every numbered line is ONE complete spoken sentence unit: translate it into exactly one complete, grammatical Khmer "
     "sentence; never merge lines, split lines, or move content between lines. Never leave source-language words untranslated except names. "
     "(9) The output will be read aloud by a TTS voice: use plain natural Khmer, put ។ (or ? !) only at the end of a sentence, and avoid "
@@ -2514,7 +2515,7 @@ TRANS_SYSTEM_LITE = (
     "Rules: keep exact meaning, names, numbers, negations and emotion; never add or drop facts; pick pronouns/politeness by relationship "
     "and keep them consistent; transliterate foreign names by sound the same way every time; translate idioms by meaning; "
     "one input line = exactly one complete Khmer sentence, same order, never merge or split. "
-    "A [max N chars] tag is the speaking-time budget: use the shortest natural wording, drop fillers, never drop a fact; never output the tag. "
+    "A [max N chars] tag is the TARGET length (aim for 80-105% of N): shorten with simpler wording if too long; if clearly under ~70% of N, phrase it fuller with natural connecting words but never invent facts; never drop a fact; never output the tag. "
     "Output is read by TTS: Khmer script only, end with ។ ? or !, no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
     "A [speaker: male] or [speaker: female] tag is the true gender of the speaker: use បាទ / ខ្ញុំបាទ for a man and ចាស / នាងខ្ញុំ (formal) for a woman, never swap them; never output the tag. "
     "An English hint, if given, is only a hint; the original wins. "
@@ -3328,12 +3329,38 @@ FIT_SYSTEM = (
 )
 
 
+EXPAND_SYSTEM = (
+    "You are a Khmer dubbing editor doing lip-sync timing. Each numbered item has an ORIGINAL line, the current KHMER line and a TARGET number "
+    "of characters (the time the speaker's mouth is moving). The KHMER line is too short, so the voice would end long before the mouth stops. "
+    "Rewrite it to about TARGET characters (not more than 120% of TARGET) with fuller natural spoken Khmer: use complete everyday phrasing, "
+    "natural connecting words and polite particles. Keep exactly the same meaning; never add new facts, names or numbers. "
+    "Khmer script only, one sentence per item ending with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses or symbols. "
+    "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
+)
+
+
 def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
     """បង្រួមឃ្លាខ្មែរដែលវែងជាងពេលមាត់និយាយ ដោយរក្សាអត្ថន័យ (ឱ្យសំឡេងចប់ត្រូវមាត់)។"""
     n = len(outs)
     result = list(outs)
     over = [i for i in range(n)
             if budgets[i] and len(str(outs[i])) > budgets[i] * 1.6 and len(str(outs[i])) > 30]
+    short = [i for i in range(n)
+             if budgets[i] and budgets[i] >= 28 and 0 < len(str(outs[i])) < budgets[i] * 0.55]
+    if short:
+        try:
+            for k in range(0, len(short), LLM_GROUP):
+                idxs = short[k:k + LLM_GROUP]
+                rows = [f"ORIGINAL: {str(texts[i]).strip()} | KHMER: {outs[i]} | TARGET: {budgets[i]}" for i in idxs]
+                res = llm_lines(rows, EXPAND_SYSTEM, gemini_key, groq_key)
+                if res:
+                    for i, r in zip(idxs, res):
+                        r = str(r or "")
+                        if (has_khmer(r) and khmer_dominant(r) and len(r) > len(str(outs[i]))
+                                and len(r) <= budgets[i] * 1.4):
+                            result[i] = r
+        except Exception:
+            pass
     if not over:
         return result
     groups = [over[k:k + LLM_GROUP] for k in range(0, len(over), LLM_GROUP)]
@@ -3365,7 +3392,7 @@ except Exception:
     TRANS_BATCH = 8
 LLM_GROUP = 12   # ចំនួនឃ្លាក្នុងមួយការហៅ AI ពេលកែ/ជ្រើស/តម្រឹម (ធំជាង = ហៅតិចជាង = លឿនជាង)
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
-REVIEW_MODE = str(get_secret("REVIEW_MODE", "refine")).strip().lower()
+REVIEW_MODE = str(get_secret("REVIEW_MODE", "off")).strip().lower()
 # CLAUDE_FIRST=1 (លំនាំដើម): Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ | 0 = ប្រើ Provider ផ្សេងមុន
 CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "1")).strip().lower() in ("1", "true", "yes", "on")
 # FIT_MODE=1 (លំនាំដើម): បង្រួមឃ្លាវែងដោយ AI ដើម្បីសមពេលនិយាយ
@@ -4953,10 +4980,10 @@ VOICE_POLISH = ("highpass=f=70,"
 
 # ល្បឿនអតិបរមា ដើម្បីឱ្យសំឡេងច្បាស់ មិនលឿនពេកស្តាប់មិនទាន់ (ប្តូរបានក្នុង Secrets)
 try:
-    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.45") or 1.45)))
-    MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "35") or 35)))
+    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.25") or 1.25)))
+    MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "25") or 25)))
 except Exception:
-    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.45, 35
+    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.25, 25
 
 
 def assign_characters(dub_segments, chars, info):
@@ -5013,7 +5040,7 @@ def assign_characters(dub_segments, chars, info):
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             ref_bands=None, offset=0.0, tight=True, bg_vol=0.08,
+             ref_bands=None, offset=0.0, tight=True, hard_cut=True, bg_vol=0.08,
              seg_char=None, char_bands=None):
     inputs, filters = [], []
     n = 0
@@ -5161,10 +5188,13 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         # តួអង្គនិយាយយឺត/បន្ថយសំឡេង៖ បើសំឡេង AI ខ្លីជាងពេលមាត់ ច្រើន ធ្វើឱ្យយឺតបន្តិច (មិនឱ្យសំឡេងចប់មុនមាត់)
         mouth = max(0.5, e - s)
         if d < mouth * 0.82 and speed == 1.0:
-            speed = max(0.85, d / (mouth * 0.92))
+            speed = max(0.75, d / (mouth * 0.92))
         cursor = max(cursor, start + d / speed + 0.02)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
-        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
+        maxdur = None
+        if hard_cut and d / speed > slot * 1.04:
+            maxdur = slot
+        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed, "maxdur": maxdur,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
                      "eq": (char_eq.get(seg_char[i], "") if (seg_char and i < len(seg_char)) else voice_eq.get(voices_[i], ""))})
     if notes is not None and skipped:
@@ -5193,9 +5223,15 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             chain = atempo_chain(p["speed"])
         else:
             chain = ("aresample=24000," f"asetrate={int(24000 * ratio)}," "aresample=24000," + atempo_chain(p["speed"] / ratio))
+        if hard_cut:
+            # កាត់ស្ងាត់ដើមឃ្លា ដើម្បីឱ្យសំឡេងចាប់ផ្តើមត្រូវពេលមាត់
+            chain = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03," + chain
         if p.get("eq"):
             chain += "," + p["eq"]
         chain += "," + VOICE_POLISH
+        if p.get("maxdur"):
+            md = max(0.3, float(p["maxdur"]))
+            chain += f",atrim=0:{md:.3f},afade=t=out:st={max(0.0, md - 0.08):.3f}:d=0.08"
         filters.append(f"[{n}:a]{chain},afade=t=in:d=0.03,adelay={delay}:all=1[a{n}]")
         n += 1
     if notes is not None:
@@ -5701,7 +5737,7 @@ def run_worker(job, item, settings, fonts_data):
                             item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
-                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=0.0, tight=True, bg_vol=settings.get("bg_vol", 0.08), seg_char=seg_char, char_bands=char_bands)
+                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=float(settings.get("dub_offset", 0.0) or 0.0), tight=True, hard_cut=bool(settings.get("tight_sync", True)), bg_vol=settings.get("bg_vol", 0.08), seg_char=seg_char, char_bands=char_bands)
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
@@ -7160,6 +7196,10 @@ with tab_vid:
             bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick") if keep_bg else 8
             auto_gender = True
             st.caption("AI បង្កើតសំឡេងខ្មែរដោយស្វ័យប្រវត្តិ")
+            dub_offset = st.slider("⏱ កែពេលសំឡេងខ្មែរ (វិនាទី)", -1.0, 1.0, 0.0, 0.05, key="dub_offset_pick",
+                                   help="សំឡេងមកយឺតជាងមាត់ → ទាញទៅ − (មុន) | សំឡេងមកមុនមាត់ → ទាញទៅ + (ក្រោយ)")
+            tight_sync = st.toggle("✂️ កាត់សំឡេងឱ្យចប់ត្រឹមមាត់", value=True, key="tight_sync_pick",
+                                   help="កាត់ស្ងាត់ដើមឃ្លា និងកាត់ចុងឃ្លាខ្មែរបើវែងលើសពេលមាត់និយាយ")
         with st.expander("🔤 កំណត់ Subtitle និងរូបរាងអក្សរ", expanded=False):
             review_on = st.toggle("✏️ ពិនិត្យអក្សរមុនបង្កើត", value=False, key="review_toggle")
             _f1, _f2 = st.columns(2)
@@ -7720,7 +7760,7 @@ if run:
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
-        "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
+        "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": float(dub_offset), "tight_sync": bool(tight_sync), "auto_gender": auto_gender,
         "voice_match": False, "emotion": emotion_on,
         "timbre": bool(clone_samples), "timbre_samples": clone_samples,
         "font_size": font_size, "outline_size": outline_size,
