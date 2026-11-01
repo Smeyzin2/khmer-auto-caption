@@ -7145,18 +7145,29 @@ def _hg_get(endpoint, params=None, timeout=45):
     return data.get("data") or {}
 
 @st.cache_data(ttl=240, show_spinner=False)
-def _hg_rank():
-    d = _hg_get("rank", {"type": "hot-drama", "page": 1})
+def _hg_rank(page=1):
+    d = _hg_get("rank", {"type": "hot-drama", "page": int(page)})
+    return d.get("results", []) if isinstance(d, dict) else []
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _hg_categories():
+    d = _hg_get("categories", {})
+    if isinstance(d, list):
+        return d
+    if isinstance(d, dict):
+        return d.get("categories") or d.get("results") or d.get("list") or []
+    return []
+
+@st.cache_data(ttl=240, show_spinner=False)
+def _hg_category_list(category, page=1):
+    d = _hg_get("list", {"category": str(category), "page": int(page)})
     return d.get("results", []) if isinstance(d, dict) else []
 
 @st.cache_data(ttl=240, show_spinner=False)
-def _hg_search(keyword):
-    d = _hg_get("search", {"keyword": keyword, "page": 1})
+def _hg_search(keyword, page=1):
+    d = _hg_get("search", {"keyword": keyword, "page": int(page)})
     return d.get("results", []) if isinstance(d, dict) else []
 
-@st.cache_data(ttl=480, show_spinner=False)
-def _hg_detail(series_id):
-    return _hg_get("detail", {"series_id": str(series_id)})
 
 def _hg_extract_series_id(value):
     """ទទួលយក URL លម្អិត Hongguo ឬ series_id ដោយផ្ទាល់។"""
@@ -7191,10 +7202,50 @@ with tab_drama:
     with _hg_q2:
         st.write("")
         _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
-    _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
     if "_hg_rows" not in st.session_state:
         st.session_state["_hg_rows"] = []
+    if "_hg_page" not in st.session_state:
+        st.session_state["_hg_page"] = 1
+    if "_hg_catalog_mode" not in st.session_state:
+        st.session_state["_hg_catalog_mode"] = "hot"
+    _hg_c1, _hg_c2 = st.columns([3, 1])
+    with _hg_c1:
+        try:
+            _hg_categories = _hg_categories() if _HG_APP_ID and _HG_APP_SECRET else []
+        except Exception as _cat_err:
+            _hg_categories = []
+            st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
+        _hg_cat_map = {}
+        for _ci, _cat in enumerate(_hg_categories):
+            if isinstance(_cat, dict):
+                _cid = _cat.get("category") or _cat.get("category_id") or _cat.get("id") or _cat.get("value") or _cat.get("name")
+                _cname = _cat.get("name") or _cat.get("title") or _cat.get("category_name") or str(_cid or "")
+            else:
+                _cid, _cname = str(_cat), str(_cat)
+            if _cid not in (None, "") and _cname:
+                _hg_cat_map[str(_cname)] = str(_cid)
+        _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
+        _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
+    with _hg_c2:
+        st.write("")
+        _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
+    _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
+    if _hg_load_category:
+        st.session_state["_hg_page"] = 1
+        st.session_state["_hg_catalog_mode"] = ("hot" if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                                                  else "category:" + _hg_cat_map.get(_hg_cat_choice, ""))
+        st.session_state.pop("_hg_selected", None)
+        try:
+            with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
+                st.session_state["_hg_rows"] = (
+                    _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                    else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
+                )
+        except Exception as e:
+            st.error(str(e))
     if _hg_search_click and _hg_keyword.strip():
+        st.session_state["_hg_page"] = 1
+        st.session_state["_hg_catalog_mode"] = "search:" + _hg_keyword.strip()
         try:
             _direct_series_id = _hg_extract_series_id(_hg_keyword)
             if _direct_series_id:
@@ -7220,8 +7271,10 @@ with tab_drama:
             st.error(str(e))
     elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
         try:
+            st.session_state["_hg_page"] = 1
+            st.session_state["_hg_catalog_mode"] = "hot"
             with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
-                st.session_state["_hg_rows"] = _hg_rank()
+                st.session_state["_hg_rows"] = _hg_rank(1)
         except Exception as e:
             st.error(str(e))
     _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
@@ -7262,25 +7315,12 @@ with tab_drama:
                     st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
                     if _hg_saved.get("ready") is False:
                         st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
-                    _hg_btn1, _hg_btn2 = st.columns(2, gap="small")
-                    with _hg_btn1:
-                        if st.button("✨ យកទៅ Caption", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
-                            st.session_state["mode_pick"] = "🔗 Link"
-                            st.session_state["link_text_area"] = _hg_saved["url"]
-                            st.session_state["link_searched"] = [_hg_saved["url"]]
-                            st.session_state["_hg_imported_caption_notice"] = True
-                            st.rerun()
-                    with _hg_btn2:
-                        if st.button("🌐 បកប្រែជាខ្មែរភ្លាម", type="primary",
-                                      key=f"hg_translate_now_{_hg_selected['series_id']}_{_hg_epnum}",
-                                      use_container_width=True, disabled=(_hg_saved.get("ready") is False)):
-                            st.session_state["mode_pick"] = "🔗 Link"
-                            st.session_state["link_text_area"] = _hg_saved["url"]
-                            st.session_state["link_searched"] = [_hg_saved["url"]]
-                            st.session_state.setdefault("link_cache", {}).pop(_hg_saved["url"], None)
-                            st.session_state["_hg_auto_translate_pending"] = True
-                            st.session_state["_hg_imported_caption_notice"] = True
-                            st.rerun()
+                    if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
+                        st.session_state["mode_pick"] = "🔗 Link"
+                        st.session_state["link_text_area"] = _hg_saved["url"]
+                        st.session_state["link_searched"] = [_hg_saved["url"]]
+                        st.session_state["_hg_imported_caption_notice"] = True
+                        st.rerun()
         except Exception as e:
             st.error(str(e))
     elif _hg_rows:
@@ -7295,6 +7335,42 @@ with tab_drama:
                     if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
                         st.session_state["_hg_selected"] = _hg_row
                         st.rerun()
+        st.caption(f"បង្ហាញ {_hg_page_start := ((st.session_state.get('_hg_page', 1)-1)*len(_hg_rows)+1)}–{_hg_page_start+len(_hg_rows)-1} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
+        _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
+        with _hg_prev:
+            if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
+                         disabled=st.session_state.get("_hg_page", 1) <= 1):
+                st.session_state["_hg_page"] -= 1
+                _p = st.session_state["_hg_page"]
+                _mode = st.session_state.get("_hg_catalog_mode", "hot")
+                try:
+                    if _mode == "hot":
+                        st.session_state["_hg_rows"] = _hg_rank(_p)
+                    elif _mode.startswith("category:"):
+                        st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
+                    elif _mode.startswith("search:"):
+                        st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
+                except Exception as e:
+                    st.error(str(e))
+                st.rerun()
+        with _hg_page_label:
+            st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {st.session_state.get('_hg_page',1)}</div>", unsafe_allow_html=True)
+        with _hg_next:
+            if st.button("បន្ទាប់ ➡️", key="hg_page_next", use_container_width=True,
+                         disabled=len(_hg_rows) < 20):
+                st.session_state["_hg_page"] += 1
+                _p = st.session_state["_hg_page"]
+                _mode = st.session_state.get("_hg_catalog_mode", "hot")
+                try:
+                    if _mode == "hot":
+                        st.session_state["_hg_rows"] = _hg_rank(_p)
+                    elif _mode.startswith("category:"):
+                        st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
+                    elif _mode.startswith("search:"):
+                        st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
+                except Exception as e:
+                    st.error(str(e))
+                st.rerun()
 
 
 
@@ -7990,14 +8066,6 @@ with start_slot:
 
 if link_translate and items and not busy:
     run = True
-# Hongguo: បន្ទាប់ពីទាញយកភាគបានជោគជ័យ ចាប់ផ្តើមបកប្រែដោយស្វ័យប្រវត្តិ
-if st.session_state.get("_hg_auto_translate_pending") and not busy:
-    if items:
-        run = True
-        st.session_state["_hg_auto_translate_pending"] = False
-    elif mode.startswith("🔗"):
-        # ទុក flag ដើម្បីឱ្យអាចសាកទាញយកម្ដងទៀត ប្រសិនបើតំណមិនទាន់បាន
-        pass
 if st.session_state.get("_run_split") and not busy:
     if items:
         run = True
