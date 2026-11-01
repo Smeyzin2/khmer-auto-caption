@@ -7177,6 +7177,35 @@ def _hg_categories():
     return []
 
 
+@st.cache_data(ttl=180, show_spinner=False)
+def _hg_detail(series_id):
+    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី Hongguo API។"""
+    d = _hg_get("detail", {"series_id": str(series_id)})
+    if not isinstance(d, dict):
+        return {}
+    # API versions may wrap detail data one level deeper.
+    if isinstance(d.get("detail"), dict):
+        d = d["detail"]
+    elif isinstance(d.get("result"), dict):
+        d = d["result"]
+    episodes = d.get("episodes") or d.get("episode_list") or d.get("list") or []
+    normalized = []
+    for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
+        if not isinstance(ep, dict):
+            continue
+        ep_no = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or (i + 1)
+        try:
+            ep_no = int(ep_no)
+        except (TypeError, ValueError):
+            ep_no = i + 1
+        playable = ep.get("playable")
+        if playable is None:
+            playable = bool(ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("token"))
+        normalized.append({**ep, "ep": ep_no, "playable": bool(playable)})
+    d["episodes"] = normalized
+    return d
+
+
 # ឈ្មោះប្រភេទចិន -> ភាសាខ្មែរ (តម្លៃ slug សម្រាប់ API មិនត្រូវបានប្ដូរ)
 _HG_CATEGORY_KH = {'真人剧': 'រឿងសម្ដែងពិត', '爱情': 'ស្នេហា', '年代': 'រឿងសម័យកាល', '逆袭': 'តស៊ូត្រឡប់មកជោគជ័យ', '传奇': 'រឿងវីរភាព', '成长': 'ការរីកចម្រើន', '家庭': 'គ្រួសារ', '都市': 'ជីវិតទីក្រុង', '古装': 'សម័យបុរាណ', '现代': 'សម័យទំនើប', '悬疑': 'អាថ៌កំបាំង', '喜剧': 'កំប្លែង', '动作': 'ក្បាច់គុន និងសកម្មភាព', '战争': 'សង្គ្រាម', '历史': 'ប្រវត្តិសាស្ត្រ', '奇幻': 'រវើរវាយ', '玄幻': 'រឿងអច្ឆរិយៈ', '仙侠': 'ទេពអប្សរ និងអ្នក仙', '武侠': 'ក្បាច់គុន', '青春': 'យុវវ័យ', '校园': 'សាលារៀន', '职场': 'ជីវិតការងារ', '甜宠': 'ស្នេហាផ្អែមល្ហែម', '虐恋': 'ស្នេហាសោកសៅ', '复仇': 'ការសងសឹក', '豪门': 'គ្រួសារអ្នកមាន', '总裁': 'ប្រធានក្រុមហ៊ុន', '穿越': 'ឆ្លងពេលវេលា', '重生': 'កើតជាថ្មី', '乡村': 'ជីវិតជនបទ', '农村': 'ជីវិតជនបទ', '亲情': 'សេចក្ដីស្រឡាញ់ក្នុងគ្រួសារ', '友情': 'មិត្តភាព', '现实': 'ជីវិតពិត', '励志': 'លើកទឹកចិត្ត', '惊悚': 'រន្ធត់', '恐怖': 'ភ័យរន្ធត់', '犯罪': 'ឧក្រិដ្ឋកម្ម', '探案': 'ស៊ើបអង្កេត', '科幻': 'វិទ្យាសាស្ត្រប្រឌិត', '萌宝': 'កូនតូចគួរឱ្យស្រឡាញ់', '神医': 'គ្រូពេទ្យអស្ចារ្យ', '战神': 'អ្នកចម្បាំងខ្លាំង', '赘婿': 'កូនប្រសារប្រុស', '女强': 'នារីខ្លាំង', '男频': 'សម្រាប់ទស្សនិកជនប្រុស', '女频': 'សម្រាប់ទស្សនិកជនស្រី', '短剧': 'រឿងភាគខ្លី', '漫剧': 'រឿងគំនូរជីវចល', '漫画': 'រឿងគំនូរជីវចល', '动画': 'គំនូរជីវចល', '全部': 'ទាំងអស់'}
 
@@ -7355,11 +7384,11 @@ with tab_drama:
             if not _hg_eps:
                 st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
             else:
-                _hg_labels = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
-                _hg_ep_label = st.selectbox("ជ្រើសរើសភាគ", list(_hg_labels), key=f"hg_ep_{_hg_selected['series_id']}")
+                _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
                 _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
                 _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
-                _hg_epnum = _hg_labels[_hg_ep_label]
+                _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
+                _hg_epnum = _hg_ep_map[_hg_ep_label]
                 _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
                 if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
                     with st.spinner("កំពុងរៀបចំវីដេអូ..."):
@@ -7380,6 +7409,54 @@ with tab_drama:
                         st.session_state["link_searched"] = [_hg_saved["url"]]
                         st.session_state["_hg_imported_caption_notice"] = True
                         st.rerun()
+
+                st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
+                _hg_batch_labels = st.multiselect(
+                    "ជ្រើសរើសភាគដែលចង់បកប្រែ",
+                    list(_hg_ep_map.keys()),
+                    default=[],
+                    key=f"hg_batch_eps_{_hg_selected['series_id']}",
+                    help="អាចជ្រើសរើសភាគជាច្រើនបាន។ កម្មវិធីនឹងរៀបចំ Link រួចបញ្ជូនទៅ Khmer Auto Caption តាមលំដាប់។"
+                )
+                _hg_batch_limit = st.selectbox(
+                    "ចំនួនភាគក្នុងមួយលើក",
+                    [2, 3, 5, 10, 20],
+                    index=2,
+                    key=f"hg_batch_limit_{_hg_selected['series_id']}"
+                )
+                if st.button(
+                    f"🚀 រៀបចំ និងបកប្រែ {len(_hg_batch_labels)} ភាគ",
+                    type="primary",
+                    disabled=not _hg_batch_labels or busy,
+                    key=f"hg_batch_start_{_hg_selected['series_id']}",
+                    use_container_width=True
+                ):
+                    _batch_eps = [_hg_ep_map[x] for x in _hg_batch_labels][:_hg_batch_limit]
+                    _batch_urls = []
+                    _batch_errors = []
+                    _batch_bar = st.progress(0, text="កំពុងរៀបចំតំណភាគ...")
+                    for _bi, _be in enumerate(_batch_eps, start=1):
+                        try:
+                            _bp = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _be, "q": _hg_quality, "codec": _hg_codec})
+                            _bu = str(_bp.get("url") or "").strip()
+                            if _bu:
+                                _batch_urls.append(_bu)
+                            else:
+                                _batch_errors.append(f"ភាគ {_be}: API មិនបានផ្ដល់ URL")
+                        except Exception as _be_err:
+                            _batch_errors.append(f"ភាគ {_be}: {_hg_error_khmer(_be_err)}")
+                        _batch_bar.progress(_bi / len(_batch_eps), text=f"កំពុងរៀបចំភាគ {_bi}/{len(_batch_eps)}")
+                    _batch_bar.empty()
+                    if _batch_urls:
+                        st.session_state["mode_pick"] = "🔗 Link"
+                        st.session_state["link_text_area"] = "\\n".join(_batch_urls)
+                        st.session_state["link_searched"] = list(_batch_urls)
+                        st.session_state["_hg_imported_caption_notice"] = True
+                        st.session_state["_auto_translate"] = True
+                        st.session_state["_hg_batch_count"] = len(_batch_urls)
+                        st.rerun()
+                    if _batch_errors:
+                        st.warning("មិនអាចរៀបចំបានខ្លះ៖ " + " · ".join(_batch_errors[:5]))
         except Exception as e:
             st.error(str(e))
     elif _hg_rows:
