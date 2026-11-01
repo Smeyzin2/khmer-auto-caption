@@ -7449,7 +7449,7 @@ with tab_drama:
                     _batch_bar.empty()
                     if _batch_urls:
                         st.session_state["mode_pick"] = "🔗 Link"
-                        st.session_state["link_text_area"] = "\\n".join(_batch_urls)
+                        st.session_state["link_text_area"] = "\n".join(_batch_urls)
                         st.session_state["link_searched"] = list(_batch_urls)
                         st.session_state["_hg_imported_caption_notice"] = True
                         st.session_state["_auto_translate"] = True
@@ -7536,7 +7536,7 @@ with tab_vid:
                     placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
                     height=68)
                 if st.session_state.pop("_hg_imported_caption_notice", False):
-                    st.success("បានយកភាគ Hongguo មកដាក់រួចហើយ។ សូមចុច «ស្វែងរក» រួច «បកប្រែ»។")
+                    st.success("បានទទួលភាគ Hongguo ហើយ។ កម្មវិធីនឹងស្វែងរក និងចាប់ផ្ដើមបកប្រែដោយស្វ័យប្រវត្តិ បើតំណវីដេអូអាចទាញយកបាន។")
                 _all_links = extract_links(link_text)
                 _link_lines = _all_links[:link_limit]
                 if _all_links:
