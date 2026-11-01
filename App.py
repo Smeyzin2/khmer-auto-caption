@@ -2078,7 +2078,8 @@ class Reporter:
         self.item = item
     def write(self, message):
         self.item["stage"] = message
-        self.item["log"].append(message)
+        _t0 = self.item.get("t0")
+        self.item["log"].append((f"[{int(time.time() - _t0)}s] " if _t0 else "") + str(message))
         if len(self.item["log"]) > 200:
             del self.item["log"][:100]
         m = re.search(r"(\d+)/(\d+) ឃ្លា", str(message))
@@ -4664,41 +4665,61 @@ def gemini_emotion_labels(api_key, texts):
 
 
 def label_emotions(texts, groq_key, gemini_key):
-    """ត្រឡប់បញ្ជី (label, intensity) ឬ None។ ប្រើ Gemini មុន (យល់ខ្មែរល្អជាង) រួច Groq ជាបម្រុង។"""
+    """ត្រឡប់បញ្ជី (label, intensity) ឬ None។ ហៅស្របគ្នា មានកំណត់ពេល — Claude/CodeCraft → Groq → Gemini (ចុងក្រោយ)។"""
     if not texts:
         return None
-    if oai_enabled():
-        _esys = EMO_SYSTEM.replace('"emotions"', '"translations"')
-        _out = []
-        for _k in range(0, len(texts), 25):
-            _part = texts[_k:_k + 25]
-            _r = oai_try(_part, None, _esys, to_english=True, raw=True)
-            if _r is None or len(_r) != len(_part):
-                _out = None
-                break
-            _out.extend(parse_emo_item(x) for x in _r)
-        if _out:
-            return _out
-    if gemini_key:
+    t_end = time.time() + 40
+    step = 30
+    parts = [(k, texts[k:k + step]) for k in range(0, len(texts), step)]
+
+    def _run(fn):
+        out = [None] * len(texts)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for k, part, r in pool.map(fn, parts):
+                if r is None or len(r) != len(part):
+                    return None
+                for j, x in enumerate(r):
+                    out[k + j] = parse_emo_item(x)
+        return out
+
+    _esys = EMO_SYSTEM.replace('"emotions"', '"translations"')
+
+    def _via_oai(p):
+        k, part = p
+        try:
+            return k, part, oai_try(part, None, _esys, to_english=True, raw=True)
+        except Exception:
+            return k, part, None
+
+    try:
+        out = _run(_via_oai)
+        if out:
+            return out
+    except Exception:
+        pass
+
+    if groq_key and time.time() < t_end:
+        def _via_groq(p):
+            k, part = p
+            ctx = " / ".join(str(t) for t in texts[max(0, k - 3):k])
+            try:
+                return k, part, groq_emotion_chunk(groq_key, part, ctx)
+            except Exception:
+                return k, part, None
+        try:
+            out = _run(_via_groq)
+            if out:
+                return out
+        except Exception:
+            pass
+
+    if gemini_key and not groq_key and time.time() < t_end:
         try:
             out = gemini_emotion_labels(gemini_key, texts)
             if out and len(out) == len(texts):
                 return out
         except Exception:
             pass
-    if groq_key:
-        out = []
-        ok = True
-        for k in range(0, len(texts), 25):
-            ctx = " / ".join(str(t) for t in texts[max(0, k - 3):k])
-            try:
-                out.extend(groq_emotion_chunk(groq_key, texts[k:k + 25], ctx))
-            except Exception:
-                ok = False
-                break
-            time.sleep(0.5)
-        if ok and len(out) == len(texts):
-            return out
     return None
 
 
@@ -4719,10 +4740,13 @@ def combine_emotion(text_label, arousal, text_inten=None):
     return "neutral", 0.0
 
 
-def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key):
+def plan_emotions(dub_segments, seg_voices, info, runs, groq_key, gemini_key, labels="auto"):
     import numpy as np
     texts = [seg[2] for seg in dub_segments]
-    labels = label_emotions(texts, groq_key, gemini_key)
+    if isinstance(labels, str):   # "auto" = គណនាខ្លួនឯង
+        labels = label_emotions(texts, groq_key, gemini_key)
+    if labels is not None and len(labels) != len(texts):
+        labels = None
     t = f = r = None
     if info:
         t, f, r = info.get("times"), info.get("f0"), info.get("rms")
@@ -5584,6 +5608,16 @@ def run_worker(job, item, settings, fonts_data):
                     dub_model = used_model
                     _sm_d = get_smap()
                     dub_segments = merge_for_dub(segments, gender_fn=(_sm_d.gender_at if _sm_d is not None else None))
+                    _emo_box = {}
+                    _emo_thread = None
+                    if settings["emotion"]:
+                        def _do_emo(_segs=dub_segments):
+                            try:
+                                _emo_box["v"] = label_emotions([sg_[2] for sg_ in _segs], settings["groq_key"], settings["gemini_key"])
+                            except Exception:
+                                _emo_box["v"] = None
+                        _emo_thread = threading.Thread(target=_do_emo, daemon=True)
+                        _emo_thread.start()   # វិភាគអារម្មណ៍ស្របពេលវិភាគសំឡេង មិនរង់ចាំគ្នា
                     seg_voices = None
                     targets = None
                     emotions = None
@@ -5658,7 +5692,9 @@ def run_worker(job, item, settings, fonts_data):
                     if settings["emotion"]:
                         try:
                             rep.write("🎭 កំពុងវិភាគអារម្មណ៍...")
-                            emotions, emo_lines = plan_emotions(dub_segments, seg_voices, pitch_inf, runs_, settings["groq_key"], settings["gemini_key"])
+                            if _emo_thread is not None:
+                                _emo_thread.join(timeout=30)   # យូរជាង ៣០វិ → ប្រើតែសំឡេងដើមវិភាគ មិនរង់ចាំទៀត
+                            emotions, emo_lines = plan_emotions(dub_segments, seg_voices, pitch_inf, runs_, settings["groq_key"], settings["gemini_key"], labels=_emo_box.get("v"))
                             voice_notes = voice_notes + emo_lines
                         except Exception:
                             emotions = None
@@ -8336,3 +8372,33 @@ MOBILE_READABILITY_PATCH_CSS = r"""
 </style>
 """
 st.markdown(MOBILE_READABILITY_PATCH_CSS, unsafe_allow_html=True)
+
+
+# =====================================================================
+# TITLE BOX FIX: ចំណងជើង (st.code) អក្សរស្រាលលើផ្ទៃស្រាល មើលមិនឃើញ → ដាក់ផ្ទៃងងឹត អក្សរស អាចអានបាន
+# =====================================================================
+TITLE_CODE_FIX_CSS = r"""
+<style>
+[data-testid="stCode"], [data-testid="stCode"] > div, [data-testid="stCode"] pre {
+  background:#0B173B !important;
+  border:1px solid rgba(66,230,255,.45) !important;
+  border-radius:12px !important;
+}
+[data-testid="stCode"] pre, [data-testid="stCode"] code,
+[data-testid="stCode"] pre *, [data-testid="stCode"] code * {
+  color:#FFFFFF !important;
+  background:transparent !important;
+  white-space:pre-wrap !important;
+  word-break:break-word !important;
+  overflow-wrap:anywhere !important;
+  font-family:'Kantumruy Pro','Battambang','Noto Sans Khmer',system-ui,sans-serif !important;
+  font-size:1rem !important;
+  line-height:1.6 !important;
+}
+[data-testid="stCode"] button, [data-testid="stCode"] button * {
+  color:#42E6FF !important;
+  background:rgba(11,23,59,.9) !important;
+}
+</style>
+"""
+st.markdown(TITLE_CODE_FIX_CSS, unsafe_allow_html=True)
