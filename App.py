@@ -5897,6 +5897,105 @@ def extract_links(text):
 LINK_RETRIES = _env_int("LINK_RETRIES", 8)   # ចំនួនលើកព្យាយាមអតិបរមាក្នុងមួយតំណ
 
 
+
+def _download_hongguo_stream(url, path, progress):
+    """ទាញ Hongguo stream ដោយផ្ទាល់; GET ដំបូងអាចជំរុញការបង្កើត stream ហើយត្រូវ poll រហូត ready។"""
+    import requests
+
+    limit = MAX_DOWNLOAD_MB * 1024 * 1024
+    deadline = time.time() + 180
+    last_message = "Hongguo កំពុងរៀបចំវីដេអូ"
+    headers = {
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "video/*,application/octet-stream,application/json,*/*",
+        "Cache-Control": "no-cache",
+    }
+
+    while time.time() < deadline:
+        try:
+            with requests.get(url, headers=headers, stream=True, allow_redirects=True,
+                              timeout=(20, 90)) as response:
+                status = response.status_code
+                ctype = (response.headers.get("Content-Type") or "").lower()
+
+                # API may return a JSON status while the stream is being generated.
+                if "json" in ctype:
+                    try:
+                        payload = response.json()
+                    except Exception:
+                        payload = {}
+                    data = payload.get("data") if isinstance(payload, dict) else {}
+                    data = data if isinstance(data, dict) else {}
+                    ready = data.get("ready")
+                    next_url = data.get("url") or data.get("stream_url") or data.get("download_url")
+                    if next_url and str(next_url).startswith("http"):
+                        url = str(next_url)
+                    msg = (payload.get("msg") or data.get("message") or
+                           data.get("status") or "កំពុងបង្កើតវីដេអូ") if isinstance(payload, dict) else "កំពុងបង្កើតវីដេអូ"
+                    last_message = str(msg)[:180]
+                    if ready is False or status in (202, 404, 425, 429) or not payload.get("code") == 10000:
+                        time.sleep(4)
+                        continue
+                    # A success JSON without a downloadable URL is not a video yet.
+                    time.sleep(3)
+                    continue
+
+                if status in (202, 404, 425, 429) or status >= 500:
+                    last_message = f"Hongguo HTTP {status}"
+                    time.sleep(4)
+                    continue
+                response.raise_for_status()
+
+                # HLS playlist should be handled by yt-dlp rather than saved as an MP4.
+                if "mpegurl" in ctype or "m3u8" in ctype:
+                    final_url = response.url
+                    response.close()
+                    _download_with_ytdlp(final_url, path, progress)
+                    return
+
+                total = int(response.headers.get("Content-Length") or 0)
+                if total > limit:
+                    raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
+                first = True
+                done = 0
+                with open(path, "wb") as out:
+                    for chunk in response.iter_content(chunk_size=256 * 1024):
+                        if not chunk:
+                            continue
+                        if first:
+                            first = False
+                            # Guard against HTML/API error pages returned with a wrong content type.
+                            if chunk.lstrip().startswith((b"{", b"<")):
+                                raise RuntimeError("Hongguo stream មិនទាន់ជា video file ទេ")
+                        out.write(chunk)
+                        done += len(chunk)
+                        if done > limit:
+                            raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
+                        if total:
+                            progress.progress(min(1.0, done / total))
+                if os.path.isfile(path) and os.path.getsize(path) > 1000:
+                    progress.progress(1.0)
+                    return
+                try:
+                    os.remove(path)
+                except OSError:
+                    pass
+                last_message = "Hongguo បានផ្ញើឯកសារវីដេអូទទេ"
+                time.sleep(4)
+        except UserError:
+            raise
+        except Exception as exc:
+            last_message = re.sub(r"https?://\S+", "[link]", str(exc))[:180]
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError:
+                pass
+            time.sleep(4)
+
+    raise UserError(f"មិនអាចទាញយកភាគ Hongguo បានទេ៖ {last_message}")
+
+
 def _fetch_one(url, on_try=None):
     """ទាញវីដេអូមួយតំណ ហើយព្យាយាមម្តងទៀតដោយស្វ័យប្រវត្តិរហូតរកឃើញ (មិនប៉ះ st.session_state)។"""
     last = ""
@@ -5909,7 +6008,13 @@ def _fetch_one(url, on_try=None):
         folder = tempfile.mkdtemp(prefix="kac_link_")
         path = os.path.join(folder, "video.mp4")
         try:
-            download_video(url, path, _NoProgress())
+            _parsed_url = urllib.parse.urlparse(url)
+            _host = (_parsed_url.hostname or "").lower()
+            if ("xiaoyingapi.com" in _host and
+                    "/api/dramas/hongguo/stream" in (_parsed_url.path or "")):
+                _download_hongguo_stream(url, path, _NoProgress())
+            else:
+                download_video(url, path, _NoProgress())
             return {"path": path, "ok": True, "tries": attempt}
         except Exception as e:
             shutil.rmtree(folder, ignore_errors=True)
@@ -7449,11 +7554,12 @@ with tab_drama:
                     _batch_bar.empty()
                     if _batch_urls:
                         st.session_state["mode_pick"] = "🔗 Link"
-                        st.session_state["link_text_area"] = "\n".join(_batch_urls)
+                        st.session_state["link_text_area"] = "\\n".join(_batch_urls)
                         st.session_state["link_searched"] = list(_batch_urls)
                         st.session_state["_hg_imported_caption_notice"] = True
                         st.session_state["_auto_translate"] = True
                         st.session_state["_hg_batch_count"] = len(_batch_urls)
+                        st.session_state["_hg_batch_pending_urls"] = list(_batch_urls)
                         st.rerun()
                     if _batch_errors:
                         st.warning("មិនអាចរៀបចំបានខ្លះ៖ " + " · ".join(_batch_errors[:5]))
@@ -7605,6 +7711,7 @@ with tab_vid:
                     if st.session_state.get("_auto_translate") and not busy:
                         st.session_state["_auto_translate"] = False
                         link_translate = True
+                        st.session_state["_hg_batch_pending_urls"] = []
                 elif _link_lines and st.session_state.get("_auto_translate"):
                     st.session_state["_auto_translate"] = False
             if mode.startswith("📁"):
