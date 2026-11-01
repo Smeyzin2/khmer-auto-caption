@@ -7158,6 +7158,28 @@ def _hg_search(keyword):
 def _hg_detail(series_id):
     return _hg_get("detail", {"series_id": str(series_id)})
 
+def _hg_extract_series_id(value):
+    """ទទួលយក URL លម្អិត Hongguo ឬ series_id ដោយផ្ទាល់។"""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    # URL format: https://hongguoduanju.com/detail?series_id=123
+    try:
+        parsed = urllib.parse.urlparse(value)
+        query = urllib.parse.parse_qs(parsed.query)
+        ids = query.get("series_id") or query.get("seriesId") or []
+        if ids and str(ids[0]).strip().isdigit():
+            return str(ids[0]).strip()
+        match = re.search(r"/detail/(\d+)", parsed.path)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    # User may paste only the numeric series_id.
+    if value.isdigit():
+        return value
+    return ""
+
 with tab_drama:
     st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
     st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
@@ -7165,7 +7187,7 @@ with tab_drama:
         st.warning("សូមបញ្ចូល Hongguo APPID និង APPSECRET នៅផ្ទាំង «🌐 បកប្រែ» → API Key ផ្ទាល់ខ្លួន → Hongguo Drama។")
     _hg_q1, _hg_q2 = st.columns([3, 1])
     with _hg_q1:
-        _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង", key="hg_search_text", placeholder="វាយឈ្មោះរឿងចិន...")
+        _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
     with _hg_q2:
         st.write("")
         _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
@@ -7174,9 +7196,26 @@ with tab_drama:
         st.session_state["_hg_rows"] = []
     if _hg_search_click and _hg_keyword.strip():
         try:
-            with st.spinner("កំពុងស្វែងរករឿង..."):
-                st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
-            st.session_state.pop("_hg_selected", None)
+            _direct_series_id = _hg_extract_series_id(_hg_keyword)
+            if _direct_series_id:
+                with st.spinner("កំពុងបើករឿងតាម Link..."):
+                    _direct_detail = _hg_detail(_direct_series_id)
+                st.session_state["_hg_selected"] = {
+                    "series_id": _direct_series_id,
+                    "name": _direct_detail.get("name") or "រឿង Hongguo",
+                    "cover": _direct_detail.get("cover") or "",
+                    "episode_cnt": _direct_detail.get("episode_cnt") or "",
+                    "listed_cnt": _direct_detail.get("listed_cnt") or "",
+                    "intro": _direct_detail.get("intro") or "",
+                }
+                st.session_state["_hg_rows"] = []
+                st.rerun()
+            else:
+                with st.spinner("កំពុងស្វែងរករឿង..."):
+                    st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+                st.session_state.pop("_hg_selected", None)
+                if not st.session_state["_hg_rows"]:
+                    st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
         except Exception as e:
             st.error(str(e))
     elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
@@ -7223,12 +7262,25 @@ with tab_drama:
                     st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
                     if _hg_saved.get("ready") is False:
                         st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
-                    if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
-                        st.session_state["mode_pick"] = "🔗 Link"
-                        st.session_state["link_text_area"] = _hg_saved["url"]
-                        st.session_state["link_searched"] = [_hg_saved["url"]]
-                        st.session_state["_hg_imported_caption_notice"] = True
-                        st.rerun()
+                    _hg_btn1, _hg_btn2 = st.columns(2, gap="small")
+                    with _hg_btn1:
+                        if st.button("✨ យកទៅ Caption", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
+                            st.session_state["mode_pick"] = "🔗 Link"
+                            st.session_state["link_text_area"] = _hg_saved["url"]
+                            st.session_state["link_searched"] = [_hg_saved["url"]]
+                            st.session_state["_hg_imported_caption_notice"] = True
+                            st.rerun()
+                    with _hg_btn2:
+                        if st.button("🌐 បកប្រែជាខ្មែរភ្លាម", type="primary",
+                                      key=f"hg_translate_now_{_hg_selected['series_id']}_{_hg_epnum}",
+                                      use_container_width=True, disabled=(_hg_saved.get("ready") is False)):
+                            st.session_state["mode_pick"] = "🔗 Link"
+                            st.session_state["link_text_area"] = _hg_saved["url"]
+                            st.session_state["link_searched"] = [_hg_saved["url"]]
+                            st.session_state.setdefault("link_cache", {}).pop(_hg_saved["url"], None)
+                            st.session_state["_hg_auto_translate_pending"] = True
+                            st.session_state["_hg_imported_caption_notice"] = True
+                            st.rerun()
         except Exception as e:
             st.error(str(e))
     elif _hg_rows:
@@ -7938,6 +7990,14 @@ with start_slot:
 
 if link_translate and items and not busy:
     run = True
+# Hongguo: បន្ទាប់ពីទាញយកភាគបានជោគជ័យ ចាប់ផ្តើមបកប្រែដោយស្វ័យប្រវត្តិ
+if st.session_state.get("_hg_auto_translate_pending") and not busy:
+    if items:
+        run = True
+        st.session_state["_hg_auto_translate_pending"] = False
+    elif mode.startswith("🔗"):
+        # ទុក flag ដើម្បីឱ្យអាចសាកទាញយកម្ដងទៀត ប្រសិនបើតំណមិនទាន់បាន
+        pass
 if st.session_state.get("_run_split") and not busy:
     if items:
         run = True
