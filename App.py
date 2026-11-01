@@ -273,6 +273,23 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
   background: #FFFFFF !important; color: var(--ink) !important;
 }
 [data-baseweb="popover"] li:hover { background: rgba(124,58,237,.12) !important; }
+/* បង្ហាញឈ្មោះប្រភេទពេញ មិនកាត់ជាសញ្ញា ... លើទូរស័ព្ទ */
+[data-baseweb="popover"] [role="option"],
+[data-baseweb="menu"] [role="option"] {
+  white-space: normal !important;
+  overflow: visible !important;
+  text-overflow: clip !important;
+  line-height: 1.55 !important;
+  min-height: 44px !important;
+  height: auto !important;
+  align-items: center !important;
+}
+[data-baseweb="popover"] [role="option"] > div,
+[data-baseweb="menu"] [role="option"] > div {
+  white-space: normal !important;
+  overflow-wrap: anywhere !important;
+  text-overflow: clip !important;
+}
 
 /* ---------- Text area ---------- */
 .stTextArea textarea, [data-baseweb="textarea"], [data-baseweb="textarea"] > div {
@@ -7187,7 +7204,12 @@ def _hg_flat_categories(tree):
                 cslug = str(child.get("slug") or child.get("category") or child.get("category_id") or child.get("id") or "").strip()
                 cname = str(child.get("name") or child.get("title") or child.get("category_name") or cslug).strip()
                 if cslug and cname:
-                    out[f"{_hg_category_label(pname)} / {_hg_category_label(cname)}"] = cslug
+                    # បង្ហាញតែឈ្មោះប្រភេទរងជាខ្មែរ ដើម្បីកុំឱ្យអក្សរវែងពេកក្នុង Dropdown លើទូរស័ព្ទ។
+                    # បើឈ្មោះដូចគ្នា ទើបបន្ថែមឈ្មោះមេជាអក្សរខ្លីសម្រាប់បំបែក។
+                    child_label = _hg_category_label(cname)
+                    if child_label in out:
+                        child_label = f"{child_label} · {_hg_category_label(pname)}"
+                    out[child_label] = cslug
     return out
 
 
