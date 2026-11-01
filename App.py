@@ -5420,6 +5420,35 @@ class Job:
         return any(it["state"] == "review" for it in self.items)
 
 
+TITLE_SYSTEM = (
+    "You are a Cambodian social-media editor. Read the Khmer script of a short video and write 6 DIFFERENT catchy video titles "
+    "in natural everyday Khmer for TikTok or Facebook. Each title is 15 to 60 Khmer characters, makes viewers curious or emotional, "
+    "and is 100 percent true to what really happens in the script: never invent events, names or facts. "
+    "Vary the style: question, emotional, suspense, short punchy, storytelling, funny. "
+    "Khmer script only (names may stay), no emojis, no hashtags, no quotes, no numbering. "
+    'Return JSON {"translations": ["<title1> | <title2> | <title3> | <title4> | <title5> | <title6>"]} '
+    "with EXACTLY ONE item that contains the 6 titles separated by the | character."
+)
+
+
+def suggest_titles(lines, groq_key):
+    """ស្នើចំណងជើងខ្មែរ ៦ ប្រភេទ ពីអត្ថបទបកប្រែ ឱ្យអ្នកប្រើជ្រើសយកទៅដាក់ (មិនចាំបាច់នឹកខ្លួនឯង)។"""
+    script = " ".join(str(t).strip() for t in lines if str(t).strip())
+    if len(script) > 3200:
+        script = script[:2000] + " ... " + script[-1000:]
+    if not script:
+        return []
+    res = groq_translate_chunk(groq_key, [script], None, system=TITLE_SYSTEM, to_english=True)
+    raw = str((res or [""])[0] or "")
+    out, seen = [], set()
+    for part in re.split(r"[|\n]", raw):
+        t = re.sub(r"^\s*(?:\d+[.)]|[-•*])\s*", "", part).strip().strip("\"'“”«»")
+        if t and has_khmer(t) and t not in seen:
+            seen.add(t)
+            out.append(t)
+    return out[:6]
+
+
 def engine_name(engine):
     return "Groq + CodeCraft"
 
@@ -5537,6 +5566,15 @@ def run_worker(job, item, settings, fonts_data):
             captions, sync_mode = build_captions(segments, duration)
             if not captions:
                 raise UserError("រកមិនឃើញសំឡេងនិយាយក្នុងវីដេអូនេះទេ។")
+            _title_box = {}
+
+            def _do_titles():
+                try:
+                    _title_box["v"] = suggest_titles([t_ for _, _, t_ in segments], settings["groq_key"])
+                except Exception:
+                    _title_box["v"] = []
+            _title_thread = threading.Thread(target=_do_titles, daemon=True)
+            _title_thread.start()   # ស្នើចំណងជើងស្របពេល dubbing/render មិនបន្ថែមពេល
             dub_ok = False
             if settings["dub_on"]:
                 item["pct"] = 0.6
@@ -5653,6 +5691,8 @@ def run_worker(job, item, settings, fonts_data):
                 except Exception:
                     item["small_path"] = None
             item["captions"] = [t for _, _, t in captions]
+            _title_thread.join(timeout=45)
+            item["titles"] = _title_box.get("v") or []
             item["debug"] = {
                 "ម៉ាស៊ីន": used_engine, "ម៉ូដែល": used_model,
                 "ការតម្រឹម": sync_mode, "ផ្នែកបរាជ័យ": failed_chunks,
@@ -6185,6 +6225,10 @@ def download_area(job):
                         st.video(vp)
             else:
                 st.caption("ឯកសារវីដេអូត្រូវបានលុបចេញពីម៉ាស៊ីនហើយ។")
+            if it.get("titles"):
+                with st.expander("🏷 ចំណងជើងខ្មែរសម្រាប់ជ្រើសរើស (ចុចរូបចម្លង)", expanded=True):
+                    for _ti, _tt in enumerate(it["titles"], start=1):
+                        st.code(_tt, language=None)
             with st.expander("📝 មើលអត្ថបទខ្មែរ"):
                 for text in it["captions"]:
                     st.write(text)
