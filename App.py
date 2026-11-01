@@ -7151,12 +7151,45 @@ def _hg_rank(page=1):
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _hg_categories():
+    """ទាញ category tree ពិតពី XiaoYingAPI (ប្រើ slug មិនប្រើឈ្មោះចិនជាតម្លៃ API)។"""
     d = _hg_get("categories", {})
     if isinstance(d, list):
         return d
     if isinstance(d, dict):
         return d.get("categories") or d.get("results") or d.get("list") or []
     return []
+
+
+def _hg_flat_categories(tree):
+    """បម្លែង category tree ទៅជាជម្រើស UI ដែលរក្សា slug ត្រឹមត្រូវ។"""
+    out = {}
+    for parent in tree or []:
+        if not isinstance(parent, dict):
+            continue
+        pslug = str(parent.get("slug") or parent.get("category") or parent.get("category_id") or parent.get("id") or "").strip()
+        pname = str(parent.get("name") or parent.get("title") or parent.get("category_name") or pslug).strip()
+        if pslug and pname:
+            out[pname] = pslug
+        children = parent.get("children") or []
+        if isinstance(children, list):
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                cslug = str(child.get("slug") or child.get("category") or child.get("category_id") or child.get("id") or "").strip()
+                cname = str(child.get("name") or child.get("title") or child.get("category_name") or cslug).strip()
+                if cslug and cname:
+                    out[f"{pname} / {cname}"] = cslug
+    return out
+
+
+def _hg_error_khmer(error):
+    """បកស្រាយ error សំខាន់ៗជាខ្មែរ ដើម្បីអ្នកប្រើដឹងវិធីដោះស្រាយ។"""
+    msg = str(error or "")
+    if "20003" in msg or "参数值非法" in msg or "category" in msg and "合法分类" in msg:
+        return "ប្រភេទរឿងដែល API ទទួលបានមិនត្រឹមត្រូវ។ កម្មវិធីត្រូវប្រើ Category slug ពីបញ្ជីប្រភេទ Hongguo មិនមែនឈ្មោះចិនទេ។ សូមចុច «ផ្ទុកប្រភេទឡើងវិញ» ហើយជ្រើសប្រភេទម្ដងទៀត។"
+    if "20002" in msg or "参数缺失" in msg:
+        return "API ខ្វះប៉ារ៉ាម៉ែត្រចាំបាច់។ សូមជ្រើសប្រភេទរឿងម្ដងទៀត។"
+    return msg
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_category_list(category, page=1):
@@ -7215,17 +7248,12 @@ with tab_drama:
         except Exception as _cat_err:
             _hg_categories = []
             st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-        _hg_cat_map = {}
-        for _ci, _cat in enumerate(_hg_categories):
-            if isinstance(_cat, dict):
-                _cid = _cat.get("category") or _cat.get("category_id") or _cat.get("id") or _cat.get("value") or _cat.get("name")
-                _cname = _cat.get("name") or _cat.get("title") or _cat.get("category_name") or str(_cid or "")
-            else:
-                _cid, _cname = str(_cat), str(_cat)
-            if _cid not in (None, "") and _cname:
-                _hg_cat_map[str(_cname)] = str(_cid)
+        _hg_cat_map = _hg_flat_categories(_hg_categories)
         _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
         _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
+        if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
+            _hg_categories.clear()
+            st.rerun()
     with _hg_c2:
         st.write("")
         _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
@@ -7242,7 +7270,7 @@ with tab_drama:
                     else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
                 )
         except Exception as e:
-            st.error(str(e))
+            st.error(_hg_error_khmer(e))
     if _hg_search_click and _hg_keyword.strip():
         st.session_state["_hg_page"] = 1
         st.session_state["_hg_catalog_mode"] = "search:" + _hg_keyword.strip()
