@@ -1088,7 +1088,7 @@ MAX_DURATION_MIN = 300
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
-MAX_CHUNK_WORKERS = 4
+MAX_CHUNK_WORKERS = 6
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
@@ -3348,17 +3348,22 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
     short = [i for i in range(n)
              if budgets[i] and budgets[i] >= 28 and 0 < len(str(outs[i])) < budgets[i] * 0.55]
     if short:
+        def _exp(idxs):
+            rows = [f"ORIGINAL: {str(texts[i]).strip()} | KHMER: {outs[i]} | TARGET: {budgets[i]}" for i in idxs]
+            try:
+                return idxs, llm_lines(rows, EXPAND_SYSTEM, gemini_key, groq_key)
+            except Exception:
+                return idxs, None
         try:
-            for k in range(0, len(short), LLM_GROUP):
-                idxs = short[k:k + LLM_GROUP]
-                rows = [f"ORIGINAL: {str(texts[i]).strip()} | KHMER: {outs[i]} | TARGET: {budgets[i]}" for i in idxs]
-                res = llm_lines(rows, EXPAND_SYSTEM, gemini_key, groq_key)
-                if res:
-                    for i, r in zip(idxs, res):
-                        r = str(r or "")
-                        if (has_khmer(r) and khmer_dominant(r) and len(r) > len(str(outs[i]))
-                                and len(r) <= budgets[i] * 1.4):
-                            result[i] = r
+            egroups = [short[k:k + LLM_GROUP] for k in range(0, len(short), LLM_GROUP)]
+            with ThreadPoolExecutor(max_workers=6) as _ep:
+                for idxs, res in _ep.map(_exp, egroups):
+                    if res:
+                        for i, r in zip(idxs, res):
+                            r = str(r or "")
+                            if (has_khmer(r) and khmer_dominant(r) and len(r) > len(str(outs[i]))
+                                    and len(r) <= budgets[i] * 1.4):
+                                result[i] = r
         except Exception:
             pass
     if not over:
@@ -4915,7 +4920,7 @@ def tts_retry(text, voice, path, prosody=None, tries=3):
                     return True
             except Exception as e:
                 last = e
-        time.sleep(0.25 * (k + 1))
+        time.sleep(0.08 * (k + 1))
     return False
 
 
@@ -5077,7 +5082,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 return max(0.0, x - hi_ * 1.03) + max(0.0, lo_ - x)
 
             def _fit_rate(text_, d_cur, p_cur):
-                for _k in range(2):
+                for _k in range(1):
                     if _miss(d_cur) <= 0:
                         break
                     try:
@@ -5109,7 +5114,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             p_cur_ = pros[i]
             d_, p_cur_ = _fit_rate(t_, d_, p_cur_)
             # នៅតែវែងពេក៖ បង្រួមឃ្លាបន្តិច (រក្សាអត្ថន័យ) រួចតម្រឹមល្បឿនម្តងទៀត
-            if d_ > slot0 * 1.6 and len(t_) > 30:
+            if d_ > slot0 * 2.2 and len(t_) > 30:
                 short_ = condense_for_slot(t_, slot0, client, model, groq_key)
                 if short_ != t_:
                     path3_ = os.path.join(folder, f"tts_{i}_s.mp3")
@@ -5132,7 +5137,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
+    with ThreadPoolExecutor(max_workers=max(4, min(16, int(get_secret("TTS_WORKERS", "14") or 14)))) as pool:
         results = list(pool.map(gen, range(n_seg)))
 
     voice_eq = {}
