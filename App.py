@@ -7372,7 +7372,9 @@ with tab_drama:
                     if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
                         st.session_state["_hg_selected"] = _hg_row
                         st.rerun()
-        st.caption(f"បង្ហាញ {_hg_page_start := ((st.session_state.get('_hg_page', 1)-1)*len(_hg_rows)+1)}–{_hg_page_start+len(_hg_rows)-1} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
+        _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
+        _hg_page_end = _hg_page_start + len(_hg_rows) - 1
+        st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
         _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
         with _hg_prev:
             if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
