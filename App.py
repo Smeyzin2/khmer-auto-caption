@@ -7123,7 +7123,7 @@ _HG_API_PREFIX = "/api/dramas/hongguo"
 def _hg_get(endpoint, params=None, timeout=45):
     if not _HG_APP_ID or not _HG_APP_SECRET:
         raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
-    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}/"
+    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}"  # XiaoYingAPI route: no trailing slash
     signed = dict(params or {})
     signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
     pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
@@ -7132,7 +7132,13 @@ def _hg_get(endpoint, params=None, timeout=45):
     signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
     response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
                             headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
-    response.raise_for_status()
+    if response.status_code == 404:
+        raise RuntimeError(
+            f"XiaoYingAPI HTTP 404: មិនរកឃើញ API path {path} ទេ។ "
+            "សូមពិនិត្យ endpoint ឬ API version។"
+        )
+    if not response.ok:
+        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {response.text[:300]}")
     data = response.json()
     if not isinstance(data, dict) or data.get("code") != 10000:
         raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
