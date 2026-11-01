@@ -2618,11 +2618,18 @@ _CLAUDE_LAST_CALL = {"t": 0.0}
 _CLAUDE_MIN_GAP = 2.2   # laalaa មាន 30 request/នាទី → ទុកគម្លាត ≥2.2វិ រវាងការហៅ
 
 
+_CLAUDE_LOCK = threading.Lock()
+
+
 def _claude_throttle():
-    gap = _CLAUDE_MIN_GAP - (time.time() - _CLAUDE_LAST_CALL["t"])
-    if gap > 0:
-        time.sleep(min(gap, _CLAUDE_MIN_GAP))
-    _CLAUDE_LAST_CALL["t"] = time.time()
+    """រក្សាទុកពេលហៅ (slot) ម្នាក់ម្តងៗ តាមលំដាប់ ដោយសុវត្ថិភាព thread — កុំឱ្យហៅព្រមគ្នាទាំងអស់ហើយជួប 429។"""
+    with _CLAUDE_LOCK:
+        now = time.time()
+        slot = max(now, _CLAUDE_LAST_CALL["t"] + _CLAUDE_MIN_GAP)
+        _CLAUDE_LAST_CALL["t"] = slot
+    wait = slot - now
+    if wait > 0:
+        time.sleep(wait)
 
 
 def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, cfg=None, raw=False):
@@ -2644,7 +2651,7 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
     for attempt in range(5):
         payload = {
             "model": models[mi],
-            "max_tokens": min(4096, 300 + 160 * len(texts)),
+            "max_tokens": min(5000, 400 + 200 * len(texts)),
             "system": sys_text,
             "messages": [{"role": "user", "content": numbered}],
         }
@@ -2920,7 +2927,7 @@ def _try_provider(cool, cfg, texts, budgets, system, to_english, raw, name="Code
             if any(f"HTTP {c}" in _m for c in (401, 402, 403, 404)):
                 _cd = 600      # Key/URL/model ខុស → សម្រាកយូរ
             elif any(f"HTTP {c}" in _m for c in (429, 503, 529)):
-                _cd = 25       # Rate limit បណ្តោះអាសន្ន → សម្រាកខ្លី រួចសាកវិញ
+                _cd = 10       # Rate limit បណ្តោះអាសន្ន → សម្រាកខ្លី រួចសាកវិញ
             else:
                 _cd = 60       # server/បណ្តាញមានបញ្ហា
             cool["until"] = time.time() + _cd
@@ -3064,7 +3071,7 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
     """ពិនិត្យការបកប្រែខ្មែរម្តងទៀតប្រៀបធៀបនឹងអត្ថបទដើម ហើយកែឱ្យត្រូវន័យ និងស្ទួនភាសាខ្មែរធម្មជាតិ។"""
     n = len(drafts)
     result = list(drafts)
-    groups = [list(range(k, min(k + 6, n))) for k in range(0, n, 6)]
+    groups = [list(range(k, min(k + LLM_GROUP, n))) for k in range(0, n, LLM_GROUP)]
 
     def rows_for(idxs):
         rows = []
@@ -3079,8 +3086,8 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
         return rows
 
     def story_for(idxs):
-        prev = [str(drafts[j]) for j in range(max(0, idxs[0] - 4), idxs[0]) if drafts[j]]
-        nxt = [str(drafts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 3)) if drafts[j]]
+        prev = [str(drafts[j]) for j in range(max(0, idxs[0] - 8), idxs[0]) if drafts[j]]
+        nxt = [str(drafts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 5)) if drafts[j]]
         s = ""
         if prev:
             s += "PREVIOUS LINES (context only): " + " / ".join(prev) + "\n"
@@ -3129,7 +3136,7 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
         return idxs, None
 
     done = 0
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         for idxs, res in pool.map(work, groups):
             if res:
                 for i, r in zip(idxs, res):
@@ -3167,7 +3174,7 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
     """ប្រៀបធៀបឃ្លាបកពីរបែប ហើយជ្រើស/កែយកមួយល្អបំផុត (ត្រឹមត្រូវតាមអត្ថន័យដើម និងធម្មជាតិ)។"""
     n = len(cand_a)
     result = list(cand_a)
-    groups = [list(range(k, min(k + 6, n))) for k in range(0, n, 6)]
+    groups = [list(range(k, min(k + LLM_GROUP, n))) for k in range(0, n, LLM_GROUP)]
 
     def work(idxs):
         rows = []
@@ -3204,7 +3211,7 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
         return idxs, None
 
     done = 0
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=5) as pool:
         for idxs, res in pool.map(work, groups):
             if res:
                 for i, r in zip(idxs, res):
@@ -3328,14 +3335,14 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
             if budgets[i] and len(str(outs[i])) > budgets[i] * 1.6 and len(str(outs[i])) > 30]
     if not over:
         return result
-    groups = [over[k:k + 6] for k in range(0, len(over), 6)]
+    groups = [over[k:k + LLM_GROUP] for k in range(0, len(over), LLM_GROUP)]
 
     def work(idxs):
         rows = [f"ORIGINAL: {str(texts[i]).strip()} | KHMER: {outs[i]} | MAX: {budgets[i]}" for i in idxs]
         return idxs, llm_lines(rows, FIT_SYSTEM, gemini_key, groq_key)
 
     done = 0
-    with ThreadPoolExecutor(max_workers=3) as pool:
+    with ThreadPoolExecutor(max_workers=4) as pool:
         for idxs, res in pool.map(work, groups):
             if res:
                 for i, r in zip(idxs, res):
@@ -3355,6 +3362,7 @@ try:
     TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "12") or 12)))
 except Exception:
     TRANS_BATCH = 8
+LLM_GROUP = 12   # ចំនួនឃ្លាក្នុងមួយការហៅ AI ពេលកែ/ជ្រើស/តម្រឹម (ធំជាង = ហៅតិចជាង = លឿនជាង)
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
 REVIEW_MODE = str(get_secret("REVIEW_MODE", "refine")).strip().lower()
 # CLAUDE_FIRST=1 (លំនាំដើម): Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ | 0 = ប្រើ Provider ផ្សេងមុន
@@ -3364,7 +3372,7 @@ FIT_MODE = str(get_secret("FIT_MODE", "1")).strip().lower() in ("1", "true", "ye
 FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
 
 
-def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None, speakers=None):
+def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None, speakers=None, fit=True):
     n = len(texts)
     errors = []
     outs = [None] * n
@@ -3413,13 +3421,13 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     if (gemini_key or oai_enabled()) and missing:
         def _km(idxs):
             try:
-                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 3), idxs[0])]
-                story = " / ".join(str(x).strip() for x in prev_ctx if x) or None
+                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 20), idxs[0])]
+                story = " / ".join(str(x).strip() for x in prev_ctx if x)[-1800:] or None
                 if synopsis:
                     story = "VIDEO SUMMARY: " + synopsis + " || " + (story or "")
-                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 3))]
+                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 13))]
                 if nxt_ctx:
-                    story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)
+                    story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)[:1000]
                 return idxs, gemini_translate_khmer(
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
@@ -3429,7 +3437,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             except Exception as e:
                 return idxs, None, e
         done = 0
-        with ThreadPoolExecutor(max_workers=5) as pool:
+        with ThreadPoolExecutor(max_workers=6) as pool:
             for idxs, res, err in pool.map(_km, batches):
                 if err:
                     errors.append(f"CodeCraft: {err}"[:200])
@@ -3583,7 +3591,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         except Exception as e:
             errors.append(f"refine/judge: {e}"[:200])
     # តម្រឹមប្រវែងឃ្លាខ្មែរឱ្យសមនឹងពេលមាត់តួអង្គនិយាយ (lip-sync)
-    if FIT_MODE and budgets and all(o and has_khmer(str(o)) for o in outs):
+    if fit and FIT_MODE and budgets and all(o and has_khmer(str(o)) for o in outs):
         try:
             outs = fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=progress)
         except Exception as e:
@@ -3951,7 +3959,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         # ប្រវែងគោល (soft hint): ~១០ តួអក្សរខ្មែរ/វិនាទី តាមពេលមាត់និយាយ ឱ្យស្របចង្វាក់ lip-sync
         # (prompt ហាមកាត់អត្ថន័យ ដូច្នេះនេះគ្រាន់តែជាការណែនាំ)
         budgets = lip_budgets(keep)  # ប្រវែងអក្សរតាមពេលមាត់និយាយ ឱ្យសំឡេងចប់ត្រូវមាត់
-        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m), speakers=speakers)
+        outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m), speakers=speakers, fit=bool(dub))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
             if out:
