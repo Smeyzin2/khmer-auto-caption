@@ -6,6 +6,9 @@ import gc
 import time
 import uuid
 import hmac
+import hashlib
+import secrets
+import requests
 import shutil
 import asyncio
 import zipfile
@@ -27,7 +30,7 @@ import imageio_ffmpeg
 import edge_tts
 
 st.set_page_config(
-    page_title="បកប្រែវីដេអូមកនិយាយខ្មែរ",
+    page_title="Khmer Auto Caption + Hongguo Drama",
     page_icon="🎬",
     layout="wide",
 )
@@ -7045,9 +7048,149 @@ tight_sync = False
 
 # ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
 
-tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+tab_drama, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🍎 រឿងចិន", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
 )
+
+# ============================ Hongguo Drama → Khmer Auto Caption ============================
+# API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
+def _hg_secret(*names):
+    for name in names:
+        try:
+            value = st.secrets.get(name, "")
+        except Exception:
+            value = ""
+        if value:
+            return str(value).strip()
+        value = os.environ.get(name, "")
+        if value:
+            return value.strip()
+    return ""
+
+_HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
+_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "APPSECRET")
+_HG_API_BASE = "https://www.xiaoyingapi.com"
+_HG_API_PREFIX = "/api/dramas/hongguo"
+
+def _hg_get(endpoint, params=None, timeout=45):
+    if not _HG_APP_ID or not _HG_APP_SECRET:
+        raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
+    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}/"
+    signed = dict(params or {})
+    signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
+    pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
+    query = "&".join(f"{k}={v}" for k, v in pairs)
+    raw = "GET\n" + path + "\n" + query
+    signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
+                            headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, dict) or data.get("code") != 10000:
+        raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
+    return data.get("data") or {}
+
+@st.cache_data(ttl=240, show_spinner=False)
+def _hg_rank():
+    d = _hg_get("rank", {"type": "hot-drama", "page": 1})
+    return d.get("results", []) if isinstance(d, dict) else []
+
+@st.cache_data(ttl=240, show_spinner=False)
+def _hg_search(keyword):
+    d = _hg_get("search", {"keyword": keyword, "page": 1})
+    return d.get("results", []) if isinstance(d, dict) else []
+
+@st.cache_data(ttl=480, show_spinner=False)
+def _hg_detail(series_id):
+    return _hg_get("detail", {"series_id": str(series_id)})
+
+with tab_drama:
+    st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
+    st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
+    if not _HG_APP_ID or not _HG_APP_SECRET:
+        st.warning("សូមកំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit → Settings → Secrets។")
+    _hg_q1, _hg_q2 = st.columns([3, 1])
+    with _hg_q1:
+        _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង", key="hg_search_text", placeholder="វាយឈ្មោះរឿងចិន...")
+    with _hg_q2:
+        st.write("")
+        _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
+    _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
+    if "_hg_rows" not in st.session_state:
+        st.session_state["_hg_rows"] = []
+    if _hg_search_click and _hg_keyword.strip():
+        try:
+            with st.spinner("កំពុងស្វែងរករឿង..."):
+                st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+            st.session_state.pop("_hg_selected", None)
+        except Exception as e:
+            st.error(str(e))
+    elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
+        try:
+            with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
+                st.session_state["_hg_rows"] = _hg_rank()
+        except Exception as e:
+            st.error(str(e))
+    _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
+    _hg_selected = st.session_state.get("_hg_selected")
+    if _hg_selected:
+        if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
+            st.session_state.pop("_hg_selected", None)
+            st.rerun()
+        st.subheader(_hg_selected.get("name") or "រឿង")
+        _hg_cover = _hg_selected.get("cover")
+        if _hg_cover:
+            st.image(_hg_cover, use_container_width=True)
+        try:
+            with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
+                _hg_d = _hg_detail(_hg_selected["series_id"])
+            if _hg_d.get("intro"):
+                st.write(_hg_d["intro"])
+            _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
+            if not _hg_eps:
+                st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
+            else:
+                _hg_labels = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
+                _hg_ep_label = st.selectbox("ជ្រើសរើសភាគ", list(_hg_labels), key=f"hg_ep_{_hg_selected['series_id']}")
+                _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
+                _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
+                _hg_epnum = _hg_labels[_hg_ep_label]
+                _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
+                if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
+                    with st.spinner("កំពុងរៀបចំវីដេអូ..."):
+                        _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                    if _hg_play.get("url"):
+                        st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
+                    else:
+                        st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
+                _hg_saved = st.session_state.get(_hg_play_key)
+                if _hg_saved:
+                    st.video(_hg_saved["url"])
+                    st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
+                    if _hg_saved.get("ready") is False:
+                        st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
+                    if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
+                        st.session_state["mode_pick"] = "🔗 Link"
+                        st.session_state["link_text_area"] = _hg_saved["url"]
+                        st.session_state["link_searched"] = [_hg_saved["url"]]
+                        st.session_state["_hg_imported_caption_notice"] = True
+                        st.rerun()
+        except Exception as e:
+            st.error(str(e))
+    elif _hg_rows:
+        for _hg_i in range(0, len(_hg_rows), 3):
+            _hg_cols = st.columns(3, gap="small")
+            for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
+                with _hg_col:
+                    if _hg_row.get("cover"):
+                        st.image(_hg_row["cover"], use_container_width=True)
+                    st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
+                    st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
+                    if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
+                        st.session_state["_hg_selected"] = _hg_row
+                        st.rerun()
+
+
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
@@ -7068,10 +7211,12 @@ with tab_vid:
             else:
                 st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
                 link_text = st.text_area(
-                    "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
+                    "តំណវីដេអូ (TikTok ឬភាគ Hongguo ដែលបានជ្រើស)",
                     key="link_text_area",
                     placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
                     height=68)
+                if st.session_state.pop("_hg_imported_caption_notice", False):
+                    st.success("បានយកភាគ Hongguo មកដាក់រួចហើយ។ សូមចុច «ស្វែងរក» រួច «បកប្រែ»។")
                 _all_links = extract_links(link_text)
                 _link_lines = _all_links[:link_limit]
                 if _all_links:
