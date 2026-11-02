@@ -7165,6 +7165,18 @@ _HG_WEB_HEADERS = {
     "Referer": _HG_WEB_BASE + "/",
 }
 
+def _hg_request_headers():
+    """Return Hongguo browser headers, optionally using the user's own logged-in session cookie."""
+    headers = dict(_HG_WEB_HEADERS)
+    try:
+        cookie = str(st.session_state.get("hg_web_cookie", "") or "").strip()
+    except Exception:
+        cookie = ""
+    if cookie:
+        # Cookie is kept only in this Streamlit session and is never printed or logged.
+        headers["Cookie"] = cookie
+    return headers
+
 def _hg_json_after_marker(source, marker="_ROUTER_DATA"):
     """Extract a balanced JSON object after a marker without regex-brace truncation."""
     text = str(source or "")
@@ -7222,7 +7234,7 @@ def _hg_player_page_info(series_id, vid=None):
     # vid_list is embedded in the player route.
     detail = {}
     detail_url = _HG_WEB_BASE + "/detail?series_id=" + urllib.parse.quote(sid)
-    detail_resp = requests.get(detail_url, headers=_HG_WEB_HEADERS, timeout=(12, 25))
+    detail_resp = requests.get(detail_url, headers=_hg_request_headers(), timeout=(12, 25))
     detail_resp.raise_for_status()
     if len(detail_resp.content) > 16 * 1024 * 1024:
         raise RuntimeError("ទំព័រព័ត៌មានរឿង Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
@@ -7263,7 +7275,7 @@ def _hg_player_page_info(series_id, vid=None):
         player_path = f"/player/{sid}/{urllib.parse.quote(selected_vid)}"
     else:
         player_path = f"/player/{sid}"
-    player_resp = requests.get(_HG_WEB_BASE + player_path, headers=_HG_WEB_HEADERS, timeout=(12, 25))
+    player_resp = requests.get(_HG_WEB_BASE + player_path, headers=_hg_request_headers(), timeout=(12, 25))
     player_resp.raise_for_status()
     if len(player_resp.content) > 16 * 1024 * 1024:
         raise RuntimeError("ទំព័រ Player Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
@@ -7481,7 +7493,7 @@ def _hg_download_episode_url(url, folder):
 def _hg_public_page(path):
     """អាន HTML/SSR ទំព័រសាធារណៈ Hongguo ដោយមិនប្រើ XiaoYingAPI credentials។"""
     url = urllib.parse.urljoin(_HG_WEB_BASE + "/", str(path or "").lstrip("/"))
-    response = requests.get(url, headers=_HG_WEB_HEADERS, timeout=(12, 30), allow_redirects=True)
+    response = requests.get(url, headers=_hg_request_headers(), timeout=(12, 30), allow_redirects=True)
     response.raise_for_status()
     if len(response.content) > 18 * 1024 * 1024:
         raise RuntimeError("ទំព័រ Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
@@ -8053,6 +8065,15 @@ with tab_drama:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
         st.caption("🌐 ទាញទិន្នន័យពីគេហទំព័រ Hongguo ដោយផ្ទាល់ · មិនត្រូវការ API Key។")
+        with st.expander("🔐 ភ្ជាប់ Session គណនី Hongguo របស់អ្នក (សម្រាប់ភាគដែលអ្នកមានសិទ្ធិ VIP)", expanded=False):
+            st.text_input(
+                "Hongguo Cookie / Session",
+                type="password",
+                key="hg_web_cookie",
+                placeholder="បិទភ្ជាប់ Cookie ពីគណនី Hongguo ដែលបាន Login",
+                help="ប្រើតែ Session របស់គណនីអ្នកផ្ទាល់។ វាត្រូវបានរក្សាទុកតែក្នុង Session បច្ចុប្បន្នរបស់ App ហើយកុំផ្ញើវាទៅអ្នកដទៃ។",
+            )
+            st.caption("បើគ្មាន Session ដែលបាន Login កម្មវិធីអាចទាញបានតែភាគដែល Hongguo អនុញ្ញាតជាសាធារណៈប៉ុណ្ណោះ។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
@@ -8151,7 +8172,7 @@ with tab_drama:
                     st.info("មិនអាចអានបញ្ជីភាគពីទំព័រ Hongguo បានទេ។")
                 else:
                     _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}" + (" 🔒" if not e.get("playable") else ""): int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
-                    st.caption("បង្ហាញបញ្ជីភាគទាំងអស់។ កម្មវិធីនឹងទាញយកភាគដែល Hongguo ផ្ដល់តំណសាធារណៈ; ភាគ VIP/ចាក់សោត្រូវដោះសោតាម Hongguo ផ្ទាល់។")
+                    st.caption("បង្ហាញបញ្ជីភាគទាំងអស់។ កម្មវិធីនឹងប្រើ Session Hongguo របស់អ្នក ប្រសិនបើបានភ្ជាប់ ហើយទាញតែភាគដែលគណនីអ្នកមានសិទ្ធិចូលមើល។")
                     st.caption("គុណភាព និង Codec ត្រូវបានជ្រើសដោយគេហទំព័រ Hongguo ផ្ទាល់។")
                     _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
@@ -8214,7 +8235,7 @@ with tab_drama:
                         list(_hg_ep_map.keys()),
                         default=[],
                         key=f"hg_zip_eps_{_hg_selected['series_id']}",
-                        help="អាចជ្រើសភាគទាំងអស់បាន។ ភាគដែលត្រូវការ VIP នឹងបង្ហាញថាបរាជ័យ ប្រសិនបើ Hongguo មិនផ្ដល់តំណសាធារណៈ។"
+                        help="អាចជ្រើសភាគទាំងអស់បាន។ ប្រសិនបើបានភ្ជាប់ Session គណនីដែលមានសិទ្ធិ App នឹងសាកទាញតាមសិទ្ធិនោះ; ភាគដែលនៅតែត្រូវបានបដិសេធនឹងបង្ហាញមូលហេតុ។"
                     )
                     _hg_zip_limit = st.selectbox(
                         "ចំនួនអតិបរមាក្នុងមួយលើក",
