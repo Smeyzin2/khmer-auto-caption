@@ -7555,6 +7555,28 @@ def _hg_normalize_categories(raw):
     return out
 
 
+def _hg_flat_categories(categories):
+    """បម្លែង category tree ទៅជា {ឈ្មោះ: slug} សម្រាប់ selectbox។"""
+    result = {}
+    for item in categories if isinstance(categories, list) else []:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or item.get("title") or "").strip()
+        slug = str(item.get("slug") or item.get("category") or item.get("id") or "").strip()
+        if name and slug:
+            result[name] = slug
+        children = item.get("children") or []
+        for child in children if isinstance(children, list) else []:
+            if not isinstance(child, dict):
+                continue
+            child_name = str(child.get("name") or child.get("title") or "").strip()
+            child_slug = str(child.get("slug") or child.get("category") or child.get("id") or "").strip()
+            if child_name and child_slug:
+                label = f"{name} / {child_name}" if name else child_name
+                result[label] = child_slug
+    return result
+
+
 @st.cache_data(ttl=600, show_spinner=False)
 def _hg_categories():
     """អានប្រភេទរឿងពី HTML/SSR ទំព័រ category ផ្លូវការរបស់ Hongguo។"""
@@ -8004,11 +8026,11 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_categories = _hg_categories()
+                _hg_category_rows = _hg_categories()
             except Exception as _cat_err:
-                _hg_categories = []
+                _hg_category_rows = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-            _hg_cat_map = _hg_flat_categories(_hg_categories)
+            _hg_cat_map = _hg_flat_categories(_hg_category_rows)
             _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
