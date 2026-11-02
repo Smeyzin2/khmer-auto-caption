@@ -7054,29 +7054,92 @@ _HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRE
 _HG_API_BASE = "https://www.xiaoyingapi.com"
 _HG_API_PREFIX = "/api/dramas/hongguo"
 
-def _hg_download_episode_url(url, folder):
-    """ទាញ Hongguo MP4/HLS ដោយពិនិត្យប្រភេទ stream និងរក្សាទុកជាឯកសារលើ disk។"""
+def _hg_download_episode_url(url, folder, _depth=0, _seen=None):
+    """
+    ទាញ Hongguo MP4/HLS ទៅ disk។
+    បើ CDN/API URL ត្រឡប់ JSON ជំនួសវីដេអូ នឹងស្វែងរក media URL នៅក្នុង JSON
+    ហើយសាកទាញយកបន្ត ដោយមិនរក្សាទុក JSON ជា MP4។
+    """
     url = str(url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise RuntimeError("API បានផ្ដល់ URL វីដេអូមិនត្រឹមត្រូវ។")
+    if _depth > 3:
+        raise RuntimeError("URL បញ្ជូនបន្តច្រើនជាន់ពេក។")
     os.makedirs(folder, exist_ok=True)
+    seen = set(_seen or ())
+    if url in seen:
+        raise RuntimeError("បានជួប URL ដដែលម្តងទៀត។")
+    seen.add(url)
+
     target = os.path.join(folder, "episode.mp4")
     errors = []
-    is_hls = ".m3u8" in urllib.parse.urlparse(url).path.lower()
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "Accept": "video/mp4,video/*;q=0.9,application/vnd.apple.mpegurl,*/*;q=0.8",
+        "Referer": "https://hongguoduanju.com/",
+    }
 
-    # MP4/direct CDN: HTTP streaming មុន ដើម្បីកុំឱ្យ yt-dlp បដិសេធដោយ format/max-filesize។
-    if not is_hls:
-        try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-                "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-                "Referer": "https://hongguoduanju.com/",
-            }
-            with requests.get(url, headers=headers, stream=True, allow_redirects=True, timeout=(20, 120)) as response:
-                response.raise_for_status()
-                ctype = (response.headers.get("Content-Type") or "").lower()
-                if "text/html" in ctype or "application/json" in ctype:
-                    raise RuntimeError(f"CDN បានផ្ញើ {ctype or 'HTML'} មិនមែនវីដេអូទេ (HTTP {response.status_code})")
+    # Direct HTTP first. JSON/HTML responses are parsed instead of being saved as MP4.
+    try:
+        with requests.get(
+            url, headers=headers, stream=True, allow_redirects=True,
+            timeout=(20, 120)
+        ) as response:
+            response.raise_for_status()
+            ctype = (response.headers.get("Content-Type") or "").lower()
+
+            if "application/json" in ctype or "text/json" in ctype:
+                try:
+                    payload = response.json()
+                except Exception:
+                    payload = {}
+                media_urls = []
+
+                def _collect_media_urls(obj, parent_key=""):
+                    if isinstance(obj, dict):
+                        # Prefer fields that commonly contain playable media URLs.
+                        preferred = (
+                            "video_url", "play_url", "playurl", "m3u8", "mp4",
+                            "video", "src", "url", "download_url", "download",
+                            "media_url", "stream_url", "file_url"
+                        )
+                        keys = sorted(
+                            obj.keys(),
+                            key=lambda k: (str(k).lower() not in preferred,
+                                           preferred.index(str(k).lower()) if str(k).lower() in preferred else 999)
+                        )
+                        for key in keys:
+                            _collect_media_urls(obj.get(key), str(key).lower())
+                    elif isinstance(obj, list):
+                        for item in obj[:30]:
+                            _collect_media_urls(item, parent_key)
+                    elif isinstance(obj, str):
+                        candidate = obj.strip()
+                        if candidate.startswith(("http://", "https://")):
+                            if candidate not in seen and candidate not in media_urls:
+                                media_urls.append(candidate)
+
+                _collect_media_urls(payload)
+                if media_urls:
+                    for candidate in media_urls[:6]:
+                        try:
+                            return _hg_download_episode_url(
+                                candidate, folder, _depth=_depth + 1, _seen=seen
+                            )
+                        except Exception as nested_exc:
+                            errors.append(
+                                "JSON media URL: " +
+                                re.sub(r"https?://\S+", "[link]", str(nested_exc))[:180]
+                            )
+                else:
+                    # Only show safe, short diagnostic data; never expose signed URLs/tokens.
+                    msg = payload.get("msg") or payload.get("message") if isinstance(payload, dict) else ""
+                    code = payload.get("code") if isinstance(payload, dict) else ""
+                    errors.append(f"URL បានត្រឡប់ JSON មិនមែនវីដេអូ (code={code}, msg={str(msg)[:100]})")
+
+            elif "text/html" in ctype:
+                errors.append("URL បានត្រឡប់ HTML page មិនមែនវីដេអូទេ")
+            else:
                 written = 0
                 with open(target, "wb") as out:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -7085,17 +7148,26 @@ def _hg_download_episode_url(url, folder):
                         out.write(chunk)
                         written += len(chunk)
                 if written > 1000:
-                    return target
-                raise RuntimeError("Direct link បានឯកសារទទេ ឬតូចពេក")
-        except Exception as exc:
-            errors.append("Direct HTTP: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
-            try:
-                if os.path.exists(target):
-                    os.remove(target)
-            except OSError:
-                pass
+                    # Reject obvious non-video payloads by checking file signature/content.
+                    with open(target, "rb") as check:
+                        head = check.read(512).lstrip()
+                    if head.startswith((b"{", b"[", b"<")):
+                        os.remove(target)
+                        errors.append("ទិន្នន័យដែលបានទាញមកមិនមែនជា MP4/HLS ទេ")
+                    else:
+                        return target
+                else:
+                    errors.append("Direct link បានឯកសារទទេ ឬតូចពេក")
+    except Exception as exc:
+        errors.append("Direct HTTP: " + re.sub(r"https?://\S+", "[link]", str(exc))[:220])
+    finally:
+        try:
+            if os.path.exists(target) and os.path.getsize(target) <= 1000:
+                os.remove(target)
+        except OSError:
+            pass
 
-    # HLS/m3u8 ឬ Direct HTTP បរាជ័យ: ប្រើ yt-dlp ដោយមិនយកកំហុស MAX_DOWNLOAD_MB ទូទៅមកបិទ។
+    # HLS or direct-link fallback through yt-dlp (supports playlists/segments).
     try:
         import yt_dlp
         base = os.path.join(folder, "episode")
@@ -7111,10 +7183,7 @@ def _hg_download_episode_url(url, folder):
             "socket_timeout": 60,
             "retries": 5,
             "fragment_retries": 5,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://hongguoduanju.com/",
-            },
+            "http_headers": headers,
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
@@ -7130,7 +7199,8 @@ def _hg_download_episode_url(url, folder):
             return target
         errors.append("yt-dlp មិនបានបង្កើតឯកសារវីដេអូ")
     except Exception as exc:
-        errors.append("yt-dlp: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
+        errors.append("yt-dlp: " + re.sub(r"https?://\S+", "[link]", str(exc))[:220])
+
     raise RuntimeError(" | ".join(errors))
 
 
