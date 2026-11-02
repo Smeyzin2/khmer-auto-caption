@@ -1658,42 +1658,172 @@ class _HtmlPage(Exception):
     pass
 
 
-def download_video(url, path, progress):
-    url = normalize_link(url)
-    if is_social_link(url):
-        return download_social_video(url, path, progress)
+def _download_http_candidate(url, path, progress, referer=None):
+    """ទាញយក media URL ពិតដោយ stream ទៅ disk; បដិសេធ HTML/JSON មិនមែនវីដេអូ។"""
     limit = MAX_DOWNLOAD_MB * 1024 * 1024
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "Accept": "video/mp4,video/*,application/vnd.apple.mpegurl,*/*;q=0.8",
+    }
+    if referer:
+        headers["Referer"] = referer
+    tmp = path + ".part"
     try:
-        request = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(request, timeout=30) as response:
-            ctype = (response.headers.get("Content-Type") or "").lower()
-            if "text/html" in ctype:
+        with requests.get(url, headers=headers, stream=True, timeout=(20, 90), allow_redirects=True) as r:
+            r.raise_for_status()
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            final_url = r.url or url
+            if "json" in ctype:
+                try:
+                    payload = r.json()
+                except Exception:
+                    payload = None
+                raise _DownloadJSON(payload)
+            if "text/html" in ctype or "application/xhtml" in ctype:
                 raise _HtmlPage()
-            total = int(response.headers.get("Content-Length") or 0)
+            total = int(r.headers.get("Content-Length") or 0)
             if total > limit:
                 raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
+            # HLS manifest: send to yt-dlp instead of saving a playlist as MP4.
+            if ".m3u8" in urllib.parse.urlparse(final_url).path.lower() or "mpegurl" in ctype:
+                raise _HLSUrl(final_url)
             done = 0
-            with open(path, "wb") as f:
-                while True:
-                    chunk = response.read(1024 * 1024)
+            first = b""
+            with open(tmp, "wb") as f:
+                for chunk in r.iter_content(chunk_size=512 * 1024):
                     if not chunk:
-                        break
+                        continue
+                    if not first:
+                        first = chunk[:64]
                     f.write(chunk)
                     done += len(chunk)
                     if done > limit:
                         raise UserError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB។")
                     if total:
-                        progress.progress(min(1.0, done / total))
-    except _HtmlPage:
+                        progress.progress(min(0.99, done / total))
+        # Ensure this is media, not an API error body with status 200.
+        if os.path.getsize(tmp) < 1000:
+            raise RuntimeError("ឯកសារទទួលបានតូចពេក")
+        sniff = first.lstrip()
+        if sniff.startswith((b"{", b"[", b"<")):
+            try:
+                with open(tmp, "rb") as f:
+                    raw = f.read(2 * 1024 * 1024)
+                parsed = json.loads(raw.decode("utf-8", "ignore"))
+                raise _DownloadJSON(parsed)
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                if sniff.startswith(b"<"):
+                    raise _HtmlPage()
+                raise RuntimeError("ម៉ាស៊ីនមេផ្ញើទិន្នន័យមិនមែនវីដេអូ")
+        os.replace(tmp, path)
+        progress.progress(1.0)
+        return path
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+class _DownloadJSON(Exception):
+    def __init__(self, payload):
+        self.payload = payload
+
+
+class _HLSUrl(Exception):
+    def __init__(self, url):
+        self.url = url
+
+
+def _hg_extract_media_urls(payload, base_url, depth=0):
+    """ស្វែងរក URL media ក្នុង JSON API response ដោយមិនប៉ះ endpoint/auth។"""
+    if depth > 6:
+        return []
+    found = []
+    media_keys = {
+        "url", "play", "playurl", "play_url", "video", "video_url",
+        "videourl", "main_url", "mainurl", "src", "download_url",
+        "downloadurl", "m3u8", "mp4", "hdplay", "play_addr",
+    }
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            k = str(key).lower().replace("-", "_")
+            if isinstance(value, str) and (k in media_keys or k.endswith("_url")):
+                candidate = value.strip()
+                if candidate.startswith("//"):
+                    candidate = "https:" + candidate
+                elif candidate.startswith("/"):
+                    candidate = urllib.parse.urljoin(base_url, candidate)
+                if candidate.startswith(("http://", "https://")) and candidate not in found:
+                    found.append(candidate)
+            elif isinstance(value, (dict, list)):
+                for candidate in _hg_extract_media_urls(value, base_url, depth + 1):
+                    if candidate not in found:
+                        found.append(candidate)
+    elif isinstance(payload, list):
+        for item in payload[:100]:
+            for candidate in _hg_extract_media_urls(item, base_url, depth + 1):
+                if candidate not in found:
+                    found.append(candidate)
+    return found[:30]
+
+
+def download_video(url, path, progress):
+    """ទាញយក TikTok និង direct media; មាន fallback សម្រាប់ Hongguo API/MP4/HLS។"""
+    url = normalize_link(url)
+    if is_social_link(url):
+        return download_social_video(url, path, progress)
+
+    errors = []
+    referer = "https://hongguoduanju.com/" if "hongguoduanju.com" in url.lower() else None
+    candidates = [url]
+    tried = set()
+
+    # Try the supplied URL first. If it is a JSON API response, extract media URLs.
+    while candidates:
+        candidate = candidates.pop(0)
+        if candidate in tried:
+            continue
+        tried.add(candidate)
+        try:
+            return _download_http_candidate(candidate, path, progress, referer=referer)
+        except _DownloadJSON as exc:
+            extracted = _hg_extract_media_urls(exc.payload, candidate)
+            if extracted:
+                candidates.extend(x for x in extracted if x not in tried)
+            else:
+                errors.append("API JSON មិនមាន URL វីដេអូ")
+        except _HLSUrl as exc:
+            try:
+                _download_with_ytdlp(exc.url, path, progress)
+                return
+            except Exception as e:
+                errors.append("HLS/yt-dlp: " + str(e)[:180])
+        except _HtmlPage:
+            try:
+                _download_with_ytdlp(candidate, path, progress)
+                return
+            except Exception as e:
+                errors.append("HTML/yt-dlp: " + str(e)[:180])
+        except UserError:
+            raise
+        except Exception as e:
+            errors.append(str(e)[:180])
+
+    # Final fallback: yt-dlp can resolve supported player pages and segmented media.
+    try:
         _download_with_ytdlp(url, path, progress)
         return
-    except UserError:
-        raise
-    except Exception:
-        raise UserError("ទាញយកវីដេអូពីតំណមិនបានទេ។")
-    if os.path.getsize(path) < 1000:
-        raise UserError("ទាញយកវីដេអូមិនបាន។")
-    progress.progress(1.0)
+    except Exception as e:
+        errors.append("yt-dlp: " + str(e)[:180])
+
+    try:
+        if os.path.exists(path):
+            os.remove(path)
+    except OSError:
+        pass
+    raise UserError("ទាញយកវីដេអូមិនបាន៖ " + " | ".join(errors[-4:]))
 
 
 def extract_audio(video_path, audio_path, master_path):
