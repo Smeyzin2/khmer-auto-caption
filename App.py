@@ -7420,15 +7420,22 @@ _HG_REMEMBER_HTML = """<!doctype html><html><body><script>
 (function(){var K="kvai_hg_vip_remember_v1",sent=false,nonce=null;function send(t,d){window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:t},d),"*");}function read(){try{return localStorage.getItem(K)||"";}catch(e){return "";}}window.addEventListener("message",function(ev){var d=ev.data;if(!d||d.type!=="streamlit:render")return;var a=d.args||{};if(a.nonce!==undefined&&a.nonce!==nonce){nonce=a.nonce;try{if(a.clear)localStorage.removeItem(K);else if(a.save)localStorage.setItem(K,a.save);}catch(e){}}if(!sent){sent=true;send("streamlit:setComponentValue",{value:{token:read()},dataType:"json"});}});send("streamlit:componentReady",{apiVersion:1});send("streamlit:setFrameHeight",{height:0});})();
 </script></body></html>"""
 
-@st.cache_resource(show_spinner=False)
+_HG_REMEMBER_COMPONENT = None
+
 def _hg_remember_component():
-    _folder=os.path.join(tempfile.gettempdir(),"kvai_hg_remember_component")
-    os.makedirs(_folder,exist_ok=True)
-    with open(os.path.join(_folder,"index.html"),"w",encoding="utf-8") as _f: _f.write(_HG_REMEMBER_HTML)
-    return components.declare_component("kvai_hg_vip_remember",path=_folder)
+    # Declare the component once per Python process. Avoid st.cache_resource here:
+    # Streamlit component functions are not reliably cache-hashable across versions.
+    global _HG_REMEMBER_COMPONENT
+    if _HG_REMEMBER_COMPONENT is None:
+        _folder=os.path.join(tempfile.gettempdir(),"kvai_hg_remember_component")
+        os.makedirs(_folder,exist_ok=True)
+        with open(os.path.join(_folder,"index.html"),"w",encoding="utf-8") as _f:
+            _f.write(_HG_REMEMBER_HTML)
+        _HG_REMEMBER_COMPONENT = components.declare_component("kvai_hg_vip_remember",path=_folder)
+    return _HG_REMEMBER_COMPONENT
 
 def _hg_remember_browser(token_to_save=None,clear=False):
-    return _hg_remember_component(key="hg_vip_remember_storage",default={"token":""},
+    return _hg_remember_component()(key="hg_vip_remember_storage",default={"token":""},
         nonce=secrets.token_hex(8),save=token_to_save,clear=clear)
 
 def _hg_token_hash(token):
