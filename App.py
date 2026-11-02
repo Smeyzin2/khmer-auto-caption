@@ -7621,7 +7621,7 @@ def _hg_vip_is_valid(_user):
 
 # VIP remember-me token stored in browser localStorage; only SHA-256 hash in Supabase.
 _HG_REMEMBER_HTML = """<!doctype html><html><body><script>
-(function(){var K="kvai_hg_vip_remember_v1",sent=false,nonce=null;function send(t,d){window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:t},d),"*");}function read(){try{return localStorage.getItem(K)||"";}catch(e){return "";}}window.addEventListener("message",function(ev){var d=ev.data;if(!d||d.type!=="streamlit:render")return;var a=d.args||{};if(a.nonce!==undefined&&a.nonce!==nonce){nonce=a.nonce;try{if(a.clear)localStorage.removeItem(K);else if(a.save)localStorage.setItem(K,a.save);}catch(e){}}if(!sent){sent=true;send("streamlit:setComponentValue",{value:{token:read()},dataType:"json"});}});send("streamlit:componentReady",{apiVersion:1});send("streamlit:setFrameHeight",{height:0});})();
+(function(){var K="kvai_hg_vip_remember_v1",A="kvai_hg_admin_remember_v1",sent=false,nonce=null;function send(t,d){window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:t},d),"*");}function read(k){try{return localStorage.getItem(k)||"";}catch(e){return "";}}window.addEventListener("message",function(ev){var d=ev.data;if(!d||d.type!=="streamlit:render")return;var a=d.args||{};if(a.nonce!==undefined&&a.nonce!==nonce){nonce=a.nonce;try{if(a.clear)localStorage.removeItem(K);else if(a.save)localStorage.setItem(K,a.save);if(a.clear_admin)localStorage.removeItem(A);else if(a.save_admin)localStorage.setItem(A,a.save_admin);}catch(e){}}if(!sent){sent=true;send("streamlit:setComponentValue",{value:{token:read(K),admin_token:read(A)},dataType:"json"});}});send("streamlit:componentReady",{apiVersion:1});send("streamlit:setFrameHeight",{height:0});})();
 </script></body></html>"""
 
 _HG_REMEMBER_COMPONENT = None
@@ -7638,9 +7638,40 @@ def _hg_remember_component():
         _HG_REMEMBER_COMPONENT = components.declare_component("kvai_hg_vip_remember",path=_folder)
     return _HG_REMEMBER_COMPONENT
 
-def _hg_remember_browser(token_to_save=None,clear=False):
-    return _hg_remember_component()(key="hg_vip_remember_storage",default={"token":""},
-        nonce=secrets.token_hex(8),save=token_to_save,clear=clear)
+def _hg_remember_browser(token_to_save=None, clear=False, admin_token_to_save=None, clear_admin=False):
+    return _hg_remember_component()(
+        key="hg_vip_remember_storage",
+        default={"token": "", "admin_token": ""},
+        nonce=secrets.token_hex(8),
+        save=token_to_save,
+        clear=clear,
+        save_admin=admin_token_to_save,
+        clear_admin=clear_admin,
+    )
+
+
+def _hg_make_admin_remember_token():
+    """Create a long-lived signed browser token; changing the admin password revokes it."""
+    issued = str(int(time.time()))
+    nonce = secrets.token_urlsafe(24)
+    payload = issued + "." + nonce
+    signature = hmac.new(_HG_ADMIN_PASSWORD.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+    return payload + "." + signature
+
+
+def _hg_admin_remember_token_valid(token):
+    try:
+        issued, nonce, signature = str(token or "").split(".", 2)
+        timestamp = int(issued)
+        now = int(time.time())
+        # Remember for up to 10 years on this browser; reject future/expired tokens.
+        if timestamp > now + 300 or now - timestamp > 10 * 365 * 24 * 60 * 60:
+            return False
+        payload = issued + "." + nonce
+        expected = hmac.new(_HG_ADMIN_PASSWORD.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256).hexdigest()
+        return bool(_HG_ADMIN_PASSWORD) and hmac.compare_digest(signature, expected)
+    except Exception:
+        return False
 
 def _hg_token_hash(token):
     return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
@@ -7736,7 +7767,11 @@ def _hg_vip_gate():
     # មិនត្រូវការគណនី Google ឬ VIP row មុនទេ ដូច្នេះអាចបង្កើត VIP ដំបូងបាន។
     _browser_state = _hg_remember_browser()
     _browser_token = str((_browser_state or {}).get("token", "")).strip()
+    _admin_remember_token = str((_browser_state or {}).get("admin_token", "")).strip()
     _admin_ok = bool(st.session_state.get("_hg_admin_authenticated", False))
+    if not _admin_ok and _hg_admin_remember_token_valid(_admin_remember_token):
+        st.session_state["_hg_admin_authenticated"] = True
+        _admin_ok = True
 
     if _admin_ok:
         st.success("👑 Admin Access — គ្រប់គ្រង និងបង្កើតគណនី VIP")
@@ -7744,6 +7779,7 @@ def _hg_vip_gate():
             _hg_admin_panel()
         if st.button("ចាកចេញពី Admin", key="hg_admin_logout"):
             st.session_state.pop("_hg_admin_authenticated", None)
+            _hg_remember_browser(clear_admin=True)
             st.rerun()
         return True
 
@@ -7764,6 +7800,8 @@ def _hg_vip_gate():
                 )
                 if _valid_admin_user and _valid_admin_pass:
                     st.session_state["_hg_admin_authenticated"] = True
+                    _admin_remember = _hg_make_admin_remember_token()
+                    _hg_remember_browser(admin_token_to_save=_admin_remember)
                     st.rerun()
                 else:
                     st.error("Admin Username ឬ Password មិនត្រឹមត្រូវ។")
