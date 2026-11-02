@@ -23,6 +23,7 @@ import urllib.request
 import unicodedata
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone, timedelta
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -7313,320 +7314,527 @@ def _hg_extract_series_id(value):
         return value
     return ""
 
-with tab_drama:
-    st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
-    st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
-    if not _HG_APP_ID or not _HG_APP_SECRET:
-        st.warning("សូមបញ្ចូល Hongguo APPID និង APPSECRET នៅផ្ទាំង «🌐 បកប្រែ» → API Key ផ្ទាល់ខ្លួន → Hongguo Drama។")
-    _hg_q1, _hg_q2 = st.columns([3, 1])
-    with _hg_q1:
-        _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
-    with _hg_q2:
-        st.write("")
-        _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
-    if "_hg_rows" not in st.session_state:
-        st.session_state["_hg_rows"] = []
-    if "_hg_page" not in st.session_state:
-        st.session_state["_hg_page"] = 1
-    if "_hg_catalog_mode" not in st.session_state:
-        st.session_state["_hg_catalog_mode"] = "hot"
-    _hg_c1, _hg_c2 = st.columns([3, 1])
-    with _hg_c1:
-        try:
-            _hg_categories = _hg_categories() if _HG_APP_ID and _HG_APP_SECRET else []
-        except Exception as _cat_err:
-            _hg_categories = []
-            st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-        _hg_cat_map = _hg_flat_categories(_hg_categories)
-        _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
-        _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
-        if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
-            _hg_categories.clear()
-            st.rerun()
-    with _hg_c2:
-        st.write("")
-        _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
-    _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
-    if _hg_load_category:
-        st.session_state["_hg_page"] = 1
-        st.session_state["_hg_catalog_mode"] = ("hot" if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
-                                                  else "category:" + _hg_cat_map.get(_hg_cat_choice, ""))
-        st.session_state.pop("_hg_selected", None)
-        try:
-            with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
-                st.session_state["_hg_rows"] = (
-                    _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
-                    else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
-                )
-        except Exception as e:
-            st.error(_hg_error_khmer(e))
-    if _hg_search_click and _hg_keyword.strip():
-        st.session_state["_hg_page"] = 1
-        st.session_state["_hg_catalog_mode"] = "search:" + _hg_keyword.strip()
-        try:
-            _direct_series_id = _hg_extract_series_id(_hg_keyword)
-            if _direct_series_id:
-                with st.spinner("កំពុងបើករឿងតាម Link..."):
-                    _direct_detail = _hg_detail(_direct_series_id)
-                st.session_state["_hg_selected"] = {
-                    "series_id": _direct_series_id,
-                    "name": _direct_detail.get("name") or "រឿង Hongguo",
-                    "cover": _direct_detail.get("cover") or "",
-                    "episode_cnt": _direct_detail.get("episode_cnt") or "",
-                    "listed_cnt": _direct_detail.get("listed_cnt") or "",
-                    "intro": _direct_detail.get("intro") or "",
-                }
-                st.session_state["_hg_rows"] = []
-                st.rerun()
-            else:
-                with st.spinner("កំពុងស្វែងរករឿង..."):
-                    st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
-                st.session_state.pop("_hg_selected", None)
-                if not st.session_state["_hg_rows"]:
-                    st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
-        except Exception as e:
-            st.error(str(e))
-    elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
-        try:
-            st.session_state["_hg_page"] = 1
-            st.session_state["_hg_catalog_mode"] = "hot"
-            with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
-                st.session_state["_hg_rows"] = _hg_rank(1)
-        except Exception as e:
-            st.error(str(e))
-    _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
-    _hg_selected = st.session_state.get("_hg_selected")
-    if _hg_selected:
-        if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
-            st.session_state.pop("_hg_selected", None)
-            st.rerun()
-        st.subheader(_hg_selected.get("name") or "រឿង")
-        _hg_cover = _hg_selected.get("cover")
-        if _hg_cover:
-            st.image(_hg_cover, use_container_width=True)
-        try:
-            with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
-                _hg_d = _hg_detail(_hg_selected["series_id"])
-            if _hg_d.get("intro"):
-                st.write(_hg_d["intro"])
-            _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
-            if not _hg_eps:
-                st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
-            else:
-                _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
-                _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
-                _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
-                _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
-                _hg_epnum = _hg_ep_map[_hg_ep_label]
-                _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
-                if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
-                    with st.spinner("កំពុងរៀបចំវីដេអូ..."):
-                        _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
-                    if _hg_play.get("url"):
-                        st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
-                    else:
-                        st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
-                _hg_saved = st.session_state.get(_hg_play_key)
-                if _hg_saved:
-                    st.video(_hg_saved["url"])
-                    st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
-                    if _hg_saved.get("ready") is False:
-                        st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
-                    if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
-                        st.session_state["mode_pick"] = "🔗 Link"
-                        st.session_state["link_text_area"] = _hg_saved["url"]
-                        st.session_state["link_searched"] = [_hg_saved["url"]]
-                        st.session_state["_hg_imported_caption_notice"] = True
-                        st.rerun()
+# ============================ Hongguo VIP Access ============================
+# All VIP checks and management use the server-only Supabase service key.
+_HG_ADMIN_EMAIL = "smeyai2000@gmail.com"
 
-                # Download multiple Hongguo episodes in one ZIP (all or selected)
-                st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ")
-                _hg_dl_all = st.checkbox(
-                    f"ជ្រើសរើសភាគទាំងអស់ ({len(_hg_ep_map)} ភាគ)",
-                    value=False,
-                    key=f"hg_dl_all_{_hg_selected['series_id']}"
-                )
-                _hg_dl_labels = st.multiselect(
-                    "ឬជ្រើសរើសតែភាគដែលចង់ទាញយក",
-                    list(_hg_ep_map.keys()),
-                    default=list(_hg_ep_map.keys()) if _hg_dl_all else [],
-                    key=f"hg_dl_eps_{_hg_selected['series_id']}"
-                )
-                _hg_dl_max = st.selectbox(
-                    "ចំនួនអតិបរមាក្នុងមួយលើក",
-                    [5, 10, 20, 50, 100],
-                    index=2,
-                    key=f"hg_dl_limit_{_hg_selected['series_id']}"
-                )
-                if st.button(
-                    f"📦 ទាញយក {_hg_dl_labels.__len__() if _hg_dl_all else len(_hg_dl_labels)} ភាគជា ZIP",
-                    key=f"hg_dl_start_{_hg_selected['series_id']}",
-                    disabled=(not (_hg_dl_all or _hg_dl_labels) or busy),
-                    use_container_width=True
-                ):
-                    _chosen_dl_labels = list(_hg_ep_map.keys()) if _hg_dl_all else list(_hg_dl_labels)
-                    _chosen_dl_labels = _chosen_dl_labels[:_hg_dl_max]
-                    _dl_folder = tempfile.mkdtemp(prefix="hongguo_batch_")
-                    _dl_zip_path = os.path.join(_dl_folder, "hongguo_episodes.zip")
-                    _dl_errors = []
-                    _dl_ok = 0
-                    _dl_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
-                    try:
-                        with zipfile.ZipFile(_dl_zip_path, "w", compression=zipfile.ZIP_STORED) as _dl_zip:
-                            for _di, _dl_label in enumerate(_chosen_dl_labels, start=1):
-                                _dl_ep = _hg_ep_map[_dl_label]
-                                _dl_tmp = None
-                                try:
-                                    _dl_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _dl_ep, "q": _hg_quality, "codec": _hg_codec})
-                                    _dl_url = str(_dl_play.get("url") or "").strip()
-                                    if not _dl_url:
-                                        raise RuntimeError("API មិនបានផ្ដល់តំណវីដេអូ")
-                                    _dl_result = _fetch_one(_dl_url)
-                                    if not _dl_result.get("ok") or not _dl_result.get("path"):
-                                        raise RuntimeError(_dl_result.get("err") or "ទាញយកវីដេអូមិនបាន")
-                                    _dl_tmp = _dl_result["path"]
-                                    _dl_size = os.path.getsize(_dl_tmp)
-                                    _dl_current = sum(x.file_size for x in _dl_zip.filelist)
-                                    if _dl_current + _dl_size > MAX_ZIP_MB * 1024 * 1024:
-                                        raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
-                                    _dl_zip.write(_dl_tmp, f"episode_{_dl_ep:04d}.mp4")
-                                    _dl_ok += 1
-                                except Exception as _dl_err:
-                                    _dl_errors.append(f"ភាគ {_dl_ep}: {str(_dl_err)[:180]}")
-                                finally:
-                                    if _dl_tmp:
-                                        shutil.rmtree(os.path.dirname(_dl_tmp), ignore_errors=True)
-                                _dl_bar.progress(_di / max(1, len(_chosen_dl_labels)), text=f"ទាញយកបាន {_dl_ok}/{len(_chosen_dl_labels)} ភាគ · កំពុងដំណើរការ {_di}/{len(_chosen_dl_labels)}")
-                        _dl_bar.empty()
-                        if _dl_ok:
-                            st.session_state[f"_hg_dl_ready_{_hg_selected['series_id']}"] = {
-                                "path": _dl_zip_path,
-                                "folder": _dl_folder,
-                                "count": _dl_ok,
-                                "name": safe_filename(_hg_selected.get("name") or "hongguo")
-                            }
-                            st.success(f"បានរៀបចំទាញយកបាន {_dl_ok} ភាគរួចរាល់។")
-                        else:
-                            shutil.rmtree(_dl_folder, ignore_errors=True)
-                            st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
-                        if _dl_errors:
-                            with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_dl_errors)})"):
-                                for _de in _dl_errors:
-                                    st.warning(_de)
-                    except Exception as _dl_fatal:
-                        shutil.rmtree(_dl_folder, ignore_errors=True)
-                        st.error(f"រៀបចំ ZIP មិនបាន៖ {_dl_fatal}")
-                _dl_ready = st.session_state.get(f"_hg_dl_ready_{_hg_selected['series_id']}")
-                if _dl_ready and os.path.isfile(_dl_ready.get("path", "")):
-                    with open(_dl_ready["path"], "rb") as _dl_file:
-                        dl_button(
-                            f"⬇️ ទាញយក ZIP ({_dl_ready['count']} ភាគ)",
-                            _dl_file,
-                            f"{_dl_ready['name']}_episodes.zip",
-                            "application/zip",
-                            key=f"hg_dl_file_{_hg_selected['series_id']}",
-                            use_container_width=True
-                        )
+def _hg_supabase_config():
+    _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
+    _key = str(get_secret("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
+    if not _key:
+        # Support the newer Supabase secret-key name if the owner used it.
+        _key = str(get_secret("SUPABASE_SECRET_KEY", "")).strip()
+    return _url, _key
 
-                st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
-                _hg_batch_labels = st.multiselect(
-                    "ជ្រើសរើសភាគដែលចង់បកប្រែ",
-                    list(_hg_ep_map.keys()),
-                    default=[],
-                    key=f"hg_batch_eps_{_hg_selected['series_id']}",
-                    help="អាចជ្រើសរើសភាគជាច្រើនបាន។ កម្មវិធីនឹងរៀបចំ Link រួចបញ្ជូនទៅ Khmer Auto Caption តាមលំដាប់។"
-                )
-                _hg_batch_limit = st.selectbox(
-                    "ចំនួនភាគក្នុងមួយលើក",
-                    [2, 3, 5, 10, 20],
-                    index=2,
-                    key=f"hg_batch_limit_{_hg_selected['series_id']}"
-                )
-                if st.button(
-                    f"🚀 រៀបចំ និងបកប្រែ {len(_hg_batch_labels)} ភាគ",
-                    type="primary",
-                    disabled=not _hg_batch_labels or busy,
-                    key=f"hg_batch_start_{_hg_selected['series_id']}",
-                    use_container_width=True
-                ):
-                    _batch_eps = [_hg_ep_map[x] for x in _hg_batch_labels][:_hg_batch_limit]
-                    _batch_urls = []
-                    _batch_errors = []
-                    _batch_bar = st.progress(0, text="កំពុងរៀបចំតំណភាគ...")
-                    for _bi, _be in enumerate(_batch_eps, start=1):
+
+def _hg_sb_request(method, path="", params=None, payload=None):
+    _url, _key = _hg_supabase_config()
+    if not _url or not _key:
+        raise RuntimeError("មិនទាន់កំណត់ SUPABASE_URL និង SUPABASE_SERVICE_ROLE_KEY ក្នុង Streamlit Secrets ទេ។")
+    _headers = {
+        "apikey": _key,
+        "Authorization": "Bearer " + _key,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    _resp = requests.request(
+        method, _url + "/rest/v1/hongguo_vip_users" + path,
+        headers=_headers, params=params, json=payload, timeout=20,
+    )
+    if not _resp.ok:
+        raise RuntimeError(f"Supabase HTTP {_resp.status_code}: {_resp.text[:300]}")
+    if not _resp.text.strip():
+        return []
+    try:
+        return _resp.json()
+    except Exception:
+        return []
+
+
+def _hg_password_hash(password):
+    _salt = secrets.token_bytes(16)
+    _rounds = 310000
+    _digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt, _rounds)
+    return "pbkdf2_sha256${}${}${}".format(
+        _rounds, base64.urlsafe_b64encode(_salt).decode().rstrip("="),
+        base64.urlsafe_b64encode(_digest).decode().rstrip("="),
+    )
+
+
+def _hg_password_verify(password, stored):
+    try:
+        _algo, _rounds, _salt, _expected = stored.split("$", 3)
+        if _algo != "pbkdf2_sha256":
+            return False
+        _salt_b = base64.urlsafe_b64decode(_salt + "=" * (-len(_salt) % 4))
+        _expected_b = base64.urlsafe_b64decode(_expected + "=" * (-len(_expected) % 4))
+        _actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt_b, int(_rounds))
+        return hmac.compare_digest(_actual, _expected_b)
+    except Exception:
+        return False
+
+
+def _hg_get_vip_user(username):
+    _rows = _hg_sb_request("GET", params={
+        "select": "id,username,password_hash,expires_at,is_active,created_at,note",
+        "username": "eq." + str(username).strip(),
+        "limit": "1",
+    })
+    return _rows[0] if _rows else None
+
+
+def _hg_vip_is_valid(_user):
+    if not _user or not _user.get("is_active"):
+        return False
+    try:
+        _expiry = str(_user.get("expires_at", "")).replace("Z", "+00:00")
+        _dt = datetime.fromisoformat(_expiry)
+        if _dt.tzinfo is None:
+            _dt = _dt.replace(tzinfo=timezone.utc)
+        return _dt > datetime.now(timezone.utc)
+    except Exception:
+        return False
+
+
+def _hg_admin_panel():
+    st.markdown("#### 👑 គ្រប់គ្រងគណនី VIP")
+    with st.form("hg_vip_create_form", clear_on_submit=True):
+        _c1, _c2 = st.columns(2)
+        with _c1:
+            _new_user = st.text_input("ឈ្មោះអ្នកប្រើ VIP", key="hg_admin_new_username")
+            _new_pass = st.text_input("ពាក្យសម្ងាត់ VIP", type="password", key="hg_admin_new_password")
+        with _c2:
+            _days = st.selectbox("រយៈពេលប្រើប្រាស់", [7, 30, 90, 180, 365], index=1, format_func=lambda x: f"{x} ថ្ងៃ")
+            _note = st.text_input("កំណត់ចំណាំ (មិនចាំបាច់)")
+        _create = st.form_submit_button("➕ បង្កើតគណនី VIP", use_container_width=True)
+    if _create:
+        _u = str(_new_user or "").strip()
+        if len(_u) < 3 or len(_new_pass or "") < 8:
+            st.error("Username ត្រូវមានយ៉ាងតិច ៣ តួ និង Password យ៉ាងតិច ៨ តួ។")
+        else:
+            try:
+                if _hg_get_vip_user(_u):
+                    st.error("Username នេះមានរួចហើយ។")
+                else:
+                    _expiry = (datetime.now(timezone.utc) + timedelta(days=int(_days))).isoformat()
+                    _hg_sb_request("POST", payload={
+                        "username": _u,
+                        "password_hash": _hg_password_hash(_new_pass),
+                        "expires_at": _expiry,
+                        "is_active": True,
+                        "note": str(_note or "").strip(),
+                    })
+                    st.success(f"បានបង្កើត VIP '{_u}' រយៈពេល {_days} ថ្ងៃ។")
+                    st.rerun()
+            except Exception as _err:
+                st.error(f"បង្កើតគណនីមិនបាន៖ {_err}")
+
+    try:
+        _users = _hg_sb_request("GET", params={
+            "select": "id,username,expires_at,is_active,created_at,note",
+            "order": "created_at.desc", "limit": "200",
+        })
+        if _users:
+            st.markdown("**បញ្ជី VIP**")
+            for _u in _users:
+                _x = str(_u.get("expires_at", ""))[:10]
+                _status = "សកម្ម" if _hg_vip_is_valid(_u) else "ផុតកំណត់/បិទ"
+                _a, _b, _c, _d = st.columns([2.2, 1.7, 1.3, 1.3])
+                _a.write(f"**{_u.get('username','')}**")
+                _b.caption(f"{_status} · ដល់ {_x}")
+                with _c:
+                    _extend_days = st.selectbox("បន្ថែមថ្ងៃ", [7, 30, 90, 180, 365], index=1,
+                                                key="hg_vip_extend_days_" + str(_u["id"]), label_visibility="collapsed")
+                    if st.button("បន្ថែម", key="hg_vip_extend_" + str(_u["id"]), use_container_width=True):
                         try:
-                            _bp = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _be, "q": _hg_quality, "codec": _hg_codec})
-                            _bu = str(_bp.get("url") or "").strip()
-                            if _bu:
-                                _batch_urls.append(_bu)
+                            _base = datetime.now(timezone.utc)
+                            try:
+                                _old_exp = datetime.fromisoformat(str(_u.get("expires_at", "")).replace("Z", "+00:00"))
+                                if _old_exp.tzinfo is None:
+                                    _old_exp = _old_exp.replace(tzinfo=timezone.utc)
+                                if _old_exp > _base:
+                                    _base = _old_exp
+                            except Exception:
+                                pass
+                            _new_exp = (_base + timedelta(days=int(_extend_days))).isoformat()
+                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])},
+                                           payload={"expires_at": _new_exp, "is_active": True})
+                            st.success("បានបន្ថែមថ្ងៃ VIP រួចរាល់។")
+                            st.rerun()
+                        except Exception as _extend_err:
+                            st.error(f"បន្ថែមថ្ងៃមិនបាន៖ {_extend_err}")
+                with _d:
+                    if _u.get("is_active"):
+                        if st.button("បិទ", key="hg_vip_off_" + str(_u["id"]), use_container_width=True):
+                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": False})
+                            st.rerun()
+                    else:
+                        if st.button("បើកវិញ", key="hg_vip_on_" + str(_u["id"]), use_container_width=True):
+                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": True})
+                            st.rerun()
+    except Exception as _err:
+        st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
+
+
+def _hg_vip_gate():
+    _email = str(_user_field("email", "")).strip().lower()
+    _is_admin = _email == _HG_ADMIN_EMAIL
+    if _is_admin:
+        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
+        with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
+            _hg_admin_panel()
+        return True
+
+    _vip_name = str(st.session_state.get("_hg_vip_username", "")).strip()
+    if _vip_name:
+        try:
+            _vip_row = _hg_get_vip_user(_vip_name)
+            if _hg_vip_is_valid(_vip_row):
+                st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
+                if st.button("ចាកចេញពី VIP", key="hg_vip_logout"):
+                    st.session_state.pop("_hg_vip_username", None)
+                    st.rerun()
+                return True
+            st.session_state.pop("_hg_vip_username", None)
+            st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
+        except Exception as _err:
+            st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {_err}")
+            return False
+
+    st.markdown("### 🔒 Hongguo VIP")
+    st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
+    with st.form("hg_vip_login_form"):
+        _u = st.text_input("Username", key="hg_vip_login_username")
+        _p = st.text_input("Password", type="password", key="hg_vip_login_password")
+        _go = st.form_submit_button("ចូលប្រើ Hongguo VIP", use_container_width=True)
+    if _go:
+        try:
+            _row = _hg_get_vip_user(_u)
+            if _hg_vip_is_valid(_row) and _hg_password_verify(_p, _row.get("password_hash", "")):
+                st.session_state["_hg_vip_username"] = _row["username"]
+                st.rerun()
+            st.error("Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។")
+        except Exception as _err:
+            st.error(f"មិនអាចចូល VIP បាន៖ {_err}")
+    return False
+
+
+with tab_drama:
+    _hg_access = _hg_vip_gate()
+    if _hg_access:
+        st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
+        st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
+        if not _HG_APP_ID or not _HG_APP_SECRET:
+            st.warning("សូមបញ្ចូល Hongguo APPID និង APPSECRET នៅផ្ទាំង «🌐 បកប្រែ» → API Key ផ្ទាល់ខ្លួន → Hongguo Drama។")
+        _hg_q1, _hg_q2 = st.columns([3, 1])
+        with _hg_q1:
+            _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
+        with _hg_q2:
+            st.write("")
+            _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
+        if "_hg_rows" not in st.session_state:
+            st.session_state["_hg_rows"] = []
+        if "_hg_page" not in st.session_state:
+            st.session_state["_hg_page"] = 1
+        if "_hg_catalog_mode" not in st.session_state:
+            st.session_state["_hg_catalog_mode"] = "hot"
+        _hg_c1, _hg_c2 = st.columns([3, 1])
+        with _hg_c1:
+            try:
+                _hg_categories = _hg_categories() if _HG_APP_ID and _HG_APP_SECRET else []
+            except Exception as _cat_err:
+                _hg_categories = []
+                st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
+            _hg_cat_map = _hg_flat_categories(_hg_categories)
+            _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
+            _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
+            if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
+                _hg_categories.clear()
+                st.rerun()
+        with _hg_c2:
+            st.write("")
+            _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
+        _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
+        if _hg_load_category:
+            st.session_state["_hg_page"] = 1
+            st.session_state["_hg_catalog_mode"] = ("hot" if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                                                      else "category:" + _hg_cat_map.get(_hg_cat_choice, ""))
+            st.session_state.pop("_hg_selected", None)
+            try:
+                with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
+                    st.session_state["_hg_rows"] = (
+                        _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                        else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
+                    )
+            except Exception as e:
+                st.error(_hg_error_khmer(e))
+        if _hg_search_click and _hg_keyword.strip():
+            st.session_state["_hg_page"] = 1
+            st.session_state["_hg_catalog_mode"] = "search:" + _hg_keyword.strip()
+            try:
+                _direct_series_id = _hg_extract_series_id(_hg_keyword)
+                if _direct_series_id:
+                    with st.spinner("កំពុងបើករឿងតាម Link..."):
+                        _direct_detail = _hg_detail(_direct_series_id)
+                    st.session_state["_hg_selected"] = {
+                        "series_id": _direct_series_id,
+                        "name": _direct_detail.get("name") or "រឿង Hongguo",
+                        "cover": _direct_detail.get("cover") or "",
+                        "episode_cnt": _direct_detail.get("episode_cnt") or "",
+                        "listed_cnt": _direct_detail.get("listed_cnt") or "",
+                        "intro": _direct_detail.get("intro") or "",
+                    }
+                    st.session_state["_hg_rows"] = []
+                    st.rerun()
+                else:
+                    with st.spinner("កំពុងស្វែងរករឿង..."):
+                        st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+                    st.session_state.pop("_hg_selected", None)
+                    if not st.session_state["_hg_rows"]:
+                        st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
+            except Exception as e:
+                st.error(str(e))
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
+            try:
+                st.session_state["_hg_page"] = 1
+                st.session_state["_hg_catalog_mode"] = "hot"
+                with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
+                    st.session_state["_hg_rows"] = _hg_rank(1)
+            except Exception as e:
+                st.error(str(e))
+        _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
+        _hg_selected = st.session_state.get("_hg_selected")
+        if _hg_selected:
+            if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
+                st.session_state.pop("_hg_selected", None)
+                st.rerun()
+            st.subheader(_hg_selected.get("name") or "រឿង")
+            _hg_cover = _hg_selected.get("cover")
+            if _hg_cover:
+                st.image(_hg_cover, use_container_width=True)
+            try:
+                with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
+                    _hg_d = _hg_detail(_hg_selected["series_id"])
+                if _hg_d.get("intro"):
+                    st.write(_hg_d["intro"])
+                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
+                if not _hg_eps:
+                    st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
+                else:
+                    _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
+                    _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
+                    _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
+                    _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
+                    _hg_epnum = _hg_ep_map[_hg_ep_label]
+                    _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
+                    if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
+                        with st.spinner("កំពុងរៀបចំវីដេអូ..."):
+                            _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                        if _hg_play.get("url"):
+                            st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
+                        else:
+                            st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
+                    _hg_saved = st.session_state.get(_hg_play_key)
+                    if _hg_saved:
+                        st.video(_hg_saved["url"])
+                        st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
+                        if _hg_saved.get("ready") is False:
+                            st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
+                        if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
+                            st.session_state["mode_pick"] = "🔗 Link"
+                            st.session_state["link_text_area"] = _hg_saved["url"]
+                            st.session_state["link_searched"] = [_hg_saved["url"]]
+                            st.session_state["_hg_imported_caption_notice"] = True
+                            st.rerun()
+
+                    # Download multiple Hongguo episodes in one ZIP (all or selected)
+                    st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ")
+                    _hg_dl_all = st.checkbox(
+                        f"ជ្រើសរើសភាគទាំងអស់ ({len(_hg_ep_map)} ភាគ)",
+                        value=False,
+                        key=f"hg_dl_all_{_hg_selected['series_id']}"
+                    )
+                    _hg_dl_labels = st.multiselect(
+                        "ឬជ្រើសរើសតែភាគដែលចង់ទាញយក",
+                        list(_hg_ep_map.keys()),
+                        default=list(_hg_ep_map.keys()) if _hg_dl_all else [],
+                        key=f"hg_dl_eps_{_hg_selected['series_id']}"
+                    )
+                    _hg_dl_max = st.selectbox(
+                        "ចំនួនអតិបរមាក្នុងមួយលើក",
+                        [5, 10, 20, 50, 100],
+                        index=2,
+                        key=f"hg_dl_limit_{_hg_selected['series_id']}"
+                    )
+                    if st.button(
+                        f"📦 ទាញយក {_hg_dl_labels.__len__() if _hg_dl_all else len(_hg_dl_labels)} ភាគជា ZIP",
+                        key=f"hg_dl_start_{_hg_selected['series_id']}",
+                        disabled=(not (_hg_dl_all or _hg_dl_labels) or busy),
+                        use_container_width=True
+                    ):
+                        _chosen_dl_labels = list(_hg_ep_map.keys()) if _hg_dl_all else list(_hg_dl_labels)
+                        _chosen_dl_labels = _chosen_dl_labels[:_hg_dl_max]
+                        _dl_folder = tempfile.mkdtemp(prefix="hongguo_batch_")
+                        _dl_zip_path = os.path.join(_dl_folder, "hongguo_episodes.zip")
+                        _dl_errors = []
+                        _dl_ok = 0
+                        _dl_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
+                        try:
+                            with zipfile.ZipFile(_dl_zip_path, "w", compression=zipfile.ZIP_STORED) as _dl_zip:
+                                for _di, _dl_label in enumerate(_chosen_dl_labels, start=1):
+                                    _dl_ep = _hg_ep_map[_dl_label]
+                                    _dl_tmp = None
+                                    try:
+                                        _dl_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _dl_ep, "q": _hg_quality, "codec": _hg_codec})
+                                        _dl_url = str(_dl_play.get("url") or "").strip()
+                                        if not _dl_url:
+                                            raise RuntimeError("API មិនបានផ្ដល់តំណវីដេអូ")
+                                        _dl_result = _fetch_one(_dl_url)
+                                        if not _dl_result.get("ok") or not _dl_result.get("path"):
+                                            raise RuntimeError(_dl_result.get("err") or "ទាញយកវីដេអូមិនបាន")
+                                        _dl_tmp = _dl_result["path"]
+                                        _dl_size = os.path.getsize(_dl_tmp)
+                                        _dl_current = sum(x.file_size for x in _dl_zip.filelist)
+                                        if _dl_current + _dl_size > MAX_ZIP_MB * 1024 * 1024:
+                                            raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
+                                        _dl_zip.write(_dl_tmp, f"episode_{_dl_ep:04d}.mp4")
+                                        _dl_ok += 1
+                                    except Exception as _dl_err:
+                                        _dl_errors.append(f"ភាគ {_dl_ep}: {str(_dl_err)[:180]}")
+                                    finally:
+                                        if _dl_tmp:
+                                            shutil.rmtree(os.path.dirname(_dl_tmp), ignore_errors=True)
+                                    _dl_bar.progress(_di / max(1, len(_chosen_dl_labels)), text=f"ទាញយកបាន {_dl_ok}/{len(_chosen_dl_labels)} ភាគ · កំពុងដំណើរការ {_di}/{len(_chosen_dl_labels)}")
+                            _dl_bar.empty()
+                            if _dl_ok:
+                                st.session_state[f"_hg_dl_ready_{_hg_selected['series_id']}"] = {
+                                    "path": _dl_zip_path,
+                                    "folder": _dl_folder,
+                                    "count": _dl_ok,
+                                    "name": safe_filename(_hg_selected.get("name") or "hongguo")
+                                }
+                                st.success(f"បានរៀបចំទាញយកបាន {_dl_ok} ភាគរួចរាល់។")
                             else:
-                                _batch_errors.append(f"ភាគ {_be}: API មិនបានផ្ដល់ URL")
-                        except Exception as _be_err:
-                            _batch_errors.append(f"ភាគ {_be}: {_hg_error_khmer(_be_err)}")
-                        _batch_bar.progress(_bi / len(_batch_eps), text=f"កំពុងរៀបចំភាគ {_bi}/{len(_batch_eps)}")
-                    _batch_bar.empty()
-                    if _batch_urls:
-                        st.session_state["mode_pick"] = "🔗 Link"
-                        st.session_state["link_text_area"] = "\n".join(_batch_urls)
-                        st.session_state["link_searched"] = list(_batch_urls)
-                        st.session_state["_hg_imported_caption_notice"] = True
-                        st.session_state["_auto_translate"] = True
-                        st.session_state["_hg_batch_count"] = len(_batch_urls)
-                        st.rerun()
-                    if _batch_errors:
-                        st.warning("មិនអាចរៀបចំបានខ្លះ៖ " + " · ".join(_batch_errors[:5]))
-        except Exception as e:
-            st.error(str(e))
-    elif _hg_rows:
-        for _hg_i in range(0, len(_hg_rows), 3):
-            _hg_cols = st.columns(3, gap="small")
-            for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
-                with _hg_col:
-                    if _hg_row.get("cover"):
-                        st.image(_hg_row["cover"], use_container_width=True)
-                    st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
-                    st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
-                    if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
-                        st.session_state["_hg_selected"] = _hg_row
-                        st.rerun()
-        _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
-        _hg_page_end = _hg_page_start + len(_hg_rows) - 1
-        st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
-        _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
-        with _hg_prev:
-            if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
-                         disabled=st.session_state.get("_hg_page", 1) <= 1):
-                st.session_state["_hg_page"] -= 1
-                _p = st.session_state["_hg_page"]
-                _mode = st.session_state.get("_hg_catalog_mode", "hot")
-                try:
-                    if _mode == "hot":
-                        st.session_state["_hg_rows"] = _hg_rank(_p)
-                    elif _mode.startswith("category:"):
-                        st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
-                    elif _mode.startswith("search:"):
-                        st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
-                except Exception as e:
-                    st.error(str(e))
-                st.rerun()
-        with _hg_page_label:
-            st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {st.session_state.get('_hg_page',1)}</div>", unsafe_allow_html=True)
-        with _hg_next:
-            if st.button("បន្ទាប់ ➡️", key="hg_page_next", use_container_width=True,
-                         disabled=len(_hg_rows) < 20):
-                st.session_state["_hg_page"] += 1
-                _p = st.session_state["_hg_page"]
-                _mode = st.session_state.get("_hg_catalog_mode", "hot")
-                try:
-                    if _mode == "hot":
-                        st.session_state["_hg_rows"] = _hg_rank(_p)
-                    elif _mode.startswith("category:"):
-                        st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
-                    elif _mode.startswith("search:"):
-                        st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
-                except Exception as e:
-                    st.error(str(e))
-                st.rerun()
+                                shutil.rmtree(_dl_folder, ignore_errors=True)
+                                st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
+                            if _dl_errors:
+                                with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_dl_errors)})"):
+                                    for _de in _dl_errors:
+                                        st.warning(_de)
+                        except Exception as _dl_fatal:
+                            shutil.rmtree(_dl_folder, ignore_errors=True)
+                            st.error(f"រៀបចំ ZIP មិនបាន៖ {_dl_fatal}")
+                    _dl_ready = st.session_state.get(f"_hg_dl_ready_{_hg_selected['series_id']}")
+                    if _dl_ready and os.path.isfile(_dl_ready.get("path", "")):
+                        with open(_dl_ready["path"], "rb") as _dl_file:
+                            dl_button(
+                                f"⬇️ ទាញយក ZIP ({_dl_ready['count']} ភាគ)",
+                                _dl_file,
+                                f"{_dl_ready['name']}_episodes.zip",
+                                "application/zip",
+                                key=f"hg_dl_file_{_hg_selected['series_id']}",
+                                use_container_width=True
+                            )
+
+                    st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
+                    _hg_batch_labels = st.multiselect(
+                        "ជ្រើសរើសភាគដែលចង់បកប្រែ",
+                        list(_hg_ep_map.keys()),
+                        default=[],
+                        key=f"hg_batch_eps_{_hg_selected['series_id']}",
+                        help="អាចជ្រើសរើសភាគជាច្រើនបាន។ កម្មវិធីនឹងរៀបចំ Link រួចបញ្ជូនទៅ Khmer Auto Caption តាមលំដាប់។"
+                    )
+                    _hg_batch_limit = st.selectbox(
+                        "ចំនួនភាគក្នុងមួយលើក",
+                        [2, 3, 5, 10, 20],
+                        index=2,
+                        key=f"hg_batch_limit_{_hg_selected['series_id']}"
+                    )
+                    if st.button(
+                        f"🚀 រៀបចំ និងបកប្រែ {len(_hg_batch_labels)} ភាគ",
+                        type="primary",
+                        disabled=not _hg_batch_labels or busy,
+                        key=f"hg_batch_start_{_hg_selected['series_id']}",
+                        use_container_width=True
+                    ):
+                        _batch_eps = [_hg_ep_map[x] for x in _hg_batch_labels][:_hg_batch_limit]
+                        _batch_urls = []
+                        _batch_errors = []
+                        _batch_bar = st.progress(0, text="កំពុងរៀបចំតំណភាគ...")
+                        for _bi, _be in enumerate(_batch_eps, start=1):
+                            try:
+                                _bp = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _be, "q": _hg_quality, "codec": _hg_codec})
+                                _bu = str(_bp.get("url") or "").strip()
+                                if _bu:
+                                    _batch_urls.append(_bu)
+                                else:
+                                    _batch_errors.append(f"ភាគ {_be}: API មិនបានផ្ដល់ URL")
+                            except Exception as _be_err:
+                                _batch_errors.append(f"ភាគ {_be}: {_hg_error_khmer(_be_err)}")
+                            _batch_bar.progress(_bi / len(_batch_eps), text=f"កំពុងរៀបចំភាគ {_bi}/{len(_batch_eps)}")
+                        _batch_bar.empty()
+                        if _batch_urls:
+                            st.session_state["mode_pick"] = "🔗 Link"
+                            st.session_state["link_text_area"] = "\n".join(_batch_urls)
+                            st.session_state["link_searched"] = list(_batch_urls)
+                            st.session_state["_hg_imported_caption_notice"] = True
+                            st.session_state["_auto_translate"] = True
+                            st.session_state["_hg_batch_count"] = len(_batch_urls)
+                            st.rerun()
+                        if _batch_errors:
+                            st.warning("មិនអាចរៀបចំបានខ្លះ៖ " + " · ".join(_batch_errors[:5]))
+            except Exception as e:
+                st.error(str(e))
+        elif _hg_rows:
+            for _hg_i in range(0, len(_hg_rows), 3):
+                _hg_cols = st.columns(3, gap="small")
+                for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
+                    with _hg_col:
+                        if _hg_row.get("cover"):
+                            st.image(_hg_row["cover"], use_container_width=True)
+                        st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
+                        st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
+                        if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
+                            st.session_state["_hg_selected"] = _hg_row
+                            st.rerun()
+            _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
+            _hg_page_end = _hg_page_start + len(_hg_rows) - 1
+            st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
+            _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
+            with _hg_prev:
+                if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
+                             disabled=st.session_state.get("_hg_page", 1) <= 1):
+                    st.session_state["_hg_page"] -= 1
+                    _p = st.session_state["_hg_page"]
+                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
+                    try:
+                        if _mode == "hot":
+                            st.session_state["_hg_rows"] = _hg_rank(_p)
+                        elif _mode.startswith("category:"):
+                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
+                        elif _mode.startswith("search:"):
+                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
+                    except Exception as e:
+                        st.error(str(e))
+                    st.rerun()
+            with _hg_page_label:
+                st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {st.session_state.get('_hg_page',1)}</div>", unsafe_allow_html=True)
+            with _hg_next:
+                if st.button("បន្ទាប់ ➡️", key="hg_page_next", use_container_width=True,
+                             disabled=len(_hg_rows) < 20):
+                    st.session_state["_hg_page"] += 1
+                    _p = st.session_state["_hg_page"]
+                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
+                    try:
+                        if _mode == "hot":
+                            st.session_state["_hg_rows"] = _hg_rank(_p)
+                        elif _mode.startswith("category:"):
+                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
+                        elif _mode.startswith("search:"):
+                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
+                    except Exception as e:
+                        st.error(str(e))
+                    st.rerun()
 
 
 
