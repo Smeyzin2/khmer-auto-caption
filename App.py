@@ -2542,7 +2542,16 @@ TRANS_SYSTEM_LITE = (
     'Return JSON {"translations": [...]} with exactly one item per input.'
 )
 LITE_PROMPT = str(get_secret("LITE_PROMPT", "0")).strip().lower() in ("1", "true", "yes", "on")
-TRANS_SYSTEM = TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL
+TRANS_ACCURACY_NOTE = (
+    " FAITHFULNESS FIRST (overrides any length or style wish): the source lines come from automatic speech recognition, so a word may be a "
+    "homophone or a mis-heard name. Use the VIDEO SUMMARY and the surrounding lines to pick the reading that fits the story (who is speaking to whom, "
+    "the relationship, what just happened), but never invent dialogue. Translate what is actually SAID in each line: keep every fact, "
+    "question, negation, number, name, threat, promise and joke, and keep the speaker's attitude (respect, contempt, anger, love). "
+    "Do not summarise, soften, embellish or replace a line with a generic sentence. Keep the same person called by the same Khmer name and the same "
+    "kinship or title word in every line. If a line has no [max N chars] tag there is NO length limit: translate it fully. "
+    "Even when a [max N chars] tag is present, meaning and story fit always win over length."
+)
+TRANS_SYSTEM = (TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL) + TRANS_ACCURACY_NOTE
 
 
 def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
@@ -3265,15 +3274,18 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
 
 def make_synopsis(english, texts, gemini_key, groq_key):
     """សង្ខេបរឿងទាំងមូល (អ្នកណានិយាយទៅអ្នកណា ប្រធានបទ អារម្មណ៍) ជាអង់គ្លេស ដើម្បីជួយបកប្រែឱ្យត្រូវបរិបទ។"""
-    body = " ".join((english[i] or str(texts[i])) for i in range(len(texts)))[:7000]
-    ask = ("Read this video transcript. In under 120 words of English, state: the topic, who the speakers are and how they relate "
-           "(gender, age, formal or casual), the mood, and any recurring names or terms. No translation.\n\n" + body)
+    body = " ".join((english[i] or str(texts[i])) for i in range(len(texts)))[:9000]
+    ask = ("Read this video transcript (machine-transcribed, may contain small errors). In under 200 words of English, state: the genre and setting "
+           "(modern, ancient, family drama, business, romance, comedy...), the plot so far in 2-3 sentences, who the speakers/characters are and exactly how "
+           "they relate (husband/wife, boss/employee, mother/son, enemies...), their gender and age group, whether they speak formally or casually, "
+           "the mood, and a list of recurring names and terms (with the most likely correct spelling). No translation.\n\n" + body)
     _r = oai_try([body], None,
-                 "Read the video transcript line. In under 120 words of English, state: the topic, who the speakers are and how they relate "
-                 "(gender, age, formal or casual), the mood, and any recurring names or terms. No translation. "
+                 "Read the video transcript (machine-transcribed, may contain small errors). In under 200 words of English, state: the genre and setting, "
+                 "the plot so far in 2-3 sentences, who the characters are and exactly how they relate (husband/wife, boss/employee, parent/child, enemies...), "
+                 "their gender and age group, formal or casual speech, the mood, and recurring names and terms (most likely correct spelling). No translation. "
                  'Return JSON {"translations": ["<summary>"]}.', to_english=True)
     if _r and _r[0]:
-        return str(_r[0])[:900]
+        return str(_r[0])[:1400]
     try:
         if gemini_key:
             client = make_gemini_client(gemini_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
@@ -3381,7 +3393,7 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
     over = [i for i in range(n)
             if budgets[i] and len(str(outs[i])) > budgets[i] * 1.6 and len(str(outs[i])) > 30]
     short = [i for i in range(n)
-             if budgets[i] and budgets[i] >= 28 and 0 < len(str(outs[i])) < budgets[i] * 0.55]
+             if EXPAND_MODE and budgets[i] and budgets[i] >= 28 and 0 < len(str(outs[i])) < budgets[i] * 0.55]
     if short:
         def _exp(idxs):
             rows = [f"ORIGINAL: {str(texts[i]).strip()} | KHMER: {outs[i]} | TARGET: {budgets[i]}" for i in idxs]
@@ -3432,11 +3444,13 @@ except Exception:
     TRANS_BATCH = 8
 LLM_GROUP = 12   # ចំនួនឃ្លាក្នុងមួយការហៅ AI ពេលកែ/ជ្រើស/តម្រឹម (ធំជាង = ហៅតិចជាង = លឿនជាង)
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
-REVIEW_MODE = str(get_secret("REVIEW_MODE", "off")).strip().lower()
+REVIEW_MODE = str(get_secret("REVIEW_MODE", "refine")).strip().lower()
 # CLAUDE_FIRST=1 (លំនាំដើម): Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ | 0 = ប្រើ Provider ផ្សេងមុន
 CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "1")).strip().lower() in ("1", "true", "yes", "on")
 # FIT_MODE=1 (លំនាំដើម): បង្រួមឃ្លាវែងដោយ AI ដើម្បីសមពេលនិយាយ
 FIT_MODE = str(get_secret("FIT_MODE", "1")).strip().lower() in ("1", "true", "yes", "on")
+# EXPAND_MODE=1: ពង្រីកឃ្លាខ្លីឱ្យវែង (អាចបន្ថែមពាក្យមិនមាននៅដើម) — លំនាំដើមបិទ ដើម្បីរក្សាភាពត្រឹមត្រូវ
+EXPAND_MODE = str(get_secret("EXPAND_MODE", "0")).strip().lower() in ("1", "true", "yes", "on")
 FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
 
 
@@ -3478,7 +3492,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
     synopsis = ""
-    if n > 2 and not FAST_TRANSLATE:
+    if n > 2:
         if groq_key or oai_enabled():
             synopsis = make_synopsis(english, texts, None, groq_key)
         if not synopsis and gemini_key:
@@ -3489,13 +3503,13 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     if (gemini_key or oai_enabled()) and missing:
         def _km(idxs):
             try:
-                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 20), idxs[0])]
-                story = " / ".join(str(x).strip() for x in prev_ctx if x)[-1800:] or None
+                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 25), idxs[0])]
+                story = " / ".join(str(x).strip() for x in prev_ctx if x)[-3000:] or None
                 if synopsis:
                     story = "VIDEO SUMMARY: " + synopsis + " || " + (story or "")
-                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 13))]
+                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 21))]
                 if nxt_ctx:
-                    story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)[:1000]
+                    story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)[:2000]
                 return idxs, gemini_translate_khmer(
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
@@ -3522,7 +3536,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         groups = [missing[k:k + 8] for k in range(0, len(missing), 8)]
         def _gkm(idxs):
             try:
-                prev = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
+                prev = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 15), idxs[0])]
                 story = " / ".join(str(x).strip() for x in prev if x)
                 if synopsis:
                     story = "VIDEO SUMMARY: " + synopsis + " || " + story
@@ -4026,7 +4040,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         # ប្រវែងគោល (soft hint): ~១០ តួអក្សរខ្មែរ/វិនាទី តាមពេលមាត់និយាយ ឱ្យស្របចង្វាក់ lip-sync
         # (prompt ហាមកាត់អត្ថន័យ ដូច្នេះនេះគ្រាន់តែជាការណែនាំ)
-        budgets = lip_budgets(keep)  # ប្រវែងអក្សរតាមពេលមាត់និយាយ ឱ្យសំឡេងចប់ត្រូវមាត់
+        budgets = lip_budgets(keep) if dub else None  # ប្រវែងកំណត់ប្រើតែពេល dubbing; Caption ធម្មតាបកពេញន័យ មិនកាត់
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m), speakers=speakers, fit=bool(dub))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
