@@ -7439,6 +7439,95 @@ with tab_drama:
                         st.session_state["_hg_imported_caption_notice"] = True
                         st.rerun()
 
+                # Download multiple Hongguo episodes in one ZIP (all or selected)
+                st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ")
+                _hg_dl_all = st.checkbox(
+                    f"ជ្រើសរើសភាគទាំងអស់ ({len(_hg_ep_map)} ភាគ)",
+                    value=False,
+                    key=f"hg_dl_all_{_hg_selected['series_id']}"
+                )
+                _hg_dl_labels = st.multiselect(
+                    "ឬជ្រើសរើសតែភាគដែលចង់ទាញយក",
+                    list(_hg_ep_map.keys()),
+                    default=list(_hg_ep_map.keys()) if _hg_dl_all else [],
+                    key=f"hg_dl_eps_{_hg_selected['series_id']}"
+                )
+                _hg_dl_max = st.selectbox(
+                    "ចំនួនអតិបរមាក្នុងមួយលើក",
+                    [5, 10, 20, 50, 100],
+                    index=2,
+                    key=f"hg_dl_limit_{_hg_selected['series_id']}"
+                )
+                if st.button(
+                    f"📦 ទាញយក {_hg_dl_labels.__len__() if _hg_dl_all else len(_hg_dl_labels)} ភាគជា ZIP",
+                    key=f"hg_dl_start_{_hg_selected['series_id']}",
+                    disabled=(not (_hg_dl_all or _hg_dl_labels) or busy),
+                    use_container_width=True
+                ):
+                    _chosen_dl_labels = list(_hg_ep_map.keys()) if _hg_dl_all else list(_hg_dl_labels)
+                    _chosen_dl_labels = _chosen_dl_labels[:_hg_dl_max]
+                    _dl_folder = tempfile.mkdtemp(prefix="hongguo_batch_")
+                    _dl_zip_path = os.path.join(_dl_folder, "hongguo_episodes.zip")
+                    _dl_errors = []
+                    _dl_ok = 0
+                    _dl_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
+                    try:
+                        with zipfile.ZipFile(_dl_zip_path, "w", compression=zipfile.ZIP_STORED) as _dl_zip:
+                            for _di, _dl_label in enumerate(_chosen_dl_labels, start=1):
+                                _dl_ep = _hg_ep_map[_dl_label]
+                                _dl_tmp = None
+                                try:
+                                    _dl_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _dl_ep, "q": _hg_quality, "codec": _hg_codec})
+                                    _dl_url = str(_dl_play.get("url") or "").strip()
+                                    if not _dl_url:
+                                        raise RuntimeError("API មិនបានផ្ដល់តំណវីដេអូ")
+                                    _dl_result = _fetch_one(_dl_url)
+                                    if not _dl_result.get("ok") or not _dl_result.get("path"):
+                                        raise RuntimeError(_dl_result.get("err") or "ទាញយកវីដេអូមិនបាន")
+                                    _dl_tmp = _dl_result["path"]
+                                    _dl_size = os.path.getsize(_dl_tmp)
+                                    _dl_current = sum(x.file_size for x in _dl_zip.filelist)
+                                    if _dl_current + _dl_size > MAX_ZIP_MB * 1024 * 1024:
+                                        raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
+                                    _dl_zip.write(_dl_tmp, f"episode_{_dl_ep:04d}.mp4")
+                                    _dl_ok += 1
+                                except Exception as _dl_err:
+                                    _dl_errors.append(f"ភាគ {_dl_ep}: {str(_dl_err)[:180]}")
+                                finally:
+                                    if _dl_tmp:
+                                        shutil.rmtree(os.path.dirname(_dl_tmp), ignore_errors=True)
+                                _dl_bar.progress(_di / max(1, len(_chosen_dl_labels)), text=f"ទាញយកបាន {_dl_ok}/{len(_chosen_dl_labels)} ភាគ · កំពុងដំណើរការ {_di}/{len(_chosen_dl_labels)}")
+                        _dl_bar.empty()
+                        if _dl_ok:
+                            st.session_state[f"_hg_dl_ready_{_hg_selected['series_id']}"] = {
+                                "path": _dl_zip_path,
+                                "folder": _dl_folder,
+                                "count": _dl_ok,
+                                "name": safe_filename(_hg_selected.get("name") or "hongguo")
+                            }
+                            st.success(f"បានរៀបចំទាញយកបាន {_dl_ok} ភាគរួចរាល់។")
+                        else:
+                            shutil.rmtree(_dl_folder, ignore_errors=True)
+                            st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
+                        if _dl_errors:
+                            with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_dl_errors)})"):
+                                for _de in _dl_errors:
+                                    st.warning(_de)
+                    except Exception as _dl_fatal:
+                        shutil.rmtree(_dl_folder, ignore_errors=True)
+                        st.error(f"រៀបចំ ZIP មិនបាន៖ {_dl_fatal}")
+                _dl_ready = st.session_state.get(f"_hg_dl_ready_{_hg_selected['series_id']}")
+                if _dl_ready and os.path.isfile(_dl_ready.get("path", "")):
+                    with open(_dl_ready["path"], "rb") as _dl_file:
+                        dl_button(
+                            f"⬇️ ទាញយក ZIP ({_dl_ready['count']} ភាគ)",
+                            _dl_file,
+                            f"{_dl_ready['name']}_episodes.zip",
+                            "application/zip",
+                            key=f"hg_dl_file_{_hg_selected['series_id']}",
+                            use_container_width=True
+                        )
+
                 st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
                 _hg_batch_labels = st.multiselect(
                     "ជ្រើសរើសភាគដែលចង់បកប្រែ",
