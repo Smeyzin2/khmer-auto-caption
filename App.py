@@ -7298,25 +7298,65 @@ def _hg_search(keyword, page=1):
     return _hg_rows_from(data.get("searchList") or [])
 
 
+def _hg_find_episode_list(obj):
+    """Find episode arrays nested anywhere in Hongguo SSR loader data."""
+    preferred = ("episodes", "episode_list", "episodeList", "episode_data",
+                 "episodeData", "video_list", "videoList", "chapter_list",
+                 "chapterList", "play_list", "playList")
+    if isinstance(obj, dict):
+        for key in preferred:
+            value = obj.get(key)
+            if isinstance(value, list) and value:
+                return value
+        for value in obj.values():
+            found = _hg_find_episode_list(value)
+            if found:
+                return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = _hg_find_episode_list(value)
+            if found:
+                return found
+    return []
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def _hg_detail(series_id):
     loader = _hg_page_data(f"{_HG_PUBLIC_BASE}/detail?series_id={urllib.parse.quote(str(series_id))}")
-    data = loader.get("detail_page") or _hg_find_dict(loader, {"seriesDetail"})
+    data = loader.get("detail_page") or _hg_find_dict(loader, {"seriesDetail", "episodeList", "episodes"})
     detail = data.get("seriesDetail") if isinstance(data.get("seriesDetail"), dict) else data
-    episodes = detail.get("episodes") or detail.get("episode_list") or detail.get("episodeList") or []
-    normalized=[]
-    for i, ep in enumerate(episodes if isinstance(episodes,list) else []):
-        if not isinstance(ep,dict): continue
-        epno = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or i+1
-        try: epno=int(epno)
-        except (TypeError,ValueError): epno=i+1
-        url = ep.get("url") or ep.get("play_url") or ep.get("video_url") or ""
-        normalized.append({**ep,"ep":epno,"playable":bool(url),"url":url})
-    return {**detail,"name":detail.get("series_name") or detail.get("name") or "រឿង Hongguo",
-            "cover":detail.get("series_cover") or detail.get("cover") or "",
-            "intro":detail.get("series_intro") or detail.get("intro") or detail.get("description") or "",
-            "episode_cnt":detail.get("episode_count") or len(normalized),
-            "listed_cnt":len(normalized),"episodes":normalized}
+    if not isinstance(detail, dict):
+        detail = {}
+    raw_episodes = _hg_find_episode_list(data) or _hg_find_episode_list(loader)
+    normalized = []
+    for i, ep in enumerate(raw_episodes):
+        if isinstance(ep, dict):
+            epno = (ep.get("ep") or ep.get("episode") or ep.get("episode_no")
+                    or ep.get("episodeNo") or ep.get("index") or ep.get("sort") or i+1)
+            url = (ep.get("url") or ep.get("play_url") or ep.get("playUrl")
+                   or ep.get("video_url") or ep.get("videoUrl") or "")
+            title = ep.get("title") or ep.get("name") or f"ភាគ {i+1}"
+            normalized.append({**ep, "ep": epno, "title": title,
+                               "playable": bool(url), "url": url})
+        elif isinstance(ep, (str, int)):
+            normalized.append({"ep": i+1, "title": str(ep),
+                               "playable": False, "url": ""})
+    total = detail.get("episode_count") or detail.get("episodeCount") or detail.get("episode_cnt") or detail.get("total_episode") or len(normalized)
+    try:
+        total = int(total)
+    except (TypeError, ValueError):
+        total = len(normalized)
+    # If SSR exposes only a confirmed episode count, show the numbered list,
+    # but do not pretend those entries have playable video URLs.
+    if not normalized and 0 < total <= 1000:
+        normalized = [{"ep": n, "title": f"ភាគ {n}",
+                       "playable": False, "url": ""} for n in range(1, total+1)]
+    return {**detail,
+            "name": detail.get("series_name") or detail.get("name") or "រឿង Hongguo",
+            "cover": detail.get("series_cover") or detail.get("cover") or "",
+            "intro": detail.get("series_intro") or detail.get("intro") or detail.get("description") or "",
+            "episode_cnt": total or len(normalized),
+            "listed_cnt": len(normalized), "episodes": normalized}
 
 
 def _hg_get(endpoint, params=None, timeout=45):
@@ -7792,35 +7832,42 @@ with tab_drama:
                     _hg_d = _hg_detail(_hg_selected["series_id"])
                 if _hg_d.get("intro"):
                     st.write(_hg_d["intro"])
-                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
+                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict)]
                 if not _hg_eps:
-                    st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
+                    st.info("Hongguo មិនបានបញ្ជូនបញ្ជីភាគ ឬចំនួនភាគមកទេ។")
                 else:
                     _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
-                    _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
-                    _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
-                    _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
+                    _hg_playable_eps = [e for e in _hg_eps if e.get("playable") is True]
+                    st.caption(f"រកឃើញ {len(_hg_eps)} ភាគ · មានតំណចាក់ {len(_hg_playable_eps)} ភាគ")
+                    _hg_ep_label = st.selectbox("📺 ជ្រើសរើសភាគ", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
-                    _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
-                    if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
-                        with st.spinner("កំពុងរៀបចំវីដេអូ..."):
-                            _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
-                        if _hg_play.get("url"):
-                            st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
-                        else:
-                            st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
-                    _hg_saved = st.session_state.get(_hg_play_key)
-                    if _hg_saved:
-                        st.video(_hg_saved["url"])
-                        st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
-                        if _hg_saved.get("ready") is False:
-                            st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
-                        if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
-                            st.session_state["mode_pick"] = "🔗 Link"
-                            st.session_state["link_text_area"] = _hg_saved["url"]
-                            st.session_state["link_searched"] = [_hg_saved["url"]]
-                            st.session_state["_hg_imported_caption_notice"] = True
-                            st.rerun()
+                    _hg_chosen_ep = next((e for e in _hg_eps if int(e.get('ep', 0)) == _hg_epnum), {})
+                    if not _hg_chosen_ep.get("playable"):
+                        st.info("ភាគនេះមានក្នុងបញ្ជី ប៉ុន្តែ Hongguo Public Web មិនបានផ្ដល់តំណវីដេអូសាធារណៈទេ។")
+                    else:
+                        _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
+                        _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
+                    if _hg_chosen_ep.get("playable"):
+                        _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
+                        if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
+                            with st.spinner("កំពុងរៀបចំវីដេអូ..."):
+                                _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                            if _hg_play.get("url"):
+                                st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
+                            else:
+                                st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
+                        _hg_saved = st.session_state.get(_hg_play_key)
+                        if _hg_saved:
+                            st.video(_hg_saved["url"])
+                            st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
+                            if _hg_saved.get("ready") is False:
+                                st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
+                            if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
+                                st.session_state["mode_pick"] = "🔗 Link"
+                                st.session_state["link_text_area"] = _hg_saved["url"]
+                                st.session_state["link_searched"] = [_hg_saved["url"]]
+                                st.session_state["_hg_imported_caption_notice"] = True
+                                st.rerun()
 
                     # Multi-episode ZIP: prepare on server disk, then browser downloads one ZIP.
                     st.markdown("#### 📦 ទាញយកច្រើនភាគទៅ Downloads")
