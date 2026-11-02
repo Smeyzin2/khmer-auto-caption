@@ -6738,6 +6738,7 @@ def user_key_box():
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
+        st.caption("🌐 Hongguo អាចប្រើ API រួមរបស់ Admin ពី Streamlit Secrets បាន។ មិនចាំបាច់ឱ្យសមាជិក VIP នីមួយៗដាក់ APPID/APPSECRET ទេ។ បើមាន Key ផ្ទាល់ខ្លួន អាចដាក់ជំនួស API រួមបាន។")
         _hg_id_saved = st.session_state.get("user_hg_app_id", "")
         _hg_secret_saved = st.session_state.get("user_hg_app_secret", "")
         if _hg_id_saved and _hg_secret_saved:
@@ -7141,16 +7142,27 @@ tab_drama, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = s
 # ============================ Hongguo Drama → Khmer Auto Caption ============================
 # API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
 def _hg_secret(*names):
-    # Personal Browser credentials override app-wide Secrets; each user's session stays separate.
-    if names and names[0] in ("XIAOYING_APPID", "APPID"):
-        personal = st.session_state.get("user_hg_app_id", "")
-        if personal:
-            return str(personal).strip()
-    if names and names[0] in ("XIAOYING_APPSECRET", "APPSECRET"):
-        personal = st.session_state.get("user_hg_app_secret", "")
-        if personal:
-            return str(personal).strip()
-    for name in names:
+    # Optional per-user credentials override the shared server credentials.
+    # Shared credentials are read only from server-side Streamlit Secrets/env.
+    _is_app_id = bool(names and names[0] in ("XIAOYING_APPID", "HONGGUO_APPID", "APPID"))
+    _is_app_secret = bool(names and names[0] in ("XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRET"))
+    if _is_app_id:
+        _personal = st.session_state.get("user_hg_app_id", "")
+        if _personal:
+            return str(_personal).strip()
+    elif _is_app_secret:
+        _personal = st.session_state.get("user_hg_app_secret", "")
+        if _personal:
+            return str(_personal).strip()
+
+    # Accept both XiaoYing and Hongguo names for the shared API credentials.
+    if _is_app_id:
+        _aliases = ["XIAOYING_APPID", "HONGGUO_APPID", "APPID"]
+    elif _is_app_secret:
+        _aliases = ["XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRET"]
+    else:
+        _aliases = list(names)
+    for name in _aliases:
         try:
             value = st.secrets.get(name, "")
         except Exception:
@@ -7162,8 +7174,8 @@ def _hg_secret(*names):
             return value.strip()
     return ""
 
-_HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
-_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "APPSECRET")
+_HG_APP_ID = _hg_secret("XIAOYING_APPID", "HONGGUO_APPID", "APPID")
+_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRET")
 _HG_API_BASE = "https://www.xiaoyingapi.com"
 _HG_API_PREFIX = "/api/dramas/hongguo"
 
@@ -7403,6 +7415,31 @@ def _hg_vip_is_valid(_user):
         return False
 
 
+# VIP remember-me token stored in browser localStorage; only SHA-256 hash in Supabase.
+_HG_REMEMBER_HTML = """<!doctype html><html><body><script>
+(function(){var K="kvai_hg_vip_remember_v1",sent=false,nonce=null;function send(t,d){window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:t},d),"*");}function read(){try{return localStorage.getItem(K)||"";}catch(e){return "";}}window.addEventListener("message",function(ev){var d=ev.data;if(!d||d.type!=="streamlit:render")return;var a=d.args||{};if(a.nonce!==undefined&&a.nonce!==nonce){nonce=a.nonce;try{if(a.clear)localStorage.removeItem(K);else if(a.save)localStorage.setItem(K,a.save);}catch(e){}}if(!sent){sent=true;send("streamlit:setComponentValue",{value:{token:read()},dataType:"json"});}});send("streamlit:componentReady",{apiVersion:1});send("streamlit:setFrameHeight",{height:0});})();
+</script></body></html>"""
+
+@st.cache_resource(show_spinner=False)
+def _hg_remember_component():
+    _folder=os.path.join(tempfile.gettempdir(),"kvai_hg_remember_component")
+    os.makedirs(_folder,exist_ok=True)
+    with open(os.path.join(_folder,"index.html"),"w",encoding="utf-8") as _f: _f.write(_HG_REMEMBER_HTML)
+    return components.declare_component("kvai_hg_vip_remember",path=_folder)
+
+def _hg_remember_browser(token_to_save=None,clear=False):
+    return _hg_remember_component(key="hg_vip_remember_storage",default={"token":""},
+        nonce=secrets.token_hex(8),save=token_to_save,clear=clear)
+
+def _hg_token_hash(token):
+    return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
+
+def _hg_find_remembered_vip(token):
+    if not token: return None
+    rows=_hg_sb_request("GET",params={"select":"id,username,password_hash,expires_at,is_active,remember_token_hash",
+        "remember_token_hash":"eq."+_hg_token_hash(token),"limit":"1"})
+    return rows[0] if rows else None
+
 def _hg_admin_panel():
     st.markdown("#### 👑 គ្រប់គ្រងគណនី VIP")
     with st.form("hg_vip_create_form", clear_on_submit=True):
@@ -7473,7 +7510,7 @@ def _hg_admin_panel():
                 with _d:
                     if _u.get("is_active"):
                         if st.button("បិទ", key="hg_vip_off_" + str(_u["id"]), use_container_width=True):
-                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": False})
+                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": False, "remember_token_hash": None})
                             st.rerun()
                     else:
                         if st.button("បើកវិញ", key="hg_vip_on_" + str(_u["id"]), use_container_width=True):
@@ -7484,47 +7521,54 @@ def _hg_admin_panel():
 
 
 def _hg_vip_gate():
-    _email = str(_user_field("email", "")).strip().lower()
-    _is_admin = _email == _HG_ADMIN_EMAIL
-    if _is_admin:
+    _email=str(_user_field("email","")).strip().lower()
+    if _email==_HG_ADMIN_EMAIL:
+        _hg_remember_browser()
         st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-        with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
-            _hg_admin_panel()
+        with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP",expanded=False): _hg_admin_panel()
         return True
-
-    _vip_name = str(st.session_state.get("_hg_vip_username", "")).strip()
-    if _vip_name:
-        try:
-            _vip_row = _hg_get_vip_user(_vip_name)
-            if _hg_vip_is_valid(_vip_row):
-                st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
-                if st.button("ចាកចេញពី VIP", key="hg_vip_logout"):
-                    st.session_state.pop("_hg_vip_username", None)
-                    st.rerun()
-                return True
-            st.session_state.pop("_hg_vip_username", None)
-            st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
-        except Exception as _err:
-            st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {_err}")
-            return False
-
+    _browser_state=_hg_remember_browser()
+    _browser_token=str((_browser_state or {}).get("token","")).strip()
+    _vip_name=str(st.session_state.get("_hg_vip_username","")).strip()
+    try:
+        _vip_row=_hg_get_vip_user(_vip_name) if _vip_name else (_hg_find_remembered_vip(_browser_token) if _browser_token else None)
+        if _vip_row and _hg_vip_is_valid(_vip_row):
+            _vip_name=str(_vip_row.get("username",_vip_name))
+            st.session_state["_hg_vip_username"]=_vip_name
+            st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
+            if st.button("ចាកចេញពី VIP",key="hg_vip_logout"):
+                _hg_sb_request("PATCH",params={"id":"eq."+str(_vip_row["id"])},payload={"remember_token_hash":None})
+                st.session_state.pop("_hg_vip_username",None)
+                _hg_remember_browser(clear=True)
+                st.rerun()
+            return True
+        if _browser_token: _hg_remember_browser(clear=True)
+        if _vip_name: st.session_state.pop("_hg_vip_username",None)
+        if _vip_row: st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
+    except Exception as err:
+        st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {err}")
+        return False
     st.markdown("### 🔒 Hongguo VIP")
-    st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
+    st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។")
     with st.form("hg_vip_login_form"):
-        _u = st.text_input("Username", key="hg_vip_login_username")
-        _p = st.text_input("Password", type="password", key="hg_vip_login_password")
-        _go = st.form_submit_button("ចូលប្រើ Hongguo VIP", use_container_width=True)
-    if _go:
+        u=st.text_input("Username",key="hg_vip_login_username")
+        pw=st.text_input("Password",type="password",key="hg_vip_login_password")
+        remember=st.checkbox("ចងចាំការចូល 30 ថ្ងៃ (Remember me)",value=True,key="hg_vip_remember_30")
+        go=st.form_submit_button("ចូលប្រើ Hongguo VIP",use_container_width=True)
+    if go:
         try:
-            _row = _hg_get_vip_user(_u)
-            if _hg_vip_is_valid(_row) and _hg_password_verify(_p, _row.get("password_hash", "")):
-                st.session_state["_hg_vip_username"] = _row["username"]
+            row=_hg_get_vip_user(u)
+            if _hg_vip_is_valid(row) and _hg_password_verify(pw,row.get("password_hash","")):
+                st.session_state["_hg_vip_username"]=row["username"]
+                if remember:
+                    token=secrets.token_urlsafe(32)
+                    _hg_sb_request("PATCH",params={"id":"eq."+str(row["id"])},payload={"remember_token_hash":_hg_token_hash(token)})
+                    _hg_remember_browser(token_to_save=token)
+                else: _hg_remember_browser(clear=True)
                 st.rerun()
             st.error("Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។")
-        except Exception as _err:
-            st.error(f"មិនអាចចូល VIP បាន៖ {_err}")
+        except Exception as err: st.error(f"មិនអាចចូល VIP បាន៖ {err}")
     return False
-
 
 with tab_drama:
     _hg_access = _hg_vip_gate()
@@ -7532,7 +7576,7 @@ with tab_drama:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
         if not _HG_APP_ID or not _HG_APP_SECRET:
-            st.warning("សូមបញ្ចូល Hongguo APPID និង APPSECRET នៅផ្ទាំង «🌐 បកប្រែ» → API Key ផ្ទាល់ខ្លួន → Hongguo Drama។")
+            st.warning("Admin ត្រូវដាក់ HONGGUO_APPID និង HONGGUO_APPSECRET (ឬ XIAOYING_APPID និង XIAOYING_APPSECRET) ក្នុង Streamlit Secrets ដើម្បីឱ្យ VIP ទាំងអស់ប្រើ API រួម។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
