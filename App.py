@@ -1215,6 +1215,10 @@ def khmer_dominant(text, min_ratio=0.6):
     return kh / float(kh + lat) >= min_ratio
 
 
+# TTS_PHRASE_PAUSE=1 (លំនាំដើម): ចន្លោះរវាងឃ្លាខ្មែរ => ផ្អាកខ្លីពេលអាន (លះៗ)។ ដាក់ 0 ដើម្បីបិទ
+TTS_PHRASE_PAUSE = str(os.environ.get("TTS_PHRASE_PAUSE", "1")).strip().lower() not in ("0", "false", "no", "off")
+
+
 def tts_clean(text):
     """សម្អាតអត្ថបទមុនអាន ដើម្បីកុំឱ្យ TTS ផ្អាកដាច់ៗ ដោយសារសញ្ញាចម្លែកៗ។"""
     t = fix_khmer(text)
@@ -1223,6 +1227,9 @@ def tts_clean(text):
     t = re.sub(r"[,;:\u060c]+", " ", t)
     t = re.sub(r"([!?\u17D4])\1+", r"\1", t)
     t = re.sub(r"\s+", " ", t).strip()
+    if TTS_PHRASE_PAUSE:
+        # ចន្លោះរវាងឃ្លាខ្មែរ (មិនមែនក្រោយ ។ ? !) ក្លាយជាកាតព្វកិច្ចផ្អាកខ្លី
+        t = re.sub(r"(?<=[\u1780-\u17D3]) (?=[\u1780-\u17FF])", ", ", t)
     return t or fix_khmer(text)
 
 
@@ -2354,6 +2361,9 @@ def groq_request(api_key, audio_path, model, language):
     ]
     if language:
         fields.append(("language", language))
+    if language == "zh":
+        # ជំនួយ Whisper ឱ្យស្តាប់ភាសាចិនកណ្តាល (Mandarin) ត្រឹមត្រូវជាង៖ ចិនសាមញ្ញ + មានសញ្ញាខណ្ឌ
+        fields.append(("prompt", "以下是普通话的对话，请使用简体中文，并加上正确的标点符号。"))
     parts = []
     for name, value in fields:
         parts.append((f"--{boundary}\r\n" f'Content-Disposition: form-data; name="{name}"\r\n\r\n' f"{value}\r\n").encode("utf-8"))
@@ -2496,17 +2506,17 @@ TRANS_SYSTEM_FULL = (
     "(3) Keep the speaker's emotion: anger, sadness, fear, joy, sarcasm, tenderness must be audible in word choice "
     "(use natural particles such as ណា, ហើយ, ទេ, ហ្នឹង, នែ៎ where a native would) and keep ! ? … punctuation. "
     "(4) Translate idioms, slang and jokes by their intended meaning, never literally. "
-    "(5) Flowing, connected spoken sentences that sound like a real person talking (join clauses naturally, do not chop into tiny fragments); no stiff foreign word order; no repeated words; "
+    "(5) SHORT, CLEAR, SEPARATED speech: write the way a real person talks in short beats, one idea per phrase. NEVER make long run-on sentences glued together with និង/ហើយ/ដែល/ដូច្នេះ/ព្រោះ/ប៉ុន្តែ. Break a long thought into 2-4 short phrases and put exactly ONE SPACE between phrases (the Khmer phrase break) so the voice pauses naturally between them; no stiff foreign word order; no repeated words; "
     "no word salad. Write numbers and units the way Khmer speakers say them. Transliterate foreign names naturally. "
     "(6) If a line is garbled or uncertain, keep the closest clear meaning, do not invent dialogue. "
     "(7) A [max N chars] tag is the SPEAKING-TIME budget of the on-screen speaker's mouth (Khmer TTS speaks about 12 characters per second). "
     "Make the dubbed line end when the mouth stops, so treat N as a TARGET length (aim for 80-105% of N): if your natural Khmer is longer than N, use the shortest everyday wording and drop fillers; "
-    "if it is clearly shorter than ~70% of N (the speaker talks for a long time), make it fuller and more natural with common connecting words, polite particles and a fuller phrasing of the SAME meaning, without inventing any new fact. "
+    "if it is shorter than N that is FINE: never pad, stretch or add filler or connecting words just to fill the time; short and clear is better than long and glued together. "
     "NEVER drop a fact, name, number, negation or the emotional point just to fit; if the meaning truly cannot fit, keep the meaning and exceed the budget slightly. Never output the tag. "
     "(8) Every numbered line is ONE complete spoken sentence unit: translate it into exactly one complete, grammatical Khmer "
     "sentence; never merge lines, split lines, or move content between lines. Never leave source-language words untranslated except names. "
     "(9) The output will be read aloud by a TTS voice: use plain natural Khmer, put ។ (or ? !) only at the end of a sentence, and avoid "
-    "commas, brackets, quotes, dashes, ellipses, emojis and symbols so the speech flows smoothly without choppy pauses. "
+    "commas, brackets, quotes, dashes, ellipses, emojis and symbols; the single space between phrases is the pause marker, so every phrase is spoken clearly and separately instead of running together. "
     "(10) If an English meaning is given, use it only as a hint; the original line is the authority for facts, names and numbers. "
     "(11) Translate MEANING, not words: never copy the source sentence structure or idioms literally. Use common everyday Khmer vocabulary "
     "(avoid stiff Pali/Sanskrit-heavy or royal words unless the speaker is a king/monk), drop pronouns that Khmer speakers would omit, "
@@ -2536,8 +2546,8 @@ TRANS_SYSTEM_LITE = (
     "Rules: keep exact meaning, names, numbers, negations and emotion; never add or drop facts; pick pronouns/politeness by relationship "
     "and keep them consistent; transliterate foreign names by sound the same way every time; translate idioms by meaning; "
     "one input line = exactly one complete Khmer sentence, same order, never merge or split. "
-    "A [max N chars] tag is the TARGET length (aim for 80-105% of N): shorten with simpler wording if too long; if clearly under ~70% of N, phrase it fuller with natural connecting words but never invent facts; never drop a fact; never output the tag. "
-    "Output is read by TTS: Khmer script only, end with ។ ? or !, no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
+    "A [max N chars] tag is the TARGET length (aim for 80-105% of N): shorten with simpler wording if too long; if shorter than N that is fine, never pad or stretch; never drop a fact; never output the tag. "
+    "Output is read by TTS: use SHORT separated phrases with ONE SPACE between phrases as the pause marker (no long run-on sentences glued by និង/ហើយ/ដែល), Khmer script only, end with ។ ? or !, no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
     "A [speaker: male] or [speaker: female] tag is the true gender of the speaker: use បាទ / ខ្ញុំបាទ for a man and ចាស / នាងខ្ញុំ (formal) for a woman, never swap them; never output the tag. "
     "An English hint, if given, is only a hint; the original wins. "
     'Return JSON {"translations": [...]} with exactly one item per input.'
@@ -2552,7 +2562,19 @@ TRANS_ACCURACY_NOTE = (
     "kinship or title word in every line. If a line has no [max N chars] tag there is NO length limit: translate it fully. "
     "Even when a [max N chars] tag is present, meaning and story fit always win over length."
 )
-TRANS_SYSTEM = (TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL) + TRANS_ACCURACY_NOTE
+TRANS_ZH_NOTE = (
+    " CHINESE (MANDARIN) SOURCE RULES, apply when the lines are Chinese: the text comes from speech recognition, so first repair likely "
+    "homophone or mis-heard characters and names using the story context, then translate the MEANING, never character by character. "
+    "他/她/它 all sound the same (tā): decide the gender from context or the [speaker] tag. Four-character idioms (成语), proverbs and slang "
+    "are translated by their real meaning. Sentence-final particles 吧 啊 呢 嘛 啦 呀 哦 only carry tone: render them with natural Khmer particles "
+    "(ណា ទេ ហើយ ហ្នឹង) and never as separate words. Keep every negation exact: 不 没 没有 别 不要 不能 不会 未 无. "
+    "Keep 把/被/让/给/对/跟 structures so subject and object are never swapped. Keep 吗/呢/是不是/难道/怎么 as real questions. "
+    "Keep 你 vs 您 politeness and 我们 vs 咱们. Keep numbers, money (元/块/万/亿), time, dates and ages exact. "
+    "Drama titles by role: 总裁 = ប្រធានក្រុមហ៊ុន, 老爷 = លោកម្ចាស់, 夫人 = លោកស្រី, 太太 = ភរិយា, 师父 = លោកគ្រូ, 皇上 = ព្រះមហាក្សត្រ, "
+    "娘娘 = ព្រះនាង, 王爷 = ព្រះអង្គម្ចាស់, 少爷 = ម្ចាស់ប្រុស (or the fitting family word by context). "
+    "Never replace a line with a generic or different sentence: if a line is short or unclear keep its closest literal meaning."
+)
+TRANS_SYSTEM = (TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL) + TRANS_ACCURACY_NOTE + TRANS_ZH_NOTE
 
 
 def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
@@ -3108,7 +3130,7 @@ REFINE_SYSTEM = (
     "foreign words (except names). Rewrite into natural everyday SPOKEN Khmer that a native Phnom Penh speaker would say and instantly understand, "
     "keeping exactly the same facts, names, numbers, emotion and tone. Do not add or remove information. If the draft is already correct and natural, "
     "return it unchanged. Use the neighbouring items as story context (who speaks to whom). One complete sentence per item, same order, "
-    "Khmer script only, end with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
+    "Keep the speech SHORT and SEPARATED: split any long run-on phrasing into short phrases with ONE SPACE between phrases (the pause marker) and never glue clauses with និង/ហើយ/ដែល. Khmer script only, end with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
     "Also verify: every negation, question, number, name (same transliteration in every line), kinship word and who-does-what-to-whom is exactly right, and the Khmer has no invented or nonsense words. "
     "Return JSON {\"translations\": [...]} with exactly one item per input."
 )
@@ -3947,7 +3969,7 @@ def lip_budgets(segs):
     return out
 
 
-def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0, gender_fn=None):
+def merge_for_translate(segs, max_chars=90, max_gap=0.6, max_len=6.5, gender_fn=None):
     """បញ្ចូលបំណែក Whisper ដែលដាច់កណ្តាលប្រយោគ ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ
     (បកទាំងប្រយោគ ត្រឹមត្រូវជាងបកបំណែកខ្លីៗ)។"""
     strong_end = ".!?។…。！？"
@@ -3960,8 +3982,8 @@ def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0, gender_f
             ps, pe, pt = out[-1]
             last = pt.rstrip()[-1:]
             ended = last in strong_end
-            tiny_prev = len(pt.strip()) < 14           # បំណែកខ្លីពេក មិនអាចបកឱ្យត្រូវ
-            tiny_cur = len(t) < 8
+            tiny_prev = len(pt.strip()) < (3 if CJK_RE.search(pt) else 14)           # បំណែកខ្លីពេក មិនអាចបកឱ្យត្រូវ
+            tiny_cur = len(t) < (2 if CJK_RE.search(t) else 8)
             starts_lower = t[:1].islower()              # ចាប់ផ្តើមអក្សរតូច = បន្តប្រយោគមុន
             cont = (not ended) or tiny_prev or tiny_cur or starts_lower
             if _spk_differs(gender_fn, ps, pe, s, e):
@@ -3989,6 +4011,8 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
     for sg in data.get("segments") or []:
         text = str(sg.get("text", "")).strip()
         if not text:
+            continue
+        if "以下是普通话" in text:
             continue
         if (float(sg.get("no_speech_prob", 0) or 0) > 0.6 and float(sg.get("avg_logprob", 0) or 0) < -0.8):
             continue
@@ -4932,8 +4956,19 @@ def eq_filters(ref, tts, limit=6.0):
 MERGE_TIGHT = (50, 0.4, 5.0)
 
 
+# DUB_SEPARATE=1 (លំនាំដើម): មិនបញ្ចូលឃ្លាចូលគ្នា ឱ្យអានលះៗ មិនស្អិត។ ដាក់ 0 ក្នុង Secrets ដើម្បីបើកការបញ្ចូលវិញ
+DUB_SEPARATE = str(os.environ.get("DUB_SEPARATE", "1")).strip().lower() not in ("0", "false", "no", "off")
+
+
 def merge_for_dub(segments, max_chars=95, max_gap=0.28, max_len=4.8, gender_fn=None):
     """បញ្ចូលតែបំណែកខ្លីៗដែលដាច់កណ្តាលប្រយោគ ដើម្បីអានរលូន ហើយនៅជិតម៉ោងសំឡេងដើម"""
+    if DUB_SEPARATE:
+        out = []
+        for s, e, t in segments:
+            t = fix_khmer(t)
+            if t:
+                out.append((s, e, t))
+        return out
     out = []
     for s, e, t in segments:
         t = fix_khmer(t)
@@ -5243,7 +5278,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         # តួអង្គនិយាយយឺត/បន្ថយសំឡេង៖ បើសំឡេង AI ខ្លីជាងពេលមាត់ ច្រើន ធ្វើឱ្យយឺតបន្តិច (មិនឱ្យសំឡេងចប់មុនមាត់)
         mouth = max(0.5, e - s)
         if d < mouth * 0.82 and speed == 1.0:
-            speed = max(0.75, d / (mouth * 0.92))
+            speed = max(0.92, d / (mouth * 0.92))
         cursor = max(cursor, start + d / speed + 0.02)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         maxdur = None
