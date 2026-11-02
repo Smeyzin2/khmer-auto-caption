@@ -7055,30 +7055,82 @@ _HG_API_BASE = "https://www.xiaoyingapi.com"
 _HG_API_PREFIX = "/api/dramas/hongguo"
 
 def _hg_download_episode_url(url, folder):
-    """ទាញ Hongguo MP4/HLS (m3u8) ដោយ yt-dlp ជាមុន ហើយ fallback ទៅ downloader ធម្មតា។"""
+    """ទាញ Hongguo MP4/HLS ដោយពិនិត្យប្រភេទ stream និងរក្សាទុកជាឯកសារលើ disk។"""
     url = str(url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise RuntimeError("API បានផ្ដល់ URL វីដេអូមិនត្រឹមត្រូវ។")
-    base = os.path.join(folder, "episode")
-    target = base + ".mp4"
+    os.makedirs(folder, exist_ok=True)
+    target = os.path.join(folder, "episode.mp4")
     errors = []
-    # yt-dlp handles HLS playlists, segmented streams, redirects and signed media URLs.
+    is_hls = ".m3u8" in urllib.parse.urlparse(url).path.lower()
+
+    # MP4/direct CDN: HTTP streaming មុន ដើម្បីកុំឱ្យ yt-dlp បដិសេធដោយ format/max-filesize។
+    if not is_hls:
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+                "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
+                "Referer": "https://hongguoduanju.com/",
+            }
+            with requests.get(url, headers=headers, stream=True, allow_redirects=True, timeout=(20, 120)) as response:
+                response.raise_for_status()
+                ctype = (response.headers.get("Content-Type") or "").lower()
+                if "text/html" in ctype or "application/json" in ctype:
+                    raise RuntimeError(f"CDN បានផ្ញើ {ctype or 'HTML'} មិនមែនវីដេអូទេ (HTTP {response.status_code})")
+                written = 0
+                with open(target, "wb") as out:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        if not chunk:
+                            continue
+                        out.write(chunk)
+                        written += len(chunk)
+                if written > 1000:
+                    return target
+                raise RuntimeError("Direct link បានឯកសារទទេ ឬតូចពេក")
+        except Exception as exc:
+            errors.append("Direct HTTP: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
+            try:
+                if os.path.exists(target):
+                    os.remove(target)
+            except OSError:
+                pass
+
+    # HLS/m3u8 ឬ Direct HTTP បរាជ័យ: ប្រើ yt-dlp ដោយមិនយកកំហុស MAX_DOWNLOAD_MB ទូទៅមកបិទ។
     try:
-        _download_with_ytdlp(url, target, _NoProgress())
-        if os.path.isfile(target) and os.path.getsize(target) > 1000:
+        import yt_dlp
+        base = os.path.join(folder, "episode")
+        opts = {
+            "outtmpl": base + ".%(ext)s",
+            "format": "best[ext=mp4]/best",
+            "merge_output_format": "mp4",
+            "quiet": True,
+            "no_warnings": True,
+            "noprogress": True,
+            "noplaylist": True,
+            "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
+            "socket_timeout": 60,
+            "retries": 5,
+            "fragment_retries": 5,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://hongguoduanju.com/",
+            },
+        }
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+        candidates = [
+            os.path.join(folder, fn) for fn in os.listdir(folder)
+            if fn.startswith("episode.") and os.path.isfile(os.path.join(folder, fn))
+        ]
+        candidates = [x for x in candidates if os.path.getsize(x) > 1000]
+        if candidates:
+            found = max(candidates, key=os.path.getsize)
+            if found != target:
+                os.replace(found, target)
             return target
         errors.append("yt-dlp មិនបានបង្កើតឯកសារវីដេអូ")
     except Exception as exc:
-        errors.append("yt-dlp: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:220])
-    # Fallback for ordinary direct MP4 links.
-    try:
-        fallback = os.path.join(folder, "episode_direct.mp4")
-        download_video(url, fallback, _NoProgress())
-        if os.path.isfile(fallback) and os.path.getsize(fallback) > 1000:
-            return fallback
-        errors.append("Direct download បានឯកសារទទេ/តូចពេក")
-    except Exception as exc:
-        errors.append("Direct: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:220])
+        errors.append("yt-dlp: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
     raise RuntimeError(" | ".join(errors))
 
 
@@ -7711,14 +7763,19 @@ with tab_drama:
                                         _size = os.path.getsize(_video_path)
                                         _current = sum(x.file_size for x in _zf.filelist)
                                         if _current + _size > MAX_ZIP_MB * 1024 * 1024:
-                                            raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
+                                            raise RuntimeError(
+                                                f"ZIP លើសកំណត់ {MAX_ZIP_MB}MB "
+                                                f"(បច្ចុប្បន្ន {_current / 1024 / 1024:.1f}MB + ភាគនេះ {_size / 1024 / 1024:.1f}MB)"
+                                            )
                                         _zf.write(_video_path, f"Episode_{int(_zep):04d}.mp4")
                                         _zip_ok.append(int(_zep))
                                     except Exception as _ze:
                                         _zip_fail.append(f"ភាគ {_zep}: {str(_ze)[:500]}")
                                     finally:
-                                        if _video_path:
-                                            shutil.rmtree(os.path.dirname(_video_path), ignore_errors=True)
+                                        # សម្អាត temp folder ទោះបី download បរាជ័យមុនទទួលបាន path ក៏ដោយ។
+                                        if "_episode_dir" in locals() and _episode_dir:
+                                            shutil.rmtree(_episode_dir, ignore_errors=True)
+                                            _episode_dir = None
                                     _zip_bar.progress(_zi / max(1, len(_zip_eps)), text=f"បានរៀបចំ {_zi}/{len(_zip_eps)} ភាគ")
                             _zip_bar.empty()
                             if _zip_ok:
@@ -7744,15 +7801,24 @@ with tab_drama:
 
                     _zip_ready = st.session_state.get(f"_hg_zip_ready_{_hg_selected['series_id']}")
                     if _zip_ready and os.path.isfile(_zip_ready.get("path", "")):
-                        with open(_zip_ready["path"], "rb") as _zip_file:
+                        _zip_bytes = None
+                        try:
+                            if os.path.getsize(_zip_ready["path"]) > 0:
+                                with open(_zip_ready["path"], "rb") as _zip_file:
+                                    _zip_bytes = _zip_file.read()
+                        except OSError as _read_zip_err:
+                            st.error(f"អាន ZIP មិនបាន៖ {_hg_error_khmer(_read_zip_err)}")
+                        if _zip_bytes:
                             st.download_button(
                                 f"📥 ទាញយក ZIP ({_zip_ready['count']} ភាគ)",
-                                data=_zip_file,
+                                data=_zip_bytes,
                                 file_name=f"{_zip_ready.get('name','Hongguo')}_episodes.zip",
                                 mime="application/zip",
                                 key=f"hg_zip_download_{_hg_selected['series_id']}",
                                 use_container_width=True
                             )
+                        else:
+                            st.warning("ZIP មិនមានទិន្នន័យ ឬឯកសារត្រូវបានលុប។ សូមរៀបចំ ZIP ម្ដងទៀត។")
 
                     st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
                     _hg_batch_labels = st.multiselect(
