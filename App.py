@@ -6936,173 +6936,13 @@ def user_key_box():
             st.rerun()
 
 
-# =====================================================================
-#  ចូលប្រើតាមគណនី Google (Gmail) — ត្រូវចូលមុនទើបប្រើកម្មវិធីបាន
-#  ► បិទបាន៖ ដាក់ REQUIRE_LOGIN = "0" ក្នុង Secrets
-#  ► កំណត់អ្នកអនុញ្ញាត (មិនចាំបាច់)៖ ALLOWED_EMAILS = "a@gmail.com, b@gmail.com"
-# =====================================================================
-REQUIRE_LOGIN = str(get_secret("REQUIRE_LOGIN", "1")).strip().lower() not in ("0", "false", "no", "off")
-
-_AUTH_SETUP_HELP = """# .streamlit/secrets.toml (ឬ Streamlit Cloud → Settings → Secrets)
-[auth]
-redirect_uri = "https://ឈ្មោះកម្មវិធីរបស់អ្នក.streamlit.app/oauth2callback"
-cookie_secret = "ដាក់អក្សរចៃដន្យវែងៗ ៣២ តួឡើង"
-
-[auth.google]
-client_id = "xxxx.apps.googleusercontent.com"
-client_secret = "xxxx"
-server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
-"""
-
-
-def _auth_configured():
-    try:
-        _a = st.secrets["auth"]
-        return bool(_a.get("cookie_secret")) and bool(_a.get("redirect_uri")) and "google" in _a
-    except Exception:
-        return False
-
-
-def _user_field(key, default=""):
-    try:
-        v = st.user.get(key)
-        return default if v is None else v
-    except Exception:
-        try:
-            v = getattr(st.user, key)
-            return default if v is None else v
-        except Exception:
-            return default
-
-
-def _allowed_email_set():
-    raw = get_secret("ALLOWED_EMAILS", "")
-    if isinstance(raw, (list, tuple)):
-        items = list(raw)
-    else:
-        items = re.split(r"[,\n;\s]+", str(raw or ""))
-    return {str(x).strip().lower() for x in items if str(x).strip()}
-
-
-_GOOGLE_G_URI = "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E"
-
-_LOGIN_CSS = """<style>
-.st-key-kv_login{max-width:460px;margin:3vh auto 0;padding:30px 24px 22px;border-radius:26px;
-background:linear-gradient(165deg,rgba(26,36,92,.97),rgba(11,16,48,.97));
-border:1px solid rgba(130,150,255,.38);box-shadow:0 20px 60px rgba(0,0,0,.5);}
-.st-key-kv_login .kv-ic{width:68px;height:68px;margin:0 auto 16px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:34px;
-background:linear-gradient(135deg,#FF2DAA,#7B5CFF 60%,#19B7FF);box-shadow:0 10px 28px rgba(123,92,255,.45);}
-.st-key-kv_login .kv-t{margin:0 0 6px;text-align:center;font-size:24px;font-weight:800;color:#FFFFFF!important;line-height:1.5;}
-.st-key-kv_login .kv-s{margin:0 0 16px;text-align:center;font-size:15px;line-height:1.7;color:#B9C4EE!important;}
-.st-key-kv_login .kv-l{margin:0 0 20px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);}
-.st-key-kv_login .kv-l div{font-size:14px;line-height:1.95;color:#DCE3FF!important;}
-.st-key-kv_login .kv-f{margin-top:14px;text-align:center;font-size:12.5px;line-height:1.6;color:#8E9BCB!important;}
-.st-key-kv_login_btn button,.st-key-kv_logout_unverified button,.st-key-kv_logout_denied button{
-width:100%;min-height:54px;border-radius:14px!important;border:none!important;background:#FFFFFF!important;
-box-shadow:0 8px 22px rgba(0,0,0,.35);transition:transform .12s ease,box-shadow .12s ease;}
-.st-key-kv_login_btn button:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.45);}
-.st-key-kv_login_btn button p,.st-key-kv_logout_unverified button p,.st-key-kv_logout_denied button p{color:#1F2A44!important;font-weight:700;font-size:16px;}
-.st-key-kv_login_btn button p::before{content:"";display:inline-block;width:22px;height:22px;margin-right:12px;vertical-align:-5px;
-background:url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E") center/contain no-repeat;}
-</style>"""
-
-_ACCOUNT_CSS = """<style>
-.st-key-kv_account{margin:2px 0 10px;padding:8px 12px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);}
-.st-key-kv_account [data-testid="stHorizontalBlock"]{flex-direction:row!important;flex-wrap:nowrap!important;align-items:center;gap:8px!important;}
-.st-key-kv_account [data-testid="stColumn"],.st-key-kv_account [data-testid="column"]{min-width:0!important;}
-.st-key-kv_account [data-testid="stColumn"]:last-child,.st-key-kv_account [data-testid="column"]:last-child{flex:0 0 auto!important;width:auto!important;}
-.st-key-kv_account .kv-u{display:flex;align-items:center;gap:10px;min-width:0;}
-.st-key-kv_account .kv-u img,.st-key-kv_account .kv-u .kv-av{width:36px;height:36px;border-radius:50%;flex:0 0 36px;object-fit:cover;}
-.st-key-kv_account .kv-av{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#FF2DAA,#7B5CFF);color:#fff;font-weight:800;}
-.st-key-kv_account .kv-n{font-weight:700;font-size:14px;color:#FFFFFF!important;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.st-key-kv_account .kv-m{font-size:12px;color:#B9C4EE!important;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.st-key-kv_account .kv-t2{min-width:0;}
-.st-key-kv_account button{min-height:38px;padding:0 14px;border-radius:12px;}
-</style>"""
-
-
-def _login_screen(icon, title, sub, items=None):
-    """បង្ហាញកាតចូលប្រើតាម theme ងងឹត ហើយត្រឡប់ container ដើម្បីដាក់ប៊ូតុងក្នុងកាត។"""
-    st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
-    box = st.container(key="kv_login")
-    with box:
-        html = f'<div class="kv-ic">{icon}</div><div class="kv-t">{title}</div><div class="kv-s">{sub}</div>'
-        if items:
-            html += '<div class="kv-l">' + "".join(f"<div>{x}</div>" for x in items) + "</div>"
-        st.markdown(html, unsafe_allow_html=True)
-    return box
-
-
-def require_login():
-    """បិទមិនឱ្យប្រើកម្មវិធី ទាល់តែចូលតាមគណនី Google។ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិពេលចូលលើកដំបូង។"""
-    if not REQUIRE_LOGIN:
-        return
-    if not (hasattr(st, "login") and hasattr(st, "user")):
-        st.error("Streamlit ចាស់ពេក — សូមដាក់ `streamlit>=1.42.0` និង `Authlib>=1.3.2` ក្នុង requirements.txt។")
-        st.stop()
-    if not _auth_configured():
-        _login_screen("⚙️", "កម្មវិធីកំពុងរៀបចំ", "អ្នកគ្រប់គ្រងមិនទាន់កំណត់ Google Login ទេ។ សូមត្រឡប់មកវិញពេលក្រោយ។")
-        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
-            st.markdown(
-                "1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** (Web application)។\n"
-                "2. ដាក់ **Authorized redirect URI** ជា `https://ឈ្មោះកម្មវិធី.streamlit.app/oauth2callback` "
-                "(ក្នុងម៉ាស៊ីនខ្លួនឯង៖ `http://localhost:8501/oauth2callback`)។\n"
-                "3. ដាក់ Secrets ដូចខាងក្រោម ហើយដាក់ `Authlib>=1.3.2` ក្នុង requirements.txt។"
-            )
-            st.code(_AUTH_SETUP_HELP, language="toml")
-        st.stop()
-
-    if not _user_field("is_logged_in", False):
-        box = _login_screen(
-            "🎬", "ចូលប្រើ Khmer Video AI",
-            "ចូលតាមគណនី Google របស់អ្នក ដើម្បីចាប់ផ្តើមបកប្រែវីដេអូ",
-            ["🎙️ បកប្រែវីដេអូជាសំឡេង និង Subtitle ខ្មែរ",
-             "⚡ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិ",
-             "🔒 យើងមិនឃើញពាក្យសម្ងាត់ Google របស់អ្នកទេ"],
-        )
-        with box:
-            st.button("ចូលតាម Google", key="kv_login_btn", use_container_width=True,
-                      on_click=st.login, args=("google",))
-            st.markdown('<div class="kv-f">ត្រូវការគណនី Gmail ឬ Google ដើម្បីប្រើកម្មវិធី</div>', unsafe_allow_html=True)
-        st.stop()
-
-    _email = str(_user_field("email", "")).strip().lower()
-    if not _email or _user_field("email_verified", True) is False:
-        box = _login_screen("⚠️", "អ៊ីមែលមិនទាន់បញ្ជាក់", "គណនី Google នេះមិនទាន់បញ្ជាក់អ៊ីមែលទេ។ សូមប្រើគណនីផ្សេង។")
-        with box:
-            st.button("ចាកចេញ", key="kv_logout_unverified", on_click=st.logout, use_container_width=True)
-        st.stop()
-    _allowed = _allowed_email_set()
-    if _allowed and _email not in _allowed:
-        from html import escape as _esc
-        box = _login_screen("⛔", "គ្មានសិទ្ធិប្រើ", f"គណនី <b>{_esc(_email)}</b> មិនមានក្នុងបញ្ជីអនុញ្ញាតទេ។")
-        with box:
-            st.button("ចាកចេញ", key="kv_logout_denied", on_click=st.logout, use_container_width=True)
-        st.stop()
-
-    from html import escape as _esc
-    _name = str(_user_field("name", "") or _email)
-    _pic = str(_user_field("picture", "") or "")
-    st.markdown(_ACCOUNT_CSS, unsafe_allow_html=True)
-    with st.container(key="kv_account"):
-        _a, _b = st.columns([6, 2])
-        with _a:
-            _av = (f'<img src="{_esc(_pic)}" referrerpolicy="no-referrer">' if _pic.startswith("https://")
-                   else f'<div class="kv-av">{_esc(_name[:1].upper())}</div>')
-            st.markdown(
-                f'<div class="kv-u">{_av}<div class="kv-t2"><div class="kv-n">{_esc(_name)}</div>'
-                f'<div class="kv-m">{_esc(_email)}</div></div></div>',
-                unsafe_allow_html=True,
-            )
-        with _b:
-            st.button("ចាកចេញ", key="kv_logout_btn", on_click=st.logout)
+# Google/Gmail OAuth Login ត្រូវបានដកចេញទាំងស្រុង។
 
 
 GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
-require_login()
 # Mobile-first interface: landscape/fullscreen rotation control intentionally removed.
 ls_sync()
 
@@ -7328,7 +7168,7 @@ def _hg_extract_series_id(value):
 
 # ============================ Hongguo VIP Access ============================
 # All VIP checks and management use the server-only Supabase service key.
-_HG_ADMIN_EMAIL = "smeyai2000@gmail.com"
+_HG_ADMIN_USERNAME = str(get_secret("HONGGUO_ADMIN_USERNAME", "admin")).strip().lower()
 
 def _hg_supabase_config():
     _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
@@ -7528,12 +7368,7 @@ def _hg_admin_panel():
 
 
 def _hg_vip_gate():
-    _email=str(_user_field("email","")).strip().lower()
-    if _email==_HG_ADMIN_EMAIL:
-        _hg_remember_browser()
-        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-        with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP",expanded=False): _hg_admin_panel()
-        return True
+    # Admin ចូលតាម VIP username ដាច់ដោយឡែក មិនប្រើ Gmail/OAuth ទៀតទេ។
     _browser_state=_hg_remember_browser()
     _browser_token=str((_browser_state or {}).get("token","")).strip()
     _vip_name=str(st.session_state.get("_hg_vip_username","")).strip()
@@ -7542,7 +7377,12 @@ def _hg_vip_gate():
         if _vip_row and _hg_vip_is_valid(_vip_row):
             _vip_name=str(_vip_row.get("username",_vip_name))
             st.session_state["_hg_vip_username"]=_vip_name
-            st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
+            if _vip_name.strip().lower() == _HG_ADMIN_USERNAME:
+                st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
+                with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
+                    _hg_admin_panel()
+            else:
+                st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
             if st.button("ចាកចេញពី VIP",key="hg_vip_logout"):
                 _hg_sb_request("PATCH",params={"id":"eq."+str(_vip_row["id"])},payload={"remember_token_hash":None})
                 st.session_state.pop("_hg_vip_username",None)
