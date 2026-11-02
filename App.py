@@ -7244,6 +7244,36 @@ def _hg_categories():
             {"slug":"comic-drama", "name":"漫剧", "children":[] }]
 
 
+def _hg_flat_categories(categories):
+    """បម្លែងប្រភេទ Hongguo ទៅជា {ឈ្មោះបង្ហាញ: slug} សម្រាប់ selectbox។"""
+    flat = {}
+
+    def walk(items, parent=""):
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            slug = str(item.get("slug") or item.get("category") or item.get("id") or "").strip()
+            raw_name = str(item.get("name") or item.get("title") or slug).strip()
+            if not slug:
+                continue
+            names = {
+                "real-drama": "🎬 រឿងសម្ដែង",
+                "comic-drama": "🎨 រឿងគំនូរជីវចល",
+                "真人剧": "🎬 រឿងសម្ដែង",
+                "漫剧": "🎨 រឿងគំនូរជីវចល",
+            }
+            label = names.get(slug, names.get(raw_name, raw_name))
+            if parent and label == raw_name:
+                label = f"{parent} / {label}"
+            flat[label] = slug
+            children = item.get("children") or item.get("child") or item.get("sub_categories") or []
+            if isinstance(children, list) and children:
+                walk(children, label)
+
+    walk(categories)
+    return flat
+
+
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_category_list(category, page=1):
     slug = urllib.parse.quote(str(category).strip(), safe="/-")
@@ -7684,11 +7714,11 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_categories = _hg_categories()
+                _hg_category_items = _hg_categories()
             except Exception as _cat_err:
-                _hg_categories = []
+                _hg_category_items = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-            _hg_cat_map = _hg_flat_categories(_hg_categories)
+            _hg_cat_map = _hg_flat_categories(_hg_category_items)
             _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
