@@ -6945,7 +6945,7 @@ def user_key_box():
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        st.caption("🌐 Hongguo ទាញទិន្នន័យពីគេហទំព័រសាធារណៈដោយផ្ទាល់ មិនត្រូវការ APPID/APPSECRET ទេ។")
+        st.caption("🌐 Hongguo ប្រើ XiaoYingAPI រួមរបស់ Admin ពី Streamlit Secrets។ API Key មិនបង្ហាញដល់សមាជិកទេ។")
         provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
@@ -7158,548 +7158,154 @@ tab_drama, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = s
 )
 
 # ============================ Hongguo Drama → Khmer Auto Caption ============================
-_HG_WEB_BASE = "https://hongguoduanju.com"
-_HG_WEB_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
-    "Referer": _HG_WEB_BASE + "/",
-}
-
-def _hg_request_headers():
-    """Return Hongguo browser headers, optionally using the user's own logged-in session cookie."""
-    headers = dict(_HG_WEB_HEADERS)
-    try:
-        cookie = str(st.session_state.get("hg_web_cookie", "") or "").strip()
-    except Exception:
-        cookie = ""
-    if cookie:
-        # Cookie is kept only in this Streamlit session and is never printed or logged.
-        headers["Cookie"] = cookie
-    return headers
-
-def _hg_json_after_marker(source, marker="_ROUTER_DATA"):
-    """Extract a balanced JSON object after a marker without regex-brace truncation."""
-    text = str(source or "")
-    pos = text.find(marker)
-    if pos < 0:
-        return None
-    start = text.find("{", pos + len(marker))
-    if start < 0:
-        return None
-    depth, in_string, escaped = 0, False, False
-    for i in range(start, min(len(text), start + 16 * 1024 * 1024)):
-        ch = text[i]
-        if in_string:
-            if escaped:
-                escaped = False
-            elif ch == "\\":
-                escaped = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                try:
-                    return json.loads(text[start:i + 1])
-                except Exception:
-                    return None
-    return None
-
-def _hg_walk_dicts(value, max_nodes=30000):
-    stack, seen, count = [value], set(), 0
-    while stack and count < max_nodes:
-        item = stack.pop()
-        if isinstance(item, dict):
-            yield item
-            count += 1
-            stack.extend(v for v in item.values() if isinstance(v, (dict, list)))
-        elif isinstance(item, list):
-            stack.extend(v for v in item if isinstance(v, (dict, list)))
-            count += 1
-
-def _hg_player_page_info(series_id, vid=None):
-    """Read public series metadata from /detail and playable media from /player."""
-    import html as _html_lib
-    sid = str(series_id or "").strip()
-    if not sid.isdigit():
-        return {}
-
-    # Hongguo separates series metadata (/detail?series_id=...) from the
-    # current episode player (/player/{series_id}/{vid}). Do not assume that
-    # vid_list is embedded in the player route.
-    detail = {}
-    detail_url = _HG_WEB_BASE + "/detail?series_id=" + urllib.parse.quote(sid)
-    detail_resp = requests.get(detail_url, headers=_hg_request_headers(), timeout=(12, 25))
-    detail_resp.raise_for_status()
-    if len(detail_resp.content) > 16 * 1024 * 1024:
-        raise RuntimeError("ទំព័រព័ត៌មានរឿង Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
-    detail_html = detail_resp.text
-    detail_router = _hg_json_after_marker(detail_html, "_ROUTER_DATA")
-    if not isinstance(detail_router, (dict, list)):
-        detail_router = _hg_json_after_marker(detail_html, "routerData")
-    if isinstance(detail_router, (dict, list)):
-        for item in _hg_walk_dicts(detail_router):
-            candidate = item.get("seriesDetail") if isinstance(item.get("seriesDetail"), dict) else item
-            if isinstance(candidate, dict) and (candidate.get("series_name") or candidate.get("vid_list")):
-                detail = candidate
-                break
-
-    vids = detail.get("vid_list") or []
-    if isinstance(vids, str):
+# API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
+def _hg_secret(*names):
+    """Read shared Hongguo API credentials from server-side Streamlit Secrets/env only."""
+    aliases = list(names)
+    if names and names[0] in ("XIAOYING_APPID", "HONGGUO_APPID", "APPID"):
+        aliases = ["XIAOYING_APPID", "HONGGUO_APPID", "APPID"]
+    elif names and names[0] in ("XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRET"):
+        aliases = ["XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRET"]
+    for name in aliases:
         try:
-            vids = json.loads(vids)
+            value = st.secrets.get(name, "")
         except Exception:
-            vids = []
-    if not isinstance(vids, list):
-        vids = []
-    normalized_vids = []
-    for entry in vids:
-        value = (entry.get("vid") or entry.get("video_id") or entry.get("id")) if isinstance(entry, dict) else entry
-        if value is not None and str(value).strip().isdigit():
-            normalized_vids.append(str(value).strip())
+            value = ""
+        if value:
+            return str(value).strip()
+        value = os.environ.get(name, "")
+        if value:
+            return value.strip()
+    return ""
 
-    try:
-        accessible = int(detail.get("accessible_episode_cnt") or 0)
-    except (TypeError, ValueError):
-        accessible = 0
+_HG_APP_ID = _hg_secret("XIAOYING_APPID", "HONGGUO_APPID", "APPID")
+_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRET")
+_HG_API_BASE = "https://www.xiaoyingapi.com"
+_HG_API_PREFIX = "/api/dramas/hongguo"
 
-    selected_vid = str(vid or (normalized_vids[0] if normalized_vids else "")).strip()
-    player = {}
-    player_html = ""
-    if selected_vid and selected_vid.isdigit():
-        player_path = f"/player/{sid}/{urllib.parse.quote(selected_vid)}"
-    else:
-        player_path = f"/player/{sid}"
-    player_resp = requests.get(_HG_WEB_BASE + player_path, headers=_hg_request_headers(), timeout=(12, 25))
-    player_resp.raise_for_status()
-    if len(player_resp.content) > 16 * 1024 * 1024:
-        raise RuntimeError("ទំព័រ Player Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
-    player_html = player_resp.text
-    player_router = _hg_json_after_marker(player_html, "_ROUTER_DATA")
-    if not isinstance(player_router, (dict, list)):
-        player_router = _hg_json_after_marker(player_html, "routerData")
-    if isinstance(player_router, (dict, list)):
-        dicts = list(_hg_walk_dicts(player_router))
-        player = next((x for x in dicts if isinstance(x.get("video_player_info"), dict) or x.get("main_url") or x.get("backup_url")), {})
-        if isinstance(player.get("video_player_info"), dict):
-            player = player["video_player_info"]
-
-    media_url = player.get("main_url") or player.get("backup_url") or player.get("url")
-    if isinstance(media_url, dict):
-        media_url = media_url.get("url") or media_url.get("main_url") or media_url.get("src")
-    if isinstance(media_url, list):
-        media_url = next((x for x in media_url if isinstance(x, str) and x.startswith(("http://", "https://"))), "")
-
-    # Fallback for page variants that expose the public media URL in a video tag.
-    if not media_url:
-        match = re.search(r'<video\b[^>]*\bsrc=["\']([^"\']+)', player_html, flags=re.I)
-        if match:
-            media_url = urllib.parse.urljoin(_HG_WEB_BASE, _html_lib.unescape(match.group(1)))
-        if not media_url:
-            match = re.search(r'<source\b[^>]*\bsrc=["\']([^"\']+)', player_html, flags=re.I)
-            if match:
-                media_url = urllib.parse.urljoin(_HG_WEB_BASE, _html_lib.unescape(match.group(1)))
-
-    episodes = [
-        {"ep": i, "vid": value, "playable": bool(accessible and i <= accessible)}
-        for i, value in enumerate(normalized_vids, 1)
-    ]
-    return {
-        "name": detail.get("series_name") or detail.get("title") or "",
-        "cover": detail.get("series_cover") or detail.get("cover") or detail.get("cover_url") or detail.get("poster") or "",
-        "intro": detail.get("series_intro") or detail.get("intro") or detail.get("description") or detail.get("desc") or "",
-        "episode_cnt": detail.get("episode_cnt") or len(episodes) or detail.get("episode_count") or "",
-        "listed_cnt": accessible or len(episodes),
-        "accessible_episode_cnt": accessible,
-        "episodes": episodes,
-        "url": str(media_url or "").strip(),
-    }
-
-def _hg_get_stream_ready(url, headers, max_wait=240):
-    """GET a Hongguo stream URL and honor 202/503 Retry-After responses."""
-    deadline = time.time() + max_wait
-    last_message = ""
-    while time.time() < deadline:
-        response = requests.get(
-            url, headers=headers, stream=True, allow_redirects=True,
-            timeout=(20, 120),
+def _hg_get(endpoint, params=None, timeout=45):
+    if not _HG_APP_ID or not _HG_APP_SECRET:
+        raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
+    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}"  # XiaoYingAPI route: no trailing slash
+    signed = dict(params or {})
+    signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
+    pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
+    query = "&".join(f"{k}={v}" for k, v in pairs)
+    raw = "GET\n" + path + "\n" + query
+    signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
+                            headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
+    if response.status_code == 404:
+        raise RuntimeError(
+            f"XiaoYingAPI HTTP 404: មិនរកឃើញ API path {path} ទេ។ "
+            "សូមពិនិត្យ endpoint ឬ API version។"
         )
-        if response.status_code in (202, 503):
-            retry_after = response.headers.get("Retry-After", "3")
-            try:
-                delay = max(1.0, min(float(retry_after), 15.0))
-            except (TypeError, ValueError):
-                delay = 3.0
-            try:
-                last_message = response.text[:240]
-            except Exception:
-                last_message = ""
-            response.close()
-            time.sleep(delay)
-            continue
-        if response.status_code == 403:
-            response.close()
-            raise RuntimeError("តំណវីដេអូផុតកំណត់ ឬ Token មិនត្រឹមត្រូវ។ សូមបង្កើត Play URL ថ្មី។")
-        response.raise_for_status()
-        return response
-    raise RuntimeError(
-        "Hongguo Stream នៅតែបង្កើតមិនទាន់រួចក្រោយរង់ចាំ។ "
-        + (last_message[:180] if last_message else "សូមសាកម្ដងទៀតក្រោយបន្តិច។")
-    )
-
-
-def _hg_download_episode_url(url, folder):
-    """ទាញ Hongguo episode ដោយដោះស្រាយ CDN ដែលឆ្លើយ JSON ជំនួស media URL។"""
-    url = str(url or "").strip()
-    if not url.startswith(("http://", "https://")):
-        raise RuntimeError("API បានផ្ដល់ URL វីដេអូមិនត្រឹមត្រូវ។")
-    os.makedirs(folder, exist_ok=True)
-    target = os.path.join(folder, "episode.mp4")
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-        "Accept": "video/mp4,video/*,application/vnd.apple.mpegurl,*/*;q=0.8",
-        "Referer": "https://hongguoduanju.com/",
-    }
-    queue, seen, errors = [url], set(), []
-    while queue and len(seen) < 12:
-        candidate = queue.pop(0)
-        if candidate in seen:
-            continue
-        seen.add(candidate)
-        tmp = target + ".part"
-        try:
-            is_hls = ".m3u8" in urllib.parse.urlparse(candidate).path.lower()
-            # HLS playlist ឱ្យ yt-dlp ដោះស្រាយ segments និង headers។
-            if is_hls:
-                raise _HLSUrl(candidate)
-            with _hg_get_stream_ready(candidate, headers) as response:
-                response.raise_for_status()
-                ctype = (response.headers.get("Content-Type") or "").lower()
-                final_url = response.url or candidate
-                if ".m3u8" in urllib.parse.urlparse(final_url).path.lower() or "mpegurl" in ctype:
-                    raise _HLSUrl(final_url)
-                if "json" in ctype:
-                    try:
-                        payload = response.json()
-                    except Exception:
-                        payload = None
-                    found = _hg_extract_media_urls(payload, final_url) if payload is not None else []
-                    if found:
-                        queue.extend(x for x in found if x not in seen and x not in queue)
-                    else:
-                        hint = _hg_json_error_hint(payload)
-                        errors.append("CDN API JSON គ្មាន URL media ក្នុង response" + (f" ({hint})" if hint else ""))
-                    continue
-                if "text/html" in ctype or "application/xhtml" in ctype:
-                    errors.append("CDN បានផ្ញើ HTML ជំនួសវីដេអូ")
-                    continue
-                total = int(response.headers.get("Content-Length") or 0)
-                written, first = 0, b""
-                with open(tmp, "wb") as out:
-                    for chunk in response.iter_content(chunk_size=1024 * 1024):
-                        if not chunk:
-                            continue
-                        if not first:
-                            first = chunk[:256]
-                        out.write(chunk)
-                        written += len(chunk)
-                if written < 1000:
-                    raise RuntimeError("CDN បានផ្ញើឯកសារតូចពេក")
-                # កុំដាក់ JSON error payload ដែល server ផ្ញើជា octet-stream ចូល ZIP។
-                sniff = first.lstrip()
-                if sniff.startswith((b"{", b"[")):
-                    try:
-                        payload = json.loads(Path(tmp).read_text(encoding="utf-8"))
-                        found = _hg_extract_media_urls(payload, final_url)
-                        queue.extend(x for x in found if x not in seen and x not in queue)
-                        if not found:
-                            hint = _hg_json_error_hint(payload)
-                            errors.append("CDN JSON គ្មាន URL វីដេអូ" + (f" ({hint})" if hint else ""))
-                        else:
-                            queue.extend(x for x in found if x not in seen and x not in queue)
-                        continue
-                    except (ValueError, UnicodeDecodeError):
-                        raise RuntimeError("CDN បានផ្ញើ JSON មិនមែនវីដេអូ")
-                if sniff.startswith(b"<"):
-                    raise RuntimeError("CDN បានផ្ញើ HTML មិនមែនវីដេអូ")
-                os.replace(tmp, target)
-                return target
-        except _HLSUrl as hls:
-            try:
-                import yt_dlp
-                base = os.path.join(folder, "episode")
-                opts = {
-                    "outtmpl": base + ".%(ext)s", "format": "best[ext=mp4]/best",
-                    "merge_output_format": "mp4", "quiet": True, "no_warnings": True,
-                    "noprogress": True, "noplaylist": True,
-                    "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
-                    "socket_timeout": 60, "retries": 5, "fragment_retries": 5,
-                    "http_headers": headers,
-                }
-                with yt_dlp.YoutubeDL(opts) as ydl:
-                    ydl.download([hls.url])
-                outputs = [os.path.join(folder, f) for f in os.listdir(folder)
-                           if f.startswith("episode.") and os.path.isfile(os.path.join(folder, f))
-                           and os.path.getsize(os.path.join(folder, f)) > 1000]
-                if outputs:
-                    found = max(outputs, key=os.path.getsize)
-                    if found != target:
-                        os.replace(found, target)
-                    return target
-                errors.append("yt-dlp មិនបានបង្កើតឯកសារពី HLS")
-            except Exception as exc:
-                errors.append("HLS/yt-dlp: " + str(exc)[:240])
-        except Exception as exc:
-            errors.append(re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
-        finally:
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except OSError:
-                pass
-
-    # Fallback yt-dlp សម្រាប់ URL player/manifest ដែលវាអាចស្គាល់បាន។
-    try:
-        import yt_dlp
-        base = os.path.join(folder, "episode")
-        opts = {
-            "outtmpl": base + ".%(ext)s", "format": "best[ext=mp4]/best",
-            "merge_output_format": "mp4", "quiet": True, "no_warnings": True,
-            "noprogress": True, "noplaylist": True,
-            "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
-            "socket_timeout": 60, "retries": 3, "fragment_retries": 3,
-            "http_headers": headers,
-        }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-        outputs = [os.path.join(folder, f) for f in os.listdir(folder)
-                   if f.startswith("episode.") and os.path.isfile(os.path.join(folder, f))
-                   and os.path.getsize(os.path.join(folder, f)) > 1000]
-        if outputs:
-            found = max(outputs, key=os.path.getsize)
-            if found != target:
-                os.replace(found, target)
-            return target
-    except Exception as exc:
-        errors.append("yt-dlp fallback: " + str(exc)[:240])
-    raise RuntimeError(" | ".join(errors[-8:]) or "មិនអាចទាញយកវីដេអូបានទេ")
-
-
-def _hg_public_page(path):
-    """អាន HTML/SSR ទំព័រសាធារណៈ Hongguo ដោយមិនប្រើ XiaoYingAPI credentials។"""
-    url = urllib.parse.urljoin(_HG_WEB_BASE + "/", str(path or "").lstrip("/"))
-    response = requests.get(url, headers=_hg_request_headers(), timeout=(12, 30), allow_redirects=True)
-    response.raise_for_status()
-    if len(response.content) > 18 * 1024 * 1024:
-        raise RuntimeError("ទំព័រ Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
-    page = response.text or ""
-    router = _hg_json_after_marker(page, "_ROUTER_DATA")
-    if not isinstance(router, (dict, list)):
-        router = _hg_json_after_marker(page, "routerData")
-    return page, router
-
-
-def _hg_public_walk(value, max_nodes=40000):
-    """ដើរតាម JSON SSR ដោយកំណត់ចំនួន node ដើម្បីកុំឱ្យប្រើ RAM ច្រើន។"""
-    stack, count = [value], 0
-    while stack and count < max_nodes:
-        item = stack.pop()
-        if isinstance(item, dict):
-            yield item
-            count += 1
-            stack.extend(v for v in item.values() if isinstance(v, (dict, list)))
-        elif isinstance(item, list):
-            count += 1
-            stack.extend(v for v in item if isinstance(v, (dict, list)))
-
-
-def _hg_normalize_public_drama(item):
-    """បម្លែង record SSR របស់គេហទំព័រទៅ schema ដែល UI ចាស់ប្រើ។"""
-    if not isinstance(item, dict):
-        return None
-    raw = item.get("video_data") if isinstance(item.get("video_data"), dict) else item
-    sid = (raw.get("seriesId") or raw.get("series_id") or raw.get("seriesID")
-           or raw.get("book_id") or raw.get("id") or raw.get("id_str"))
-    name = (raw.get("title") or raw.get("series_name") or raw.get("name")
-            or raw.get("book_name") or raw.get("seriesTitle"))
-    if not sid or not name:
-        return None
-    cover = (raw.get("cover") or raw.get("coverUrl") or raw.get("cover_url")
-             or raw.get("cover_image") or raw.get("poster") or raw.get("thumb_url")
-             or raw.get("vertical_cover"))
-    intro = (raw.get("description") or raw.get("intro") or raw.get("desc") or "")
-    count = (raw.get("episodeCount") or raw.get("episode_count")
-             or raw.get("total_episode") or raw.get("serial_count"))
-    return {
-        "series_id": str(sid), "name": str(name), "cover": str(cover or ""),
-        "intro": str(intro or ""), "episode_cnt": count or "", "listed_cnt": count or "",
-        "url": str(raw.get("url") or raw.get("detail_url") or ""),
-    }
-
-
-def _hg_public_records(router, preferred_keys=()):
-    """រក list រឿងនៅក្នុង SSR loaderData ហើយ normalize ដោយមិនប្រើ endpoint API។"""
-    if not isinstance(router, (dict, list)):
-        return []
-    candidates = []
-    for node in _hg_public_walk(router):
-        if not isinstance(node, dict):
-            continue
-        for key in preferred_keys:
-            value = node.get(key)
-            if isinstance(value, list):
-                candidates.append(value)
-    if not candidates:
-        for node in _hg_public_walk(router):
-            if not isinstance(node, dict):
-                continue
-            for value in node.values():
-                if isinstance(value, list) and value and any(
-                    isinstance(x, dict) and (
-                        x.get("seriesId") or x.get("series_id") or isinstance(x.get("video_data"), dict)
-                    ) for x in value[:12]
-                ):
-                    candidates.append(value)
-    out, seen = [], set()
-    for arr in candidates:
-        for item in arr:
-            normalized = _hg_normalize_public_drama(item)
-            if normalized and normalized["series_id"] not in seen:
-                seen.add(normalized["series_id"])
-                out.append(normalized)
-        if out:
-            break
-    return out
-
+    if not response.ok:
+        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {response.text[:300]}")
+    data = response.json()
+    if not isinstance(data, dict) or data.get("code") != 10000:
+        raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
+    return data.get("data") or {}
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_rank(page=1):
-    """ទាញ Hot ranking ពី SSR page ផ្ទាល់របស់ Hongguo។"""
-    page = max(1, int(page))
-    _html, router = _hg_public_page(f"/rank/hot-drama?page={page}")
-    rows = _hg_public_records(router, ("rankList", "rank_list", "results", "list"))
-    if not rows:
-        raise RuntimeError("Hongguo មិនបានផ្ញើបញ្ជីរឿង Hot Ranking មកទេ។")
-    return rows
-
-
-def _hg_normalize_categories(raw):
-    out = []
-    for item in raw or []:
-        if not isinstance(item, dict):
-            continue
-        slug = str(item.get("slug") or item.get("category") or item.get("id") or "").strip()
-        name = str(item.get("name") or item.get("title") or item.get("category_name") or slug).strip()
-        children_raw = item.get("children") or item.get("sub_categories") or item.get("subCategories") or []
-        children = []
-        for child in children_raw if isinstance(children_raw, list) else []:
-            if not isinstance(child, dict):
-                continue
-            cslug = str(child.get("slug") or child.get("category") or child.get("id") or "").strip()
-            cname = str(child.get("name") or child.get("title") or cslug).strip()
-            if cslug and cname:
-                children.append({"slug": cslug, "name": cname, "children": []})
-        if slug and name:
-            out.append({"slug": slug, "name": name, "children": children})
-    return out
-
-
-def _hg_flat_categories(categories):
-    """បម្លែង category tree ទៅជា {ឈ្មោះ: slug} សម្រាប់ selectbox។"""
-    result = {}
-    for item in categories if isinstance(categories, list) else []:
-        if not isinstance(item, dict):
-            continue
-        name = str(item.get("name") or item.get("title") or "").strip()
-        slug = str(item.get("slug") or item.get("category") or item.get("id") or "").strip()
-        if name and slug:
-            result[name] = slug
-        children = item.get("children") or []
-        for child in children if isinstance(children, list) else []:
-            if not isinstance(child, dict):
-                continue
-            child_name = str(child.get("name") or child.get("title") or "").strip()
-            child_slug = str(child.get("slug") or child.get("category") or child.get("id") or "").strip()
-            if child_name and child_slug:
-                label = f"{name} / {child_name}" if name else child_name
-                result[label] = child_slug
-    return result
-
+    d = _hg_get("rank", {"type": "hot-drama", "page": int(page)})
+    return d.get("results", []) if isinstance(d, dict) else []
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _hg_categories():
-    """អានប្រភេទរឿងពី HTML/SSR ទំព័រ category ផ្លូវការរបស់ Hongguo។"""
-    _html, router = _hg_public_page("/category")
-    if isinstance(router, (dict, list)):
-        for node in _hg_public_walk(router):
-            if not isinstance(node, dict):
-                continue
-            for key in ("categories", "categoryList", "category_list", "categoryTree", "category_tree"):
-                value = node.get(key)
-                if isinstance(value, list):
-                    categories = _hg_normalize_categories(value)
-                    if categories:
-                        return categories
-    import html as _html_lib
-    links = re.findall(
-        r"<a[^>]+href=\"(?:https?://hongguoduanju\.com)?/category/([^\"?#]+)\"[^>]*>(.*?)</a>",
-        _html, flags=re.I | re.S
-    )
-    fallback, seen = [], set()
-    for slug, label in links:
-        slug = _html_lib.unescape(slug).strip("/")
-        name = re.sub(r"<[^>]+>", " ", _html_lib.unescape(label))
-        name = re.sub(r"\\s+", " ", name).strip()
-        if slug and name and slug not in seen:
-            seen.add(slug)
-            fallback.append({"slug": slug, "name": name, "children": []})
-    return fallback
+    """ទាញ category tree ពិតពី XiaoYingAPI (ប្រើ slug មិនប្រើឈ្មោះចិនជាតម្លៃ API)។"""
+    d = _hg_get("categories", {})
+    if isinstance(d, list):
+        return d
+    if isinstance(d, dict):
+        return d.get("categories") or d.get("results") or d.get("list") or []
+    return []
 
 
 @st.cache_data(ttl=180, show_spinner=False)
 def _hg_detail(series_id):
-    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី player page សាធារណៈរបស់ Hongguo។"""
-    data = _hg_player_page_info(series_id)
-    if not data or not data.get("episodes"):
-        raise RuntimeError(
-            "មិនអាចអានព័ត៌មានរឿងពី Hongguo បានទេ។ "
-            "សូមពិនិត្យ series_id ឬសាកម្ដងទៀត។"
-        )
-    return data
+    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី Hongguo API។"""
+    d = _hg_get("detail", {"series_id": str(series_id)})
+    if not isinstance(d, dict):
+        return {}
+    # API versions may wrap detail data one level deeper.
+    if isinstance(d.get("detail"), dict):
+        d = d["detail"]
+    elif isinstance(d.get("result"), dict):
+        d = d["result"]
+    episodes = d.get("episodes") or d.get("episode_list") or d.get("list") or []
+    normalized = []
+    for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
+        if not isinstance(ep, dict):
+            continue
+        ep_no = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or (i + 1)
+        try:
+            ep_no = int(ep_no)
+        except (TypeError, ValueError):
+            ep_no = i + 1
+        playable = ep.get("playable")
+        if playable is None:
+            playable = bool(ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("token"))
+        normalized.append({**ep, "ep": ep_no, "playable": bool(playable)})
+    d["episodes"] = normalized
+    return d
 
+
+# ឈ្មោះប្រភេទចិន -> ភាសាខ្មែរ (តម្លៃ slug សម្រាប់ API មិនត្រូវបានប្ដូរ)
+_HG_CATEGORY_KH = {'真人剧': 'រឿងសម្ដែងពិត', '爱情': 'ស្នេហា', '年代': 'រឿងសម័យកាល', '逆袭': 'តស៊ូត្រឡប់មកជោគជ័យ', '传奇': 'រឿងវីរភាព', '成长': 'ការរីកចម្រើន', '家庭': 'គ្រួសារ', '都市': 'ជីវិតទីក្រុង', '古装': 'សម័យបុរាណ', '现代': 'សម័យទំនើប', '悬疑': 'អាថ៌កំបាំង', '喜剧': 'កំប្លែង', '动作': 'ក្បាច់គុន និងសកម្មភាព', '战争': 'សង្គ្រាម', '历史': 'ប្រវត្តិសាស្ត្រ', '奇幻': 'រវើរវាយ', '玄幻': 'រឿងអច្ឆរិយៈ', '仙侠': 'ទេពអប្សរ និងអ្នក仙', '武侠': 'ក្បាច់គុន', '青春': 'យុវវ័យ', '校园': 'សាលារៀន', '职场': 'ជីវិតការងារ', '甜宠': 'ស្នេហាផ្អែមល្ហែម', '虐恋': 'ស្នេហាសោកសៅ', '复仇': 'ការសងសឹក', '豪门': 'គ្រួសារអ្នកមាន', '总裁': 'ប្រធានក្រុមហ៊ុន', '穿越': 'ឆ្លងពេលវេលា', '重生': 'កើតជាថ្មី', '乡村': 'ជីវិតជនបទ', '农村': 'ជីវិតជនបទ', '亲情': 'សេចក្ដីស្រឡាញ់ក្នុងគ្រួសារ', '友情': 'មិត្តភាព', '现实': 'ជីវិតពិត', '励志': 'លើកទឹកចិត្ត', '惊悚': 'រន្ធត់', '恐怖': 'ភ័យរន្ធត់', '犯罪': 'ឧក្រិដ្ឋកម្ម', '探案': 'ស៊ើបអង្កេត', '科幻': 'វិទ្យាសាស្ត្រប្រឌិត', '萌宝': 'កូនតូចគួរឱ្យស្រឡាញ់', '神医': 'គ្រូពេទ្យអស្ចារ្យ', '战神': 'អ្នកចម្បាំងខ្លាំង', '赘婿': 'កូនប្រសារប្រុស', '女强': 'នារីខ្លាំង', '男频': 'សម្រាប់ទស្សនិកជនប្រុស', '女频': 'សម្រាប់ទស្សនិកជនស្រី', '短剧': 'រឿងភាគខ្លី', '漫剧': 'រឿងគំនូរជីវចល', '漫画': 'រឿងគំនូរជីវចល', '动画': 'គំនូរជីវចល', '全部': 'ទាំងអស់'}
+
+
+def _hg_category_label(name):
+    raw = str(name or "").strip()
+    return _HG_CATEGORY_KH.get(raw, raw)
+
+
+def _hg_flat_categories(tree):
+    """បម្លែង category tree ទៅជាជម្រើស UI ដែលរក្សា slug ត្រឹមត្រូវ។"""
+    out = {}
+    for parent in tree or []:
+        if not isinstance(parent, dict):
+            continue
+        pslug = str(parent.get("slug") or parent.get("category") or parent.get("category_id") or parent.get("id") or "").strip()
+        pname = str(parent.get("name") or parent.get("title") or parent.get("category_name") or pslug).strip()
+        if pslug and pname:
+            out[_hg_category_label(pname)] = pslug
+        children = parent.get("children") or []
+        if isinstance(children, list):
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                cslug = str(child.get("slug") or child.get("category") or child.get("category_id") or child.get("id") or "").strip()
+                cname = str(child.get("name") or child.get("title") or child.get("category_name") or cslug).strip()
+                if cslug and cname:
+                    # បង្ហាញតែឈ្មោះប្រភេទរងជាខ្មែរ ដើម្បីកុំឱ្យអក្សរវែងពេកក្នុង Dropdown លើទូរស័ព្ទ។
+                    # បើឈ្មោះដូចគ្នា ទើបបន្ថែមឈ្មោះមេជាអក្សរខ្លីសម្រាប់បំបែក។
+                    child_label = _hg_category_label(cname)
+                    if child_label in out:
+                        child_label = f"{child_label} · {_hg_category_label(pname)}"
+                    out[child_label] = cslug
+    return out
+
+
+def _hg_error_khmer(error):
+    """បកស្រាយ error សំខាន់ៗជាខ្មែរ ដើម្បីអ្នកប្រើដឹងវិធីដោះស្រាយ។"""
+    msg = str(error or "")
+    if "20003" in msg or "参数值非法" in msg or "category" in msg and "合法分类" in msg:
+        return "ប្រភេទរឿងដែល API ទទួលបានមិនត្រឹមត្រូវ។ កម្មវិធីត្រូវប្រើ Category slug ពីបញ្ជីប្រភេទ Hongguo មិនមែនឈ្មោះចិនទេ។ សូមចុច «ផ្ទុកប្រភេទឡើងវិញ» ហើយជ្រើសប្រភេទម្ដងទៀត។"
+    if "20002" in msg or "参数缺失" in msg:
+        return "API ខ្វះប៉ារ៉ាម៉ែត្រចាំបាច់។ សូមជ្រើសប្រភេទរឿងម្ដងទៀត។"
+    return msg
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_category_list(category, page=1):
-    """ទាញបញ្ជីតាម category ពី public category page របស់ Hongguo។"""
-    slug = str(category or "").strip().strip("/")
-    if not slug:
-        return []
-    page = max(1, int(page))
-    _html, router = _hg_public_page(f"/category/{urllib.parse.quote(slug, safe='')}?page={page}")
-    rows = _hg_public_records(router, ("videoList", "video_list", "seriesList", "series_list", "results", "list"))
-    if not rows:
-        rows = _hg_public_records(router, ("rankList", "searchList", "items"))
-    if not rows:
-        raise RuntimeError("មិនអាចអានបញ្ជីរឿងតាមប្រភេទនេះពី Hongguo បានទេ។")
-    return rows
-
+    d = _hg_get("list", {"category": str(category), "page": int(page)})
+    return d.get("results", []) if isinstance(d, dict) else []
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_search(keyword, page=1):
-    """ស្វែងរកតាម public website search page; ប្រភពនេះបង្ហាញលទ្ធផលទំព័រដំបូង។"""
-    keyword = str(keyword or "").strip()
-    if not keyword:
-        return []
-    _html, router = _hg_public_page(f"/search/{urllib.parse.quote(keyword, safe='')}?page=1")
-    rows = _hg_public_records(router, ("searchList", "search_list", "results", "list"))
-    if not rows:
-        raise RuntimeError("Hongguo មិនបានផ្ញើលទ្ធផលស្វែងរកមកទេ។")
-    return rows
+    d = _hg_get("search", {"keyword": keyword, "page": int(page)})
+    return d.get("results", []) if isinstance(d, dict) else []
 
 
 def _hg_extract_series_id(value):
@@ -7714,7 +7320,7 @@ def _hg_extract_series_id(value):
         ids = query.get("series_id") or query.get("seriesId") or []
         if ids and str(ids[0]).strip().isdigit():
             return str(ids[0]).strip()
-        match = re.search(r"/(?:detail|player)/(\d+)", parsed.path)
+        match = re.search(r"/detail/(\d+)", parsed.path)
         if match:
             return match.group(1)
     except Exception:
@@ -8064,16 +7670,10 @@ with tab_drama:
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
-        st.caption("🌐 ទាញទិន្នន័យពីគេហទំព័រ Hongguo ដោយផ្ទាល់ · មិនត្រូវការ API Key។")
-        with st.expander("🔐 ភ្ជាប់ Session គណនី Hongguo របស់អ្នក (សម្រាប់ភាគដែលអ្នកមានសិទ្ធិ VIP)", expanded=False):
-            st.text_input(
-                "Hongguo Cookie / Session",
-                type="password",
-                key="hg_web_cookie",
-                placeholder="បិទភ្ជាប់ Cookie ពីគណនី Hongguo ដែលបាន Login",
-                help="ប្រើតែ Session របស់គណនីអ្នកផ្ទាល់។ វាត្រូវបានរក្សាទុកតែក្នុង Session បច្ចុប្បន្នរបស់ App ហើយកុំផ្ញើវាទៅអ្នកដទៃ។",
-            )
-            st.caption("បើគ្មាន Session ដែលបាន Login កម្មវិធីអាចទាញបានតែភាគដែល Hongguo អនុញ្ញាតជាសាធារណៈប៉ុណ្ណោះ។")
+        if _HG_APP_ID and _HG_APP_SECRET:
+            st.success("✅ Hongguo API បានភ្ជាប់រួចរាល់ · API Key រក្សាទុកជាសម្ងាត់ក្នុង Streamlit Secrets")
+        else:
+            st.warning("Admin ត្រូវដាក់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ដើម្បីប្រើ Hongguo API។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
@@ -8089,11 +7689,11 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_category_rows = _hg_categories()
+                _hg_categories = _hg_categories() if _HG_APP_ID and _HG_APP_SECRET else []
             except Exception as _cat_err:
-                _hg_category_rows = []
+                _hg_categories = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-            _hg_cat_map = _hg_flat_categories(_hg_category_rows)
+            _hg_cat_map = _hg_flat_categories(_hg_categories)
             _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
@@ -8142,7 +7742,7 @@ with tab_drama:
                         st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
             except Exception as e:
                 st.error(str(e))
-        elif _hg_home_click or (not st.session_state["_hg_rows"] and not st.session_state.get("_hg_selected")):
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
             try:
                 st.session_state["_hg_page"] = 1
                 st.session_state["_hg_catalog_mode"] = "hot"
@@ -8165,60 +7765,27 @@ with tab_drama:
                     _hg_d = _hg_detail(_hg_selected["series_id"])
                 if _hg_d.get("intro"):
                     st.write(_hg_d["intro"])
-                # បង្ហាញភាគទាំងអស់ដែលមានក្នុងបញ្ជីរឿង។ ការបង្ហាញ/សាកទាញយក
-                # មិនមែនជាការរំលង VIP ទេ៖ ភាគដែល Hongguo មិនផ្ដល់ media URL នឹងត្រូវរាយការណ៍ថាមិនអាចទាញបាន។
-                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("vid")]
+                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
                 if not _hg_eps:
-                    st.info("មិនអាចអានបញ្ជីភាគពីទំព័រ Hongguo បានទេ។")
+                    st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
                 else:
-                    _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}" + (" 🔒" if not e.get("playable") else ""): int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
-                    st.caption("បង្ហាញបញ្ជីភាគទាំងអស់។ កម្មវិធីនឹងប្រើ Session Hongguo របស់អ្នក ប្រសិនបើបានភ្ជាប់ ហើយទាញតែភាគដែលគណនីអ្នកមានសិទ្ធិចូលមើល។")
-                    st.caption("គុណភាព និង Codec ត្រូវបានជ្រើសដោយគេហទំព័រ Hongguo ផ្ទាល់។")
+                    _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
+                    _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
+                    _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
                     _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
                     _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
                     if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
-                        _play_status = st.empty()
-                        _preview_dir = None
-                        try:
-                            # អាន player page សាធារណៈរបស់ Hongguo ដោយផ្ទាល់។
-                            # មិនប្រើ XiaoYingAPI Key ហើយមិនទាញវីដេអូទាំងមូលសម្រាប់ preview។
-                            _ep_record = next(
-                                (x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_hg_epnum)),
-                                None
-                            )
-                            if not _ep_record:
-                                raise RuntimeError("មិនរកឃើញព័ត៌មានភាគនេះទេ។")
-                            _player_info = _hg_player_page_info(
-                                _hg_selected["series_id"], _ep_record.get("vid")
-                            )
-                            _video_url = str((_player_info or {}).get("url") or "").strip()
-                            if not _video_url.startswith(("http://", "https://")):
-                                raise RuntimeError(
-                                    "Hongguo មិនបានផ្ដល់តំណ MP4 សម្រាប់ភាគនេះទេ។ "
-                                    "ភាគនេះអាចមិនទាន់បើកឱ្យមើល ឬត្រូវការសិទ្ធិពីគេហទំព័រ។"
-                                )
-                            st.session_state[_hg_play_key] = {
-                                "url": _video_url, "ready": True,
-                                "stream_mode": "origin", "source": "hongguo_public_player",
-                            }
-                            _play_status.success(f"បានរកឃើញ Stream ភាគ {_hg_epnum}។ អាចចាក់វីដេអូបាន។")
-                        except Exception as _play_error:
-                            if _preview_dir:
-                                shutil.rmtree(_preview_dir, ignore_errors=True)
-                            _play_status.error(f"រកឃើញភាគ {_hg_epnum} ប៉ុន្តែចាក់មិនបាន៖ {_hg_error_khmer(_play_error)}")
+                        with st.spinner("កំពុងរៀបចំវីដេអូ..."):
+                            _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                        if _hg_play.get("url"):
+                            st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
+                        else:
+                            st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
                     _hg_saved = st.session_state.get(_hg_play_key)
                     if _hg_saved:
-                        _stream_url = _hg_saved.get("url")
-                        if _stream_url:
-                            st.video(_stream_url)
-                            st.link_button(
-                                "⬇️ បើក / ទាញយកវីដេអូភាគនេះ",
-                                _stream_url,
-                                use_container_width=True,
-                            )
-                        else:
-                            st.warning("មិនមាន URL វីដេអូទេ។ សូមចុចរៀបចំភាគនេះម្ដងទៀត។")
+                        st.video(_hg_saved["url"])
+                        st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
                         if _hg_saved.get("ready") is False:
                             st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
                         if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
@@ -8234,8 +7801,7 @@ with tab_drama:
                         "ជ្រើសរើសភាគសម្រាប់ទាញយកជា ZIP",
                         list(_hg_ep_map.keys()),
                         default=[],
-                        key=f"hg_zip_eps_{_hg_selected['series_id']}",
-                        help="អាចជ្រើសភាគទាំងអស់បាន។ ប្រសិនបើបានភ្ជាប់ Session គណនីដែលមានសិទ្ធិ App នឹងសាកទាញតាមសិទ្ធិនោះ; ភាគដែលនៅតែត្រូវបានបដិសេធនឹងបង្ហាញមូលហេតុ។"
+                        key=f"hg_zip_eps_{_hg_selected['series_id']}"
                     )
                     _hg_zip_limit = st.selectbox(
                         "ចំនួនអតិបរមាក្នុងមួយលើក",
@@ -8254,57 +7820,37 @@ with tab_drama:
                         _zip_dir = tempfile.mkdtemp(prefix="hongguo_zip_")
                         _zip_path = os.path.join(_zip_dir, "hongguo_episodes.zip")
                         _zip_ok, _zip_fail = [], []
-                        _zip_bar = st.progress(0, text="កំពុងចាប់ផ្ដើមរៀបចំ ZIP...")
-                        _zip_live_status = st.empty()
-                        _zip_fail_live = st.container()
+                        _zip_bar = st.progress(0, text="កំពុងរៀបចំភាគ...")
                         try:
                             with zipfile.ZipFile(_zip_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as _zf:
                                 for _zi, _zep in enumerate(_zip_eps, start=1):
                                     _video_path = None
-                                    _episode_dir = None
-                                    _zip_live_status.info(f"🔎 កំពុងរកតំណ និងរៀបចំភាគ {_zep} ({_zi}/{len(_zip_eps)})...")
-                                    _zip_bar.progress((_zi - 1) / max(1, len(_zip_eps)), text=f"កំពុងដំណើរការភាគ {_zep} · {_zi}/{len(_zip_eps)}")
                                     try:
-                                        _ep_record = next(
-                                            (x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_zep)),
-                                            None
-                                        )
-                                        if not _ep_record:
-                                            raise RuntimeError("មិនរកឃើញព័ត៌មានភាគនេះទេ។")
-                                        _player_info = _hg_player_page_info(
-                                            _hg_selected["series_id"], _ep_record.get("vid")
-                                        )
-                                        _video_url = str((_player_info or {}).get("url") or "").strip()
-                                        if not _video_url.startswith(("http://", "https://")):
-                                            raise RuntimeError(
-                                                "គេហទំព័រ Hongguo មិនបានផ្ដល់ MP4 សម្រាប់ភាគនេះទេ "
-                                                "(ភាគអាចត្រូវបានចាក់សោ ឬមិនទាន់អាចមើលបាន)។"
-                                            )
-                                        _episode_dir = tempfile.mkdtemp(prefix="hg_episode_")
-                                        _video_path = _hg_download_episode_url(_video_url, _episode_dir)
+                                        _play_data = _hg_get("play", {
+                                            "series_id": _hg_selected["series_id"],
+                                            "ep": _zep, "q": _hg_quality, "codec": _hg_codec
+                                        })
+                                        _video_url = str(_play_data.get("url") or "").strip()
+                                        if not _video_url:
+                                            raise RuntimeError("API មិនបានផ្ដល់ URL វីដេអូ")
+                                        _fetch = _fetch_one(_video_url)
+                                        if not _fetch.get("ok") or not _fetch.get("path"):
+                                            raise RuntimeError(_fetch.get("err") or "ទាញយកវីដេអូមិនបាន")
+                                        _video_path = _fetch["path"]
                                         _size = os.path.getsize(_video_path)
                                         _current = sum(x.file_size for x in _zf.filelist)
                                         if _current + _size > MAX_ZIP_MB * 1024 * 1024:
-                                            raise RuntimeError(
-                                                f"ZIP លើសកំណត់ {MAX_ZIP_MB}MB "
-                                                f"(បច្ចុប្បន្ន {_current / 1024 / 1024:.1f}MB + ភាគនេះ {_size / 1024 / 1024:.1f}MB)"
-                                            )
+                                            raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
                                         _zf.write(_video_path, f"Episode_{int(_zep):04d}.mp4")
                                         _zip_ok.append(int(_zep))
                                     except Exception as _ze:
-                                        _failure_text = f"ភាគ {_zep}: {_hg_error_khmer(_ze)}"
-                                        _zip_fail.append(_failure_text[:700])
-                                        # បង្ហាញ Error ភ្លាមៗ មិនរង់ចាំឱ្យ ZIP ចប់ទើបឃើញទេ។
-                                        with _zip_fail_live:
-                                            st.warning("⚠️ " + _failure_text[:650])
+                                        _zip_fail.append(f"ភាគ {_zep}: {str(_ze)[:140]}")
                                     finally:
-                                        # សម្អាត temp folder ទោះបី download បរាជ័យមុនទទួលបាន path ក៏ដោយ។
-                                        if _episode_dir:
-                                            shutil.rmtree(_episode_dir, ignore_errors=True)
-                                            _episode_dir = None
-                                    _zip_bar.progress(_zi / max(1, len(_zip_eps)), text=f"បានពិនិត្យ { _zi}/{len(_zip_eps)} ភាគ · ជោគជ័យ {_zip_ok.__len__()} · បរាជ័យ {len(_zip_fail)}")
+                                        if _video_path:
+                                            shutil.rmtree(os.path.dirname(_video_path), ignore_errors=True)
+                                    _zip_bar.progress(_zi / max(1, len(_zip_eps)), text=f"បានរៀបចំ {_zi}/{len(_zip_eps)} ភាគ")
+                            _zip_bar.empty()
                             if _zip_ok:
-                                _zip_live_status.success(f"បញ្ចប់! បានរៀបចំបាន {_zip_ok.__len__()} ភាគ និងបរាជ័យ {len(_zip_fail)} ភាគ។")
                                 st.session_state[f"_hg_zip_ready_{_hg_selected['series_id']}"] = {
                                     "path": _zip_path,
                                     "dir": _zip_dir,
@@ -8315,36 +7861,27 @@ with tab_drama:
                                 st.success(f"បានរៀបចំ ZIP ចំនួន {len(_zip_ok)} ភាគ។ ចុចប៊ូតុងខាងក្រោមដើម្បីទាញទៅ Downloads របស់ទូរស័ព្ទ។")
                             else:
                                 shutil.rmtree(_zip_dir, ignore_errors=True)
-                                _zip_live_status.error(f"មិនអាចទាញយកភាគណាមួយបានទេ។ បានពិនិត្យ {_zi if '_zi' in locals() else 0}/{len(_zip_eps)} ភាគ។ សូមមើល Error ខាងលើ។")
+                                st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
                             if _zip_fail:
-                                with st.expander(f"ព័ត៌មានភាគដែលបរាជ័យ ({len(_zip_fail)})", expanded=True):
+                                with st.expander(f"មើលភាគដែលបរាជ័យ ({len(_zip_fail)})"):
                                     for _err in _zip_fail:
                                         st.warning(_err)
                         except Exception as _zip_err:
                             _zip_bar.empty()
                             shutil.rmtree(_zip_dir, ignore_errors=True)
-                            _zip_live_status.error(f"រៀបចំ ZIP មិនបាន៖ {_hg_error_khmer(_zip_err)}")
+                            st.error(f"រៀបចំ ZIP មិនបាន៖ {_hg_error_khmer(_zip_err)}")
 
                     _zip_ready = st.session_state.get(f"_hg_zip_ready_{_hg_selected['series_id']}")
                     if _zip_ready and os.path.isfile(_zip_ready.get("path", "")):
-                        _zip_bytes = None
-                        try:
-                            if os.path.getsize(_zip_ready["path"]) > 0:
-                                with open(_zip_ready["path"], "rb") as _zip_file:
-                                    _zip_bytes = _zip_file.read()
-                        except OSError as _read_zip_err:
-                            st.error(f"អាន ZIP មិនបាន៖ {_hg_error_khmer(_read_zip_err)}")
-                        if _zip_bytes:
+                        with open(_zip_ready["path"], "rb") as _zip_file:
                             st.download_button(
                                 f"📥 ទាញយក ZIP ({_zip_ready['count']} ភាគ)",
-                                data=_zip_bytes,
+                                data=_zip_file,
                                 file_name=f"{_zip_ready.get('name','Hongguo')}_episodes.zip",
                                 mime="application/zip",
                                 key=f"hg_zip_download_{_hg_selected['series_id']}",
                                 use_container_width=True
                             )
-                        else:
-                            st.warning("ZIP មិនមានទិន្នន័យ ឬឯកសារត្រូវបានលុប។ សូមរៀបចំ ZIP ម្ដងទៀត។")
 
                     st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
                     _hg_batch_labels = st.multiselect(
@@ -8373,18 +7910,12 @@ with tab_drama:
                         _batch_bar = st.progress(0, text="កំពុងរៀបចំតំណភាគ...")
                         for _bi, _be in enumerate(_batch_eps, start=1):
                             try:
-                                _ep_record = next(
-                                    (x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_be)),
-                                    None
-                                )
-                                _bp = _hg_player_page_info(
-                                    _hg_selected["series_id"], (_ep_record or {}).get("vid")
-                                ) if _ep_record else {}
-                                _bu = str((_bp or {}).get("url") or "").strip()
-                                if _bu.startswith(("http://", "https://")):
+                                _bp = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _be, "q": _hg_quality, "codec": _hg_codec})
+                                _bu = str(_bp.get("url") or "").strip()
+                                if _bu:
                                     _batch_urls.append(_bu)
                                 else:
-                                    _batch_errors.append(f"ភាគ {_be}: Hongguo មិនបានបើក MP4 សម្រាប់ភាគនេះ")
+                                    _batch_errors.append(f"ភាគ {_be}: API មិនបានផ្ដល់ URL")
                             except Exception as _be_err:
                                 _batch_errors.append(f"ភាគ {_be}: {_hg_error_khmer(_be_err)}")
                             _batch_bar.progress(_bi / len(_batch_eps), text=f"កំពុងរៀបចំភាគ {_bi}/{len(_batch_eps)}")
