@@ -7292,83 +7292,136 @@ def _hg_player_page_info(series_id, vid=None):
     }
 
 def _hg_download_episode_url(url, folder):
-    """ទាញ Hongguo MP4/HLS ដោយពិនិត្យប្រភេទ stream និងរក្សាទុកជាឯកសារលើ disk។"""
+    """ទាញ Hongguo episode ដោយដោះស្រាយ CDN ដែលឆ្លើយ JSON ជំនួស media URL។"""
     url = str(url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise RuntimeError("API បានផ្ដល់ URL វីដេអូមិនត្រឹមត្រូវ។")
     os.makedirs(folder, exist_ok=True)
     target = os.path.join(folder, "episode.mp4")
-    errors = []
-    is_hls = ".m3u8" in urllib.parse.urlparse(url).path.lower()
-
-    # MP4/direct CDN: HTTP streaming មុន ដើម្បីកុំឱ្យ yt-dlp បដិសេធដោយ format/max-filesize។
-    if not is_hls:
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+        "Accept": "video/mp4,video/*,application/vnd.apple.mpegurl,*/*;q=0.8",
+        "Referer": "https://hongguoduanju.com/",
+    }
+    queue, seen, errors = [url], set(), []
+    while queue and len(seen) < 12:
+        candidate = queue.pop(0)
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        tmp = target + ".part"
         try:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-                "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
-                "Referer": "https://hongguoduanju.com/",
-            }
-            with requests.get(url, headers=headers, stream=True, allow_redirects=True, timeout=(20, 120)) as response:
+            is_hls = ".m3u8" in urllib.parse.urlparse(candidate).path.lower()
+            # HLS playlist ឱ្យ yt-dlp ដោះស្រាយ segments និង headers។
+            if is_hls:
+                raise _HLSUrl(candidate)
+            with requests.get(candidate, headers=headers, stream=True, allow_redirects=True,
+                              timeout=(20, 120)) as response:
                 response.raise_for_status()
                 ctype = (response.headers.get("Content-Type") or "").lower()
-                if "text/html" in ctype or "application/json" in ctype:
-                    raise RuntimeError(f"CDN បានផ្ញើ {ctype or 'HTML'} មិនមែនវីដេអូទេ (HTTP {response.status_code})")
-                written = 0
-                with open(target, "wb") as out:
+                final_url = response.url or candidate
+                if ".m3u8" in urllib.parse.urlparse(final_url).path.lower() or "mpegurl" in ctype:
+                    raise _HLSUrl(final_url)
+                if "json" in ctype:
+                    try:
+                        payload = response.json()
+                    except Exception:
+                        payload = None
+                    found = _hg_extract_media_urls(payload, final_url) if payload is not None else []
+                    queue.extend(x for x in found if x not in seen and x not in queue)
+                    if not found:
+                        errors.append("CDN API JSON មិនមាន URL media ក្នុង response")
+                    continue
+                if "text/html" in ctype or "application/xhtml" in ctype:
+                    errors.append("CDN បានផ្ញើ HTML ជំនួសវីដេអូ")
+                    continue
+                total = int(response.headers.get("Content-Length") or 0)
+                written, first = 0, b""
+                with open(tmp, "wb") as out:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
                         if not chunk:
                             continue
+                        if not first:
+                            first = chunk[:256]
                         out.write(chunk)
                         written += len(chunk)
-                if written > 1000:
-                    return target
-                raise RuntimeError("Direct link បានឯកសារទទេ ឬតូចពេក")
-        except Exception as exc:
-            errors.append("Direct HTTP: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
+                if written < 1000:
+                    raise RuntimeError("CDN បានផ្ញើឯកសារតូចពេក")
+                # កុំដាក់ JSON error payload ដែល server ផ្ញើជា octet-stream ចូល ZIP។
+                sniff = first.lstrip()
+                if sniff.startswith((b"{", b"[")):
+                    try:
+                        payload = json.loads(Path(tmp).read_text(encoding="utf-8"))
+                        found = _hg_extract_media_urls(payload, final_url)
+                        queue.extend(x for x in found if x not in seen and x not in queue)
+                        if not found:
+                            errors.append("CDN JSON មិនមាន URL វីដេអូ")
+                        continue
+                    except (ValueError, UnicodeDecodeError):
+                        raise RuntimeError("CDN បានផ្ញើ JSON មិនមែនវីដេអូ")
+                if sniff.startswith(b"<"):
+                    raise RuntimeError("CDN បានផ្ញើ HTML មិនមែនវីដេអូ")
+                os.replace(tmp, target)
+                return target
+        except _HLSUrl as hls:
             try:
-                if os.path.exists(target):
-                    os.remove(target)
+                import yt_dlp
+                base = os.path.join(folder, "episode")
+                opts = {
+                    "outtmpl": base + ".%(ext)s", "format": "best[ext=mp4]/best",
+                    "merge_output_format": "mp4", "quiet": True, "no_warnings": True,
+                    "noprogress": True, "noplaylist": True,
+                    "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
+                    "socket_timeout": 60, "retries": 5, "fragment_retries": 5,
+                    "http_headers": headers,
+                }
+                with yt_dlp.YoutubeDL(opts) as ydl:
+                    ydl.download([hls.url])
+                outputs = [os.path.join(folder, f) for f in os.listdir(folder)
+                           if f.startswith("episode.") and os.path.isfile(os.path.join(folder, f))
+                           and os.path.getsize(os.path.join(folder, f)) > 1000]
+                if outputs:
+                    found = max(outputs, key=os.path.getsize)
+                    if found != target:
+                        os.replace(found, target)
+                    return target
+                errors.append("yt-dlp មិនបានបង្កើតឯកសារពី HLS")
+            except Exception as exc:
+                errors.append("HLS/yt-dlp: " + str(exc)[:240])
+        except Exception as exc:
+            errors.append(re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
+        finally:
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
             except OSError:
                 pass
 
-    # HLS/m3u8 ឬ Direct HTTP បរាជ័យ: ប្រើ yt-dlp ដោយមិនយកកំហុស MAX_DOWNLOAD_MB ទូទៅមកបិទ។
+    # Fallback yt-dlp សម្រាប់ URL player/manifest ដែលវាអាចស្គាល់បាន។
     try:
         import yt_dlp
         base = os.path.join(folder, "episode")
         opts = {
-            "outtmpl": base + ".%(ext)s",
-            "format": "best[ext=mp4]/best",
-            "merge_output_format": "mp4",
-            "quiet": True,
-            "no_warnings": True,
-            "noprogress": True,
-            "noplaylist": True,
+            "outtmpl": base + ".%(ext)s", "format": "best[ext=mp4]/best",
+            "merge_output_format": "mp4", "quiet": True, "no_warnings": True,
+            "noprogress": True, "noplaylist": True,
             "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
-            "socket_timeout": 60,
-            "retries": 5,
-            "fragment_retries": 5,
-            "http_headers": {
-                "User-Agent": "Mozilla/5.0",
-                "Referer": "https://hongguoduanju.com/",
-            },
+            "socket_timeout": 60, "retries": 3, "fragment_retries": 3,
+            "http_headers": headers,
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
-        candidates = [
-            os.path.join(folder, fn) for fn in os.listdir(folder)
-            if fn.startswith("episode.") and os.path.isfile(os.path.join(folder, fn))
-        ]
-        candidates = [x for x in candidates if os.path.getsize(x) > 1000]
-        if candidates:
-            found = max(candidates, key=os.path.getsize)
+        outputs = [os.path.join(folder, f) for f in os.listdir(folder)
+                   if f.startswith("episode.") and os.path.isfile(os.path.join(folder, f))
+                   and os.path.getsize(os.path.join(folder, f)) > 1000]
+        if outputs:
+            found = max(outputs, key=os.path.getsize)
             if found != target:
                 os.replace(found, target)
             return target
-        errors.append("yt-dlp មិនបានបង្កើតឯកសារវីដេអូ")
     except Exception as exc:
-        errors.append("yt-dlp: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
-    raise RuntimeError(" | ".join(errors))
+        errors.append("yt-dlp fallback: " + str(exc)[:240])
+    raise RuntimeError(" | ".join(errors[-8:]) or "មិនអាចទាញយកវីដេអូបានទេ")
 
 
 def _hg_get(endpoint, params=None, timeout=45):
