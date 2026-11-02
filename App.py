@@ -8155,23 +8155,32 @@ with tab_drama:
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
                     _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
                     if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
-                        with st.spinner("កំពុងរៀបចំវីដេអូ..."):
-                            _current_meta = next((x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_hg_epnum)), {})
-                            _current_vid = _current_meta.get("vid") or _current_meta.get("video_id") or _current_meta.get("id")
-                            _hg_play = {}
-                            if _current_vid:
-                                try:
-                                    _page_play = _hg_player_page_info(_hg_selected["series_id"], _current_vid)
-                                    if _page_play.get("url"):
-                                        _hg_play = {"url": _page_play["url"], "ready": True, "source": "hongguo_player_page"}
-                                except Exception:
-                                    pass
-                            if not _hg_play.get("url"):
-                                _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
-                        if _hg_play.get("url"):
-                            st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
-                        else:
-                            st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
+                        _play_status = st.empty()
+                        try:
+                            with st.spinner("កំពុងរៀបចំវីដេអូ..."):
+                                _current_meta = next((x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_hg_epnum)), {})
+                                _current_vid = _current_meta.get("vid") or _current_meta.get("video_id") or _current_meta.get("id")
+                                _hg_play = {}
+                                _page_error = ""
+                                if _current_vid:
+                                    try:
+                                        _page_play = _hg_player_page_info(_hg_selected["series_id"], _current_vid)
+                                        if _page_play.get("url"):
+                                            _hg_play = {"url": _page_play["url"], "ready": True, "source": "hongguo_player_page"}
+                                    except Exception as _pe:
+                                        _page_error = str(_pe)[:220]
+                                if not _hg_play.get("url"):
+                                    try:
+                                        _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                                    except Exception as _api_play_error:
+                                        raise RuntimeError(str(_api_play_error) + (f" | Player page: {_page_error}" if _page_error else ""))
+                            if _hg_play.get("url"):
+                                st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
+                                _play_status.success(f"បានរកឃើញតំណភាគ {_hg_epnum}។")
+                            else:
+                                _play_status.error(f"រកមិនឃើញតំណវីដេអូភាគ {_hg_epnum} ទេ។ API មិនបានផ្ញើ URL មកវិញ។")
+                        except Exception as _play_error:
+                            _play_status.error(f"រៀបចំភាគ {_hg_epnum} មិនបាន៖ {_hg_error_khmer(_play_error)}")
                     _hg_saved = st.session_state.get(_hg_play_key)
                     if _hg_saved:
                         st.video(_hg_saved["url"])
@@ -8210,11 +8219,16 @@ with tab_drama:
                         _zip_dir = tempfile.mkdtemp(prefix="hongguo_zip_")
                         _zip_path = os.path.join(_zip_dir, "hongguo_episodes.zip")
                         _zip_ok, _zip_fail = [], []
-                        _zip_bar = st.progress(0, text="កំពុងរៀបចំភាគ...")
+                        _zip_bar = st.progress(0, text="កំពុងចាប់ផ្ដើមរៀបចំ ZIP...")
+                        _zip_live_status = st.empty()
+                        _zip_fail_live = st.container()
                         try:
                             with zipfile.ZipFile(_zip_path, "w", compression=zipfile.ZIP_STORED, allowZip64=True) as _zf:
                                 for _zi, _zep in enumerate(_zip_eps, start=1):
                                     _video_path = None
+                                    _episode_dir = None
+                                    _zip_live_status.info(f"🔎 កំពុងរកតំណ និងរៀបចំភាគ {_zep} ({_zi}/{len(_zip_eps)})...")
+                                    _zip_bar.progress((_zi - 1) / max(1, len(_zip_eps)), text=f"កំពុងដំណើរការភាគ {_zep} · {_zi}/{len(_zip_eps)}")
                                     try:
                                         _play_params = {
                                             "series_id": _hg_selected["series_id"],
@@ -8255,15 +8269,19 @@ with tab_drama:
                                         _zf.write(_video_path, f"Episode_{int(_zep):04d}.mp4")
                                         _zip_ok.append(int(_zep))
                                     except Exception as _ze:
-                                        _zip_fail.append(f"ភាគ {_zep}: {str(_ze)[:500]}")
+                                        _failure_text = f"ភាគ {_zep}: {_hg_error_khmer(_ze)}"
+                                        _zip_fail.append(_failure_text[:700])
+                                        # បង្ហាញ Error ភ្លាមៗ មិនរង់ចាំឱ្យ ZIP ចប់ទើបឃើញទេ។
+                                        with _zip_fail_live:
+                                            st.warning("⚠️ " + _failure_text[:650])
                                     finally:
                                         # សម្អាត temp folder ទោះបី download បរាជ័យមុនទទួលបាន path ក៏ដោយ។
-                                        if "_episode_dir" in locals() and _episode_dir:
+                                        if _episode_dir:
                                             shutil.rmtree(_episode_dir, ignore_errors=True)
                                             _episode_dir = None
-                                    _zip_bar.progress(_zi / max(1, len(_zip_eps)), text=f"បានរៀបចំ {_zi}/{len(_zip_eps)} ភាគ")
-                            _zip_bar.empty()
+                                    _zip_bar.progress(_zi / max(1, len(_zip_eps)), text=f"បានពិនិត្យ { _zi}/{len(_zip_eps)} ភាគ · ជោគជ័យ {_zip_ok.__len__()} · បរាជ័យ {len(_zip_fail)}")
                             if _zip_ok:
+                                _zip_live_status.success(f"បញ្ចប់! បានរៀបចំបាន {_zip_ok.__len__()} ភាគ និងបរាជ័យ {len(_zip_fail)} ភាគ។")
                                 st.session_state[f"_hg_zip_ready_{_hg_selected['series_id']}"] = {
                                     "path": _zip_path,
                                     "dir": _zip_dir,
@@ -8274,15 +8292,15 @@ with tab_drama:
                                 st.success(f"បានរៀបចំ ZIP ចំនួន {len(_zip_ok)} ភាគ។ ចុចប៊ូតុងខាងក្រោមដើម្បីទាញទៅ Downloads របស់ទូរស័ព្ទ។")
                             else:
                                 shutil.rmtree(_zip_dir, ignore_errors=True)
-                                st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
+                                _zip_live_status.error(f"មិនអាចទាញយកភាគណាមួយបានទេ។ បានពិនិត្យ {_zi if '_zi' in locals() else 0}/{len(_zip_eps)} ភាគ។ សូមមើល Error ខាងលើ។")
                             if _zip_fail:
-                                with st.expander(f"មើលភាគដែលបរាជ័យ ({len(_zip_fail)})"):
+                                with st.expander(f"ព័ត៌មានភាគដែលបរាជ័យ ({len(_zip_fail)})", expanded=True):
                                     for _err in _zip_fail:
                                         st.warning(_err)
                         except Exception as _zip_err:
                             _zip_bar.empty()
                             shutil.rmtree(_zip_dir, ignore_errors=True)
-                            st.error(f"រៀបចំ ZIP មិនបាន៖ {_hg_error_khmer(_zip_err)}")
+                            _zip_live_status.error(f"រៀបចំ ZIP មិនបាន៖ {_hg_error_khmer(_zip_err)}")
 
                     _zip_ready = st.session_state.get(f"_hg_zip_ready_{_hg_selected['series_id']}")
                     if _zip_ready and os.path.isfile(_zip_ready.get("path", "")):
