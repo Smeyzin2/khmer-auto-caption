@@ -7211,32 +7211,32 @@ def _hg_walk_dicts(value, max_nodes=30000):
             count += 1
 
 def _hg_player_page_info(series_id, vid=None):
-    """Read publicly playable episode metadata and main_url from the official player page."""
+    """Read public series metadata from /detail and playable media from /player."""
+    import html as _html_lib
     sid = str(series_id or "").strip()
     if not sid.isdigit():
         return {}
-    path = f"/player/{sid}" + (f"/{urllib.parse.quote(str(vid))}" if vid else "")
-    response = requests.get(_HG_WEB_BASE + path, headers=_HG_WEB_HEADERS, timeout=(12, 25))
-    response.raise_for_status()
-    if len(response.content) > 16 * 1024 * 1024:
-        raise RuntimeError("ទំព័រ Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
-    page = response.text
-    router = _hg_json_after_marker(page, "_ROUTER_DATA")
-    if not isinstance(router, (dict, list)):
-        # Some deployments serialize router data in a script tag without the literal marker.
-        router = _hg_json_after_marker(page, "routerData")
-    if not isinstance(router, (dict, list)):
-        return {}
-    dicts = list(_hg_walk_dicts(router))
-    detail = next((x for x in dicts if isinstance(x.get("series_name"), str) and ("vid_list" in x or "accessible_episode_cnt" in x)), {})
-    player = next((x for x in dicts if x.get("main_url") or x.get("video_player_info")), {})
-    if isinstance(player.get("video_player_info"), dict):
-        player = player["video_player_info"]
-    main_url = player.get("main_url") or player.get("backup_url")
-    if isinstance(main_url, dict):
-        main_url = main_url.get("url") or main_url.get("main_url")
-    if isinstance(main_url, list):
-        main_url = next((x for x in main_url if isinstance(x, str) and x.startswith("http")), "")
+
+    # Hongguo separates series metadata (/detail?series_id=...) from the
+    # current episode player (/player/{series_id}/{vid}). Do not assume that
+    # vid_list is embedded in the player route.
+    detail = {}
+    detail_url = _HG_WEB_BASE + "/detail?series_id=" + urllib.parse.quote(sid)
+    detail_resp = requests.get(detail_url, headers=_HG_WEB_HEADERS, timeout=(12, 25))
+    detail_resp.raise_for_status()
+    if len(detail_resp.content) > 16 * 1024 * 1024:
+        raise RuntimeError("ទំព័រព័ត៌មានរឿង Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
+    detail_html = detail_resp.text
+    detail_router = _hg_json_after_marker(detail_html, "_ROUTER_DATA")
+    if not isinstance(detail_router, (dict, list)):
+        detail_router = _hg_json_after_marker(detail_html, "routerData")
+    if isinstance(detail_router, (dict, list)):
+        for item in _hg_walk_dicts(detail_router):
+            candidate = item.get("seriesDetail") if isinstance(item.get("seriesDetail"), dict) else item
+            if isinstance(candidate, dict) and (candidate.get("series_name") or candidate.get("vid_list")):
+                detail = candidate
+                break
+
     vids = detail.get("vid_list") or []
     if isinstance(vids, str):
         try:
@@ -7245,25 +7245,67 @@ def _hg_player_page_info(series_id, vid=None):
             vids = []
     if not isinstance(vids, list):
         vids = []
+    normalized_vids = []
+    for entry in vids:
+        value = (entry.get("vid") or entry.get("video_id") or entry.get("id")) if isinstance(entry, dict) else entry
+        if value is not None and str(value).strip().isdigit():
+            normalized_vids.append(str(value).strip())
+
     try:
         accessible = int(detail.get("accessible_episode_cnt") or 0)
     except (TypeError, ValueError):
         accessible = 0
-    episodes = []
-    for i, entry in enumerate(vids, 1):
-        v = entry.get("vid") or entry.get("video_id") or entry.get("id") if isinstance(entry, dict) else entry
-        if v is None:
-            continue
-        episodes.append({"ep": i, "vid": str(v), "playable": bool(accessible and i <= accessible)})
+
+    selected_vid = str(vid or (normalized_vids[0] if normalized_vids else "")).strip()
+    player = {}
+    player_html = ""
+    if selected_vid and selected_vid.isdigit():
+        player_path = f"/player/{sid}/{urllib.parse.quote(selected_vid)}"
+    else:
+        player_path = f"/player/{sid}"
+    player_resp = requests.get(_HG_WEB_BASE + player_path, headers=_HG_WEB_HEADERS, timeout=(12, 25))
+    player_resp.raise_for_status()
+    if len(player_resp.content) > 16 * 1024 * 1024:
+        raise RuntimeError("ទំព័រ Player Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
+    player_html = player_resp.text
+    player_router = _hg_json_after_marker(player_html, "_ROUTER_DATA")
+    if not isinstance(player_router, (dict, list)):
+        player_router = _hg_json_after_marker(player_html, "routerData")
+    if isinstance(player_router, (dict, list)):
+        dicts = list(_hg_walk_dicts(player_router))
+        player = next((x for x in dicts if isinstance(x.get("video_player_info"), dict) or x.get("main_url") or x.get("backup_url")), {})
+        if isinstance(player.get("video_player_info"), dict):
+            player = player["video_player_info"]
+
+    media_url = player.get("main_url") or player.get("backup_url") or player.get("url")
+    if isinstance(media_url, dict):
+        media_url = media_url.get("url") or media_url.get("main_url") or media_url.get("src")
+    if isinstance(media_url, list):
+        media_url = next((x for x in media_url if isinstance(x, str) and x.startswith(("http://", "https://"))), "")
+
+    # Fallback for page variants that expose the public media URL in a video tag.
+    if not media_url:
+        match = re.search(r'<video\b[^>]*\bsrc=["\']([^"\']+)', player_html, flags=re.I)
+        if match:
+            media_url = urllib.parse.urljoin(_HG_WEB_BASE, _html_lib.unescape(match.group(1)))
+        if not media_url:
+            match = re.search(r'<source\b[^>]*\bsrc=["\']([^"\']+)', player_html, flags=re.I)
+            if match:
+                media_url = urllib.parse.urljoin(_HG_WEB_BASE, _html_lib.unescape(match.group(1)))
+
+    episodes = [
+        {"ep": i, "vid": value, "playable": bool(accessible and i <= accessible)}
+        for i, value in enumerate(normalized_vids, 1)
+    ]
     return {
         "name": detail.get("series_name") or detail.get("title") or "",
-        "cover": detail.get("cover") or detail.get("cover_url") or detail.get("poster") or "",
-        "intro": detail.get("intro") or detail.get("description") or detail.get("desc") or "",
-        "episode_cnt": len(vids) or detail.get("episode_count") or "",
-        "listed_cnt": accessible or len(vids),
+        "cover": detail.get("series_cover") or detail.get("cover") or detail.get("cover_url") or detail.get("poster") or "",
+        "intro": detail.get("series_intro") or detail.get("intro") or detail.get("description") or detail.get("desc") or "",
+        "episode_cnt": detail.get("episode_cnt") or len(episodes) or detail.get("episode_count") or "",
+        "listed_cnt": accessible or len(episodes),
         "accessible_episode_cnt": accessible,
         "episodes": episodes,
-        "url": str(main_url or "").strip(),
+        "url": str(media_url or "").strip(),
     }
 
 def _hg_get_stream_ready(url, headers, max_wait=240):
