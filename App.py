@@ -7204,6 +7204,7 @@ def _hg_extract_series_id(value):
 # ============================ Hongguo VIP Access ============================
 # All VIP checks and management use the server-only Supabase service key.
 _HG_ADMIN_USERNAME = str(get_secret("HONGGUO_ADMIN_USERNAME", "admin")).strip().lower()
+_HG_ADMIN_PASSWORD = str(get_secret("HONGGUO_ADMIN_PASSWORD", "")).strip()
 
 def _hg_supabase_config():
     _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
@@ -7403,54 +7404,99 @@ def _hg_admin_panel():
 
 
 def _hg_vip_gate():
-    # Admin ចូលតាម VIP username ដាច់ដោយឡែក មិនប្រើ Gmail/OAuth ទៀតទេ។
-    _browser_state=_hg_remember_browser()
-    _browser_token=str((_browser_state or {}).get("token","")).strip()
-    _vip_name=str(st.session_state.get("_hg_vip_username","")).strip()
+    # Admin ចូលដោយ username/password ផ្ទាល់ខ្លួនពី server Variables/Secrets។
+    # មិនត្រូវការគណនី Google ឬ VIP row មុនទេ ដូច្នេះអាចបង្កើត VIP ដំបូងបាន។
+    _browser_state = _hg_remember_browser()
+    _browser_token = str((_browser_state or {}).get("token", "")).strip()
+    _admin_ok = bool(st.session_state.get("_hg_admin_authenticated", False))
+
+    if _admin_ok:
+        st.success("👑 Admin Access — គ្រប់គ្រង និងបង្កើតគណនី VIP")
+        with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=True):
+            _hg_admin_panel()
+        if st.button("ចាកចេញពី Admin", key="hg_admin_logout"):
+            st.session_state.pop("_hg_admin_authenticated", None)
+            st.rerun()
+        return True
+
+    with st.expander("👑 ចូល Admin / បង្កើតគណនី VIP", expanded=False):
+        if not _HG_ADMIN_PASSWORD:
+            st.warning("អ្នកគ្រប់គ្រងត្រូវកំណត់ HONGGUO_ADMIN_PASSWORD ក្នុង Connect Cloud → Settings → Variables ជាមុន។")
+        else:
+            with st.form("hg_admin_login_form"):
+                _admin_user_input = st.text_input("Admin Username", value="admin", key="hg_admin_login_user")
+                _admin_pass_input = st.text_input("Admin Password", type="password", key="hg_admin_login_pass")
+                _admin_submit = st.form_submit_button("ចូល Admin", use_container_width=True)
+            if _admin_submit:
+                _valid_admin_user = hmac.compare_digest(
+                    str(_admin_user_input or "").strip().lower(), _HG_ADMIN_USERNAME
+                )
+                _valid_admin_pass = hmac.compare_digest(
+                    str(_admin_pass_input or ""), _HG_ADMIN_PASSWORD
+                )
+                if _valid_admin_user and _valid_admin_pass:
+                    st.session_state["_hg_admin_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Admin Username ឬ Password មិនត្រឹមត្រូវ។")
+
+    _vip_name = str(st.session_state.get("_hg_vip_username", "")).strip()
     try:
-        _vip_row=_hg_get_vip_user(_vip_name) if _vip_name else (_hg_find_remembered_vip(_browser_token) if _browser_token else None)
+        _vip_row = _hg_get_vip_user(_vip_name) if _vip_name else (
+            _hg_find_remembered_vip(_browser_token) if _browser_token else None
+        )
         if _vip_row and _hg_vip_is_valid(_vip_row):
-            _vip_name=str(_vip_row.get("username",_vip_name))
-            st.session_state["_hg_vip_username"]=_vip_name
-            if _vip_name.strip().lower() == _HG_ADMIN_USERNAME:
-                st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-                with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
-                    _hg_admin_panel()
-            else:
-                st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
-            if st.button("ចាកចេញពី VIP",key="hg_vip_logout"):
-                _hg_sb_request("PATCH",params={"id":"eq."+str(_vip_row["id"])},payload={"remember_token_hash":None})
-                st.session_state.pop("_hg_vip_username",None)
+            _vip_name = str(_vip_row.get("username", _vip_name))
+            st.session_state["_hg_vip_username"] = _vip_name
+            st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
+            if st.button("ចាកចេញពី VIP", key="hg_vip_logout"):
+                _hg_sb_request(
+                    "PATCH", params={"id": "eq." + str(_vip_row["id"])},
+                    payload={"remember_token_hash": None}
+                )
+                st.session_state.pop("_hg_vip_username", None)
                 _hg_remember_browser(clear=True)
                 st.rerun()
             return True
-        if _browser_token: _hg_remember_browser(clear=True)
-        if _vip_name: st.session_state.pop("_hg_vip_username",None)
-        if _vip_row: st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
+        if _browser_token:
+            _hg_remember_browser(clear=True)
+        if _vip_name:
+            st.session_state.pop("_hg_vip_username", None)
+        if _vip_row:
+            st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
     except Exception as err:
         st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {err}")
         return False
+
     st.markdown("### 🔒 Hongguo VIP")
     st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។")
     with st.form("hg_vip_login_form"):
-        u=st.text_input("Username",key="hg_vip_login_username")
-        pw=st.text_input("Password",type="password",key="hg_vip_login_password")
-        remember=st.checkbox("ចងចាំការចូល 30 ថ្ងៃ (Remember me)",value=True,key="hg_vip_remember_30")
-        go=st.form_submit_button("ចូលប្រើ Hongguo VIP",use_container_width=True)
+        u = st.text_input("Username", key="hg_vip_login_username")
+        pw = st.text_input("Password", type="password", key="hg_vip_login_password")
+        remember = st.checkbox(
+            "ចងចាំការចូល 30 ថ្ងៃ (Remember me)", value=True, key="hg_vip_remember_30"
+        )
+        go = st.form_submit_button("ចូលប្រើ Hongguo VIP", use_container_width=True)
     if go:
         try:
-            row=_hg_get_vip_user(u)
-            if _hg_vip_is_valid(row) and _hg_password_verify(pw,row.get("password_hash","")):
-                st.session_state["_hg_vip_username"]=row["username"]
+            row = _hg_get_vip_user(u)
+            if _hg_vip_is_valid(row) and _hg_password_verify(pw, row.get("password_hash", "")):
+                st.session_state["_hg_vip_username"] = row["username"]
                 if remember:
-                    token=secrets.token_urlsafe(32)
-                    _hg_sb_request("PATCH",params={"id":"eq."+str(row["id"])},payload={"remember_token_hash":_hg_token_hash(token)})
+                    token = secrets.token_urlsafe(32)
+                    _hg_sb_request(
+                        "PATCH", params={"id": "eq." + str(row["id"])},
+                        payload={"remember_token_hash": _hg_token_hash(token)}
+                    )
                     _hg_remember_browser(token_to_save=token)
-                else: _hg_remember_browser(clear=True)
+                else:
+                    _hg_remember_browser(clear=True)
                 st.rerun()
             st.error("Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។")
-        except Exception as err: st.error(f"មិនអាចចូល VIP បាន៖ {err}")
+        except Exception as err:
+            st.error(f"មិនអាចចូល VIP បាន៖ {err}")
     return False
+
 
 with tab_drama:
     _hg_access = _hg_vip_gate()
