@@ -7320,6 +7320,13 @@ _HG_ADMIN_EMAIL = "smeyai2000@gmail.com"
 
 def _hg_supabase_config():
     _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
+    # SUPABASE_URL must be the project root, not a REST endpoint.
+    # Accept a pasted URL ending in /rest/v1 and normalize it to avoid
+    # requesting /rest/v1/rest/v1/... (PostgREST PGRST125).
+    for _suffix in ("/rest/v1", "/rest/v1/"):
+        if _url.lower().endswith(_suffix):
+            _url = _url[:-len(_suffix)].rstrip("/")
+            break
     _key = str(get_secret("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
     if not _key:
         # Support the newer Supabase secret-key name if the owner used it.
