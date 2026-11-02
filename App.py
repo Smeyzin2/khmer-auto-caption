@@ -7244,6 +7244,38 @@ def _hg_categories():
             {"slug":"comic-drama", "name":"漫剧", "children":[] }]
 
 
+def _hg_flat_categories(categories):
+    """Normalize Hongguo category data into {display_label: category_slug}."""
+    flat = {}
+    aliases = {
+        "real-drama": "🎬 រឿងសម្ដែង",
+        "comic-drama": "🎨 រឿងគំនូរជីវចល",
+        "真人剧": "🎬 រឿងសម្ដែង",
+        "漫剧": "🎨 រឿងគំនូរជីវចល",
+    }
+
+    def walk(items, parent=""):
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            slug = str(item.get("slug") or item.get("category") or item.get("id") or "").strip()
+            raw_name = str(item.get("name") or item.get("title") or slug).strip()
+            if not slug:
+                continue
+            label = aliases.get(slug, aliases.get(raw_name, raw_name))
+            if parent and label == raw_name:
+                label = f"{parent} / {label}"
+            flat[label] = slug
+            children = (item.get("children") or item.get("child")
+                        or item.get("sub_categories") or item.get("subCategories") or [])
+            walk(children, label)
+
+    walk(categories)
+    return flat
+
+
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_category_list(category, page=1):
     slug = urllib.parse.quote(str(category).strip(), safe="/-")
@@ -7270,61 +7302,22 @@ def _hg_search(keyword, page=1):
 def _hg_detail(series_id):
     loader = _hg_page_data(f"{_HG_PUBLIC_BASE}/detail?series_id={urllib.parse.quote(str(series_id))}")
     data = loader.get("detail_page") or _hg_find_dict(loader, {"seriesDetail"})
-    detail = data.get("seriesDetail") if isinstance(data, dict) and isinstance(data.get("seriesDetail"), dict) else (data if isinstance(data, dict) else {})
+    detail = data.get("seriesDetail") if isinstance(data.get("seriesDetail"), dict) else data
+    episodes = detail.get("episodes") or detail.get("episode_list") or detail.get("episodeList") or []
+    normalized=[]
+    for i, ep in enumerate(episodes if isinstance(episodes,list) else []):
+        if not isinstance(ep,dict): continue
+        epno = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or i+1
+        try: epno=int(epno)
+        except (TypeError,ValueError): epno=i+1
+        url = ep.get("url") or ep.get("play_url") or ep.get("video_url") or ""
+        normalized.append({**ep,"ep":epno,"playable":bool(url),"url":url})
+    return {**detail,"name":detail.get("series_name") or detail.get("name") or "រឿង Hongguo",
+            "cover":detail.get("series_cover") or detail.get("cover") or "",
+            "intro":detail.get("series_intro") or detail.get("intro") or detail.get("description") or "",
+            "episode_cnt":detail.get("episode_count") or len(normalized),
+            "listed_cnt":len(normalized),"episodes":normalized}
 
-    # Hongguo may place episode arrays under different nested keys in SSR data.
-    episode_keys = {"episodes", "episode_list", "episodeList", "ep_list", "video_list", "chapter_list"}
-    candidates = []
-
-    def scan(node, depth=0):
-        if depth > 10:
-            return
-        if isinstance(node, dict):
-            for key, value in node.items():
-                if str(key).lower() in episode_keys and isinstance(value, list) and value:
-                    score = sum(1 for x in value if isinstance(x, dict) and any(
-                        k in x for k in ("ep", "episode", "episode_no", "index", "play_url", "video_url", "url", "name", "title")
-                    ))
-                    candidates.append((score, len(value), value))
-                if isinstance(value, (dict, list)):
-                    scan(value, depth + 1)
-        elif isinstance(node, list):
-            for value in node[:500]:
-                if isinstance(value, (dict, list)):
-                    scan(value, depth + 1)
-
-    scan(loader)
-    direct = detail.get("episodes") or detail.get("episode_list") or detail.get("episodeList") or []
-    if isinstance(direct, list) and direct:
-        episodes = direct
-    elif candidates:
-        episodes = max(candidates, key=lambda x: (x[0], x[1]))[2]
-    else:
-        episodes = []
-
-    normalized = []
-    for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
-        if isinstance(ep, (str, int)):
-            normalized.append({"ep": i + 1, "title": str(ep), "playable": False, "url": ""})
-            continue
-        if not isinstance(ep, dict):
-            continue
-        epno = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or ep.get("sort") or i + 1
-        try:
-            epno = int(epno)
-        except (TypeError, ValueError):
-            epno = i + 1
-        url = ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("playUrl") or ""
-        normalized.append({**ep, "ep": epno, "playable": str(url).startswith(("https://", "http://")), "url": url})
-
-    count = detail.get("episode_count") or detail.get("episode_cnt") or detail.get("total_episode") or len(normalized)
-    return {**detail,
-            "name": detail.get("series_name") or detail.get("name") or "រឿង Hongguo",
-            "cover": detail.get("series_cover") or detail.get("cover") or "",
-            "intro": detail.get("series_intro") or detail.get("intro") or detail.get("description") or "",
-            "episode_cnt": count,
-            "listed_cnt": len(normalized),
-            "episodes": normalized}
 
 def _hg_get(endpoint, params=None, timeout=45):
     # Public catalog adapter. Playback URLs are only accepted when explicitly present in public page data.
@@ -7723,11 +7716,11 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_categories = _hg_categories()
+                _hg_category_items = _hg_categories()
             except Exception as _cat_err:
-                _hg_categories = []
+                _hg_category_items = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-            _hg_cat_map = _hg_flat_categories(_hg_categories)
+            _hg_cat_map = _hg_flat_categories(_hg_category_items)
             _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
@@ -7799,11 +7792,10 @@ with tab_drama:
                     _hg_d = _hg_detail(_hg_selected["series_id"])
                 if _hg_d.get("intro"):
                     st.write(_hg_d["intro"])
-                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict)]
+                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
                 if not _hg_eps:
-                    st.info(f"គេហទំព័រ Hongguo មិនបានបង្ហាញបញ្ជីភាគក្នុងទិន្នន័យសាធារណៈទេ។ ចំនួនភាគដែលគេហទំព័ររាយការណ៍៖ {_hg_d.get('episode_cnt') or 'មិនបញ្ជាក់'}។")
+                    st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
                 else:
-                    st.caption(f"បានរកឃើញ {len(_hg_eps)} ភាគក្នុងទិន្នន័យសាធារណៈ។ ភាគដែលគ្មានតំណវីដេអូ មិនអាចចាក់/ទាញយកពី App នេះបានទេ។")
                     _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
                     _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
                     _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
@@ -7832,10 +7824,9 @@ with tab_drama:
 
                     # Multi-episode ZIP: prepare on server disk, then browser downloads one ZIP.
                     st.markdown("#### 📦 ទាញយកច្រើនភាគទៅ Downloads")
-                    _hg_playable_ep_map = {label: ep for label, ep in _hg_ep_map.items() if any(int(e.get("ep", 0)) == ep and e.get("playable") for e in _hg_eps)}
                     _hg_zip_labels = st.multiselect(
-                        "ជ្រើសរើសភាគដែលមានតំណវីដេអូសម្រាប់ទាញយកជា ZIP",
-                        list(_hg_playable_ep_map.keys()),
+                        "ជ្រើសរើសភាគសម្រាប់ទាញយកជា ZIP",
+                        list(_hg_ep_map.keys()),
                         default=[],
                         key=f"hg_zip_eps_{_hg_selected['series_id']}"
                     )
