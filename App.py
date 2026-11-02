@@ -1736,37 +1736,89 @@ class _HLSUrl(Exception):
         self.url = url
 
 
-def _hg_extract_media_urls(payload, base_url, depth=0):
-    """ស្វែងរក URL media ក្នុង JSON API response ដោយមិនប៉ះ endpoint/auth។"""
-    if depth > 6:
+def _hg_extract_media_urls(payload, base_url, depth=0, _seen=None):
+    """ស្វែងរក media URL ក្នុង JSON/CDN response រួមទាំង JSON ដែលដាក់ជាអក្សរ។"""
+    if depth > 10:
         return []
+    if _seen is None:
+        _seen = set()
     found = []
     media_keys = {
         "url", "play", "playurl", "play_url", "video", "video_url",
-        "videourl", "main_url", "mainurl", "src", "download_url",
-        "downloadurl", "m3u8", "mp4", "hdplay", "play_addr",
+        "videourl", "media_url", "mediaurl", "main_url", "mainurl",
+        "src", "src_url", "download_url", "downloadurl", "m3u8",
+        "mp4", "hdplay", "play_addr", "playaddr", "backup_url",
+        "stream_url", "streamurl", "master_url", "file_url", "fileurl",
     }
-    if isinstance(payload, dict):
-        for key, value in payload.items():
-            k = str(key).lower().replace("-", "_")
-            if isinstance(value, str) and (k in media_keys or k.endswith("_url")):
-                candidate = value.strip()
-                if candidate.startswith("//"):
-                    candidate = "https:" + candidate
-                elif candidate.startswith("/"):
-                    candidate = urllib.parse.urljoin(base_url, candidate)
-                if candidate.startswith(("http://", "https://")) and candidate not in found:
-                    found.append(candidate)
-            elif isinstance(value, (dict, list)):
-                for candidate in _hg_extract_media_urls(value, base_url, depth + 1):
-                    if candidate not in found:
-                        found.append(candidate)
-    elif isinstance(payload, list):
-        for item in payload[:100]:
-            for candidate in _hg_extract_media_urls(item, base_url, depth + 1):
-                if candidate not in found:
-                    found.append(candidate)
-    return found[:30]
+
+    def add_url(raw):
+        raw = str(raw or "").strip().strip('\"\'')
+        if not raw:
+            return
+        raw = raw.replace("\\/", "/")
+        if raw.startswith('//'):
+            raw = 'https:' + raw
+        elif raw.startswith('/'):
+            raw = urllib.parse.urljoin(base_url, raw)
+        elif raw.startswith(('http%3A', 'https%3A', 'http%3a', 'https%3a')):
+            raw = urllib.parse.unquote(raw)
+        if raw.startswith(('http://', 'https://')) and raw not in found:
+            found.append(raw)
+
+    def walk(obj, level):
+        if level > 10 or len(found) >= 40:
+            return
+        if isinstance(obj, dict):
+            for key, value in obj.items():
+                norm = re.sub(r'[^a-z0-9]', '', str(key).lower())
+                if isinstance(value, str):
+                    if norm in {re.sub(r'[^a-z0-9]', '', x) for x in media_keys} or norm.endswith('url'):
+                        add_url(value)
+                    # CDN sometimes wraps the real payload as a JSON string.
+                    stripped = value.strip()
+                    if stripped.startswith(('{', '[')) and stripped not in _seen:
+                        _seen.add(stripped)
+                        try:
+                            walk(json.loads(stripped), level + 1)
+                        except Exception:
+                            pass
+                    # Also catch URLs nested in serialized strings.
+                    for match in re.findall(r'https?:(?:\\?/){2}[^\s\"\'<>]+', value):
+                        add_url(match.replace("\\/", "/"))
+                elif isinstance(value, (dict, list)):
+                    walk(value, level + 1)
+        elif isinstance(obj, list):
+            for value in obj[:500]:
+                if isinstance(value, str):
+                    stripped = value.strip()
+                    if stripped.startswith(('{', '[')) and stripped not in _seen:
+                        _seen.add(stripped)
+                        try:
+                            walk(json.loads(stripped), level + 1)
+                        except Exception:
+                            pass
+                    for match in re.findall(r'https?:(?:\\?/){2}[^\s\"\'<>]+', value):
+                        add_url(match.replace("\\/", "/"))
+                elif isinstance(value, (dict, list)):
+                    walk(value, level + 1)
+
+    walk(payload, depth)
+    return found[:40]
+
+
+def _hg_json_error_hint(payload):
+    """បង្ហាញ code/message ពី CDN ដើម្បីដឹងមូលហេតុ ប៉ុន្តែមិនបង្ហាញ token ឬ URL។"""
+    if not isinstance(payload, dict):
+        return ""
+    parts = []
+    for key in ("code", "status", "errno", "msg", "message", "error", "detail"):
+        value = payload.get(key)
+        if isinstance(value, (str, int, float)) and str(value).strip():
+            value = re.sub(r'https?://\S+', '[link]', str(value))
+            parts.append(f"{key}={value[:100]}")
+        if len(parts) >= 3:
+            break
+    return "; ".join(parts)
 
 
 def download_video(url, path, progress):
@@ -7328,9 +7380,11 @@ def _hg_download_episode_url(url, folder):
                     except Exception:
                         payload = None
                     found = _hg_extract_media_urls(payload, final_url) if payload is not None else []
-                    queue.extend(x for x in found if x not in seen and x not in queue)
-                    if not found:
-                        errors.append("CDN API JSON មិនមាន URL media ក្នុង response")
+                    if found:
+                        queue.extend(x for x in found if x not in seen and x not in queue)
+                    else:
+                        hint = _hg_json_error_hint(payload)
+                        errors.append("CDN API JSON គ្មាន URL media ក្នុង response" + (f" ({hint})" if hint else ""))
                     continue
                 if "text/html" in ctype or "application/xhtml" in ctype:
                     errors.append("CDN បានផ្ញើ HTML ជំនួសវីដេអូ")
@@ -7355,7 +7409,10 @@ def _hg_download_episode_url(url, folder):
                         found = _hg_extract_media_urls(payload, final_url)
                         queue.extend(x for x in found if x not in seen and x not in queue)
                         if not found:
-                            errors.append("CDN JSON មិនមាន URL វីដេអូ")
+                            hint = _hg_json_error_hint(payload)
+                            errors.append("CDN JSON គ្មាន URL វីដេអូ" + (f" ({hint})" if hint else ""))
+                        else:
+                            queue.extend(x for x in found if x not in seen and x not in queue)
                         continue
                     except (ValueError, UnicodeDecodeError):
                         raise RuntimeError("CDN បានផ្ញើ JSON មិនមែនវីដេអូ")
