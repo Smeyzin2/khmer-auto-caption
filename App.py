@@ -7398,16 +7398,33 @@ def _hg_resolve_episode_stream_url(url, max_wait=75, status_box=None):
                 candidate, headers=headers, stream=True, allow_redirects=True,
                 timeout=(8, 20),
             )
-            if response.status_code in (202, 503):
+            if response.status_code == 202:
                 retry = response.headers.get("Retry-After", "3")
                 try:
                     delay = max(1.0, min(float(retry), 8.0))
                 except (TypeError, ValueError):
                     delay = 3.0
-                last_note = f"HTTP {response.status_code}"
+                last_note = "HTTP 202: Stream កំពុងបង្កើត"
                 response.close()
                 if status_box is not None:
-                    status_box.info(f"វីដេអូកំពុងបង្កើតលើ Server ({last_note}) — រង់ចាំ {int(delay)} វិនាទី...")
+                    status_box.info(f"{last_note} — រង់ចាំ {int(delay)} វិនាទី...")
+                time.sleep(delay)
+                queue.append(candidate)
+                continue
+            if response.status_code == 503:
+                retry = response.headers.get("Retry-After", "3")
+                try:
+                    delay = max(1.0, min(float(retry), 8.0))
+                except (TypeError, ValueError):
+                    delay = 3.0
+                try:
+                    body = response.text[:240]
+                except Exception:
+                    body = ""
+                last_note = "HTTP 503" + (f": {body}" if body else "")
+                response.close()
+                if status_box is not None:
+                    status_box.warning(f"Server កំពុងពេញ ឬ Stream មានបញ្ហា (503) — សាកម្ដងទៀតក្នុង {int(delay)} វិនាទី...")
                 time.sleep(delay)
                 queue.append(candidate)
                 continue
@@ -7443,8 +7460,8 @@ def _hg_resolve_episode_stream_url(url, max_wait=75, status_box=None):
         except requests.RequestException as exc:
             last_note = str(exc)[:180]
     raise RuntimeError(
-        "រកឃើញភាគ ប៉ុន្តែ Stream មិនទាន់អាចចាក់បាន។ "
-        + (last_note or "សូមសាកម្ដងទៀត។")
+        "រកឃើញភាគ ប៉ុន្តែ Stream មិនអាចចាក់បាននៅពេលនេះ។ "
+        + (last_note or "សូមសាកម្ដងទៀតក្រោយបន្តិច។")
     )
 
 
@@ -8237,7 +8254,7 @@ with tab_drama:
                                 "ep": _hg_epnum,
                                 "q": _hg_quality,
                                 "codec": _hg_codec,
-                                "mode": "file",
+                                "mode": "pipe",
                             })
                             _video_url = str((_hg_play or {}).get("url") or "").strip()
                             if not _video_url:
@@ -8251,6 +8268,7 @@ with tab_drama:
                             st.session_state[_hg_play_key] = {
                                 "url": _video_url,
                                 "ready": True,
+                                "stream_mode": (_hg_play or {}).get("stream_mode") or "pipe",
                                 "source": "resolved_media_stream",
                             }
                             _play_status.success(f"បានរកឃើញ Stream ភាគ {_hg_epnum}។ អាចចាក់វីដេអូបាន។")
@@ -8318,8 +8336,10 @@ with tab_drama:
                                         _play_params = {
                                             "series_id": _hg_selected["series_id"],
                                             "ep": _zep, "q": _hg_quality, "codec": _hg_codec,
-                                            "mode": "file"
+                                            "mode": "pipe"
                                         }
+                                        # Pipe mode starts streaming immediately and avoids waiting
+                                        # for a separately generated file artifact.
                                         # Always request the episode-specific media URL from the play API.
                                         # The player page main_url may be a player bootstrap URL, not a video file.
                                         _play_data = _hg_get("play", _play_params)
