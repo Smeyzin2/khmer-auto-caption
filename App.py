@@ -8156,35 +8156,60 @@ with tab_drama:
                     _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
                     if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
                         _play_status = st.empty()
+                        _preview_dir = None
                         try:
-                            with st.spinner("កំពុងរៀបចំវីដេអូ..."):
-                                _current_meta = next((x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_hg_epnum)), {})
-                                _current_vid = _current_meta.get("vid") or _current_meta.get("video_id") or _current_meta.get("id")
-                                _hg_play = {}
-                                _page_error = ""
-                                if _current_vid:
-                                    try:
-                                        _page_play = _hg_player_page_info(_hg_selected["series_id"], _current_vid)
-                                        if _page_play.get("url"):
-                                            _hg_play = {"url": _page_play["url"], "ready": True, "source": "hongguo_player_page"}
-                                    except Exception as _pe:
-                                        _page_error = str(_pe)[:220]
-                                if not _hg_play.get("url"):
-                                    try:
-                                        _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
-                                    except Exception as _api_play_error:
-                                        raise RuntimeError(str(_api_play_error) + (f" | Player page: {_page_error}" if _page_error else ""))
-                            if _hg_play.get("url"):
-                                st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
-                                _play_status.success(f"បានរកឃើញតំណភាគ {_hg_epnum}។")
-                            else:
-                                _play_status.error(f"រកមិនឃើញតំណវីដេអូភាគ {_hg_epnum} ទេ។ API មិនបានផ្ញើ URL មកវិញ។")
+                            # Do not use the player's main_url as a media URL: it can be a player/CDN
+                            # bootstrap URL, which browsers show as a blank 0:00 video.
+                            with st.spinner("កំពុងទាញយក និងរៀបចំវីដេអូសម្រាប់ចាក់..."):
+                                _hg_play = _hg_get("play", {
+                                    "series_id": _hg_selected["series_id"],
+                                    "ep": _hg_epnum,
+                                    "q": _hg_quality,
+                                    "codec": _hg_codec,
+                                    "mode": "file",
+                                })
+                                _video_url = str((_hg_play or {}).get("url") or "").strip()
+                                if not _video_url:
+                                    raise RuntimeError(
+                                        "API រកឃើញភាគ ប៉ុន្តែមិនបានផ្ដល់ URL វីដេអូសម្រាប់ចាក់ "
+                                        f"(ready={(_hg_play or {}).get('ready')})"
+                                    )
+                                _preview_dir = tempfile.mkdtemp(prefix="hg_preview_")
+                                _preview_path = _hg_download_episode_url(_video_url, _preview_dir)
+                                if not os.path.isfile(_preview_path) or os.path.getsize(_preview_path) < 1000:
+                                    raise RuntimeError("បានទាញយកតំណ ប៉ុន្តែឯកសារវីដេអូមិនពេញលេញ។")
+                            # Remove the previous preview file only after the new one is ready.
+                            _old_preview = st.session_state.get(_hg_play_key, {})
+                            _old_dir = _old_preview.get("preview_dir") if isinstance(_old_preview, dict) else None
+                            if _old_dir and _old_dir != _preview_dir:
+                                shutil.rmtree(_old_dir, ignore_errors=True)
+                            st.session_state[_hg_play_key] = {
+                                "url": _video_url,
+                                "local_path": _preview_path,
+                                "preview_dir": _preview_dir,
+                                "ready": True,
+                                "source": "downloaded_media_file",
+                            }
+                            _play_status.success(f"បានទាញយក និងរៀបចំវីដេអូភាគ {_hg_epnum} រួចរាល់។")
                         except Exception as _play_error:
-                            _play_status.error(f"រៀបចំភាគ {_hg_epnum} មិនបាន៖ {_hg_error_khmer(_play_error)}")
+                            if _preview_dir:
+                                shutil.rmtree(_preview_dir, ignore_errors=True)
+                            _play_status.error(f"រកឃើញភាគ {_hg_epnum} ប៉ុន្តែចាក់មិនបាន៖ {_hg_error_khmer(_play_error)}")
                     _hg_saved = st.session_state.get(_hg_play_key)
                     if _hg_saved:
-                        st.video(_hg_saved["url"])
-                        st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
+                        _local_preview = _hg_saved.get("local_path")
+                        if _local_preview and os.path.isfile(_local_preview):
+                            st.video(_local_preview)
+                            with open(_local_preview, "rb") as _vf:
+                                st.download_button(
+                                    "⬇️ ទាញយកវីដេអូភាគនេះ",
+                                    data=_vf,
+                                    file_name=f"Hongguo_Episode_{int(_hg_epnum):04d}.mp4",
+                                    mime="video/mp4",
+                                    use_container_width=True,
+                                )
+                        else:
+                            st.warning("មិនមានឯកសារវីដេអូក្នុងម៉ាស៊ីនមេទេ។ សូមចុចរៀបចំភាគនេះម្ដងទៀត។")
                         if _hg_saved.get("ready") is False:
                             st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
                         if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
@@ -8235,19 +8260,9 @@ with tab_drama:
                                             "ep": _zep, "q": _hg_quality, "codec": _hg_codec,
                                             "mode": "file"
                                         }
-                                        _play_data = {}
-                                        # Prefer the official player page's direct main_url for an accessible episode.
-                                        _ep_meta = next((x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_zep)), {})
-                                        _ep_vid = _ep_meta.get("vid") or _ep_meta.get("video_id") or _ep_meta.get("id")
-                                        if _ep_vid:
-                                            try:
-                                                _page_data = _hg_player_page_info(_hg_selected["series_id"], _ep_vid)
-                                                if _page_data.get("url"):
-                                                    _play_data = {"url": _page_data["url"], "ready": True, "source": "hongguo_player_page"}
-                                            except Exception:
-                                                pass
-                                        if not _play_data.get("url"):
-                                            _play_data = _hg_get("play", _play_params)
+                                        # Always request the episode-specific media URL from the play API.
+                                        # The player page main_url may be a player bootstrap URL, not a video file.
+                                        _play_data = _hg_get("play", _play_params)
                                         # ready=false មិនមែនជាកំហុសទេ៖ ឯកសារ file mode
                                         # ចាប់ផ្ដើមបង្កើតនៅពេល GET URL ផ្ទាល់។ _hg_get_stream_ready()
                                         # នឹងគោរព HTTP 202/503 និង Retry-After រហូតដល់ MP4 រួចរាល់។
