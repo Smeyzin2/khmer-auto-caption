@@ -7054,6 +7054,34 @@ _HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRE
 _HG_API_BASE = "https://www.xiaoyingapi.com"
 _HG_API_PREFIX = "/api/dramas/hongguo"
 
+def _hg_download_episode_url(url, folder):
+    """ទាញ Hongguo MP4/HLS (m3u8) ដោយ yt-dlp ជាមុន ហើយ fallback ទៅ downloader ធម្មតា។"""
+    url = str(url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        raise RuntimeError("API បានផ្ដល់ URL វីដេអូមិនត្រឹមត្រូវ។")
+    base = os.path.join(folder, "episode")
+    target = base + ".mp4"
+    errors = []
+    # yt-dlp handles HLS playlists, segmented streams, redirects and signed media URLs.
+    try:
+        _download_with_ytdlp(url, target, _NoProgress())
+        if os.path.isfile(target) and os.path.getsize(target) > 1000:
+            return target
+        errors.append("yt-dlp មិនបានបង្កើតឯកសារវីដេអូ")
+    except Exception as exc:
+        errors.append("yt-dlp: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:220])
+    # Fallback for ordinary direct MP4 links.
+    try:
+        fallback = os.path.join(folder, "episode_direct.mp4")
+        download_video(url, fallback, _NoProgress())
+        if os.path.isfile(fallback) and os.path.getsize(fallback) > 1000:
+            return fallback
+        errors.append("Direct download បានឯកសារទទេ/តូចពេក")
+    except Exception as exc:
+        errors.append("Direct: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:220])
+    raise RuntimeError(" | ".join(errors))
+
+
 def _hg_get(endpoint, params=None, timeout=45):
     if not _HG_APP_ID or not _HG_APP_SECRET:
         raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
@@ -7657,17 +7685,29 @@ with tab_drama:
                                 for _zi, _zep in enumerate(_zip_eps, start=1):
                                     _video_path = None
                                     try:
-                                        _play_data = _hg_get("play", {
+                                        _play_params = {
                                             "series_id": _hg_selected["series_id"],
                                             "ep": _zep, "q": _hg_quality, "codec": _hg_codec
-                                        })
+                                        }
+                                        _play_data = _hg_get("play", _play_params)
+                                        # API ខ្លះត្រឡប់ ready=false មុនពេលបង្កើត stream រួច។
+                                        for _poll in range(3):
+                                            _video_url = str(_play_data.get("url") or "").strip()
+                                            if _video_url and _play_data.get("ready") is not False:
+                                                break
+                                            if _poll < 2:
+                                                time.sleep(2)
+                                                _play_data = _hg_get("play", _play_params)
                                         _video_url = str(_play_data.get("url") or "").strip()
                                         if not _video_url:
-                                            raise RuntimeError("API មិនបានផ្ដល់ URL វីដេអូ")
-                                        _fetch = _fetch_one(_video_url)
-                                        if not _fetch.get("ok") or not _fetch.get("path"):
-                                            raise RuntimeError(_fetch.get("err") or "ទាញយកវីដេអូមិនបាន")
-                                        _video_path = _fetch["path"]
+                                            raise RuntimeError(
+                                                "API មិនទាន់ផ្ដល់ URL វីដេអូទេ"
+                                                + (f" (ready={_play_data.get('ready')})" if isinstance(_play_data, dict) else "")
+                                            )
+                                        if _play_data.get("ready") is False:
+                                            raise RuntimeError("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមសាកម្ដងទៀតក្រោយបន្តិច។")
+                                        _episode_dir = tempfile.mkdtemp(prefix="hg_episode_")
+                                        _video_path = _hg_download_episode_url(_video_url, _episode_dir)
                                         _size = os.path.getsize(_video_path)
                                         _current = sum(x.file_size for x in _zf.filelist)
                                         if _current + _size > MAX_ZIP_MB * 1024 * 1024:
@@ -7675,7 +7715,7 @@ with tab_drama:
                                         _zf.write(_video_path, f"Episode_{int(_zep):04d}.mp4")
                                         _zip_ok.append(int(_zep))
                                     except Exception as _ze:
-                                        _zip_fail.append(f"ភាគ {_zep}: {str(_ze)[:140]}")
+                                        _zip_fail.append(f"ភាគ {_zep}: {str(_ze)[:500]}")
                                     finally:
                                         if _video_path:
                                             shutil.rmtree(os.path.dirname(_video_path), ignore_errors=True)
