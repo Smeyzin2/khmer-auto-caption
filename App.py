@@ -7838,15 +7838,14 @@ with tab_drama:
                 else:
                     _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
                     _hg_playable_eps = [e for e in _hg_eps if e.get("playable") is True]
+                    _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
+                    _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
                     st.caption(f"រកឃើញ {len(_hg_eps)} ភាគ · មានតំណចាក់ {len(_hg_playable_eps)} ភាគ")
                     _hg_ep_label = st.selectbox("📺 ជ្រើសរើសភាគ", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
                     _hg_chosen_ep = next((e for e in _hg_eps if int(e.get('ep', 0)) == _hg_epnum), {})
                     if not _hg_chosen_ep.get("playable"):
                         st.info("ភាគនេះមានក្នុងបញ្ជី ប៉ុន្តែ Hongguo Public Web មិនបានផ្ដល់តំណវីដេអូសាធារណៈទេ។")
-                    else:
-                        _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
-                        _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
                     if _hg_chosen_ep.get("playable"):
                         _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
                         if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
@@ -7873,7 +7872,7 @@ with tab_drama:
                     st.markdown("#### 📦 ទាញយកច្រើនភាគទៅ Downloads")
                     _hg_zip_labels = st.multiselect(
                         "ជ្រើសរើសភាគសម្រាប់ទាញយកជា ZIP",
-                        list(_hg_ep_map.keys()),
+                        [f"ភាគ {int(e.get('ep', 0))}" for e in _hg_playable_eps],
                         default=[],
                         key=f"hg_zip_eps_{_hg_selected['series_id']}"
                     )
