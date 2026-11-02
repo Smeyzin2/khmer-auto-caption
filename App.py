@@ -7199,7 +7199,7 @@ def _hg_json_after_marker(source, marker="_ROUTER_DATA"):
     return None
 
 def _hg_walk_dicts(value, max_nodes=30000):
-    stack, seen, count = [value], 0
+    stack, seen, count = [value], set(), 0
     while stack and count < max_nodes:
         item = stack.pop()
         if isinstance(item, dict):
@@ -8010,7 +8010,7 @@ with tab_drama:
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
-        st.caption("🌐 ទាញទិន្នន័យពីគេហទំព័រ Hongguo ដោយផ្ទាល់ · មិនត្រូវការ XiaoYingAPI APPID / APPSECRET។")
+        st.caption("🌐 ទាញទិន្នន័យពីគេហទំព័រ Hongguo ដោយផ្ទាល់ · មិនត្រូវការ API Key។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
