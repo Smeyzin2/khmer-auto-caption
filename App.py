@@ -7518,9 +7518,9 @@ def _hg_get(endpoint, params=None, timeout=45):
     if not _HG_APP_ID or not _HG_APP_SECRET:
         raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
 
-    # XiaoYingAPI requires the trailing slash to be present in BOTH the
-    # signed path and the final request URL.
-    path = f"{_HG_API_PREFIX}/{str(endpoint).strip('/')}/"
+    # XiaoYingAPI documents these Hongguo endpoints WITHOUT a trailing slash.
+    # The exact same path is used for HMAC signing and the final request URL.
+    path = f"{_HG_API_PREFIX}/{str(endpoint).strip('/')}"
     signed = dict(params or {})
     signed.update({
         "app_id": _HG_APP_ID,
