@@ -7532,7 +7532,7 @@ def _hg_get(endpoint, params=None, timeout=45):
         if k != "sign" and v not in (None, "")
     )
     query = "&".join(f"{k}={v}" for k, v in pairs)
-    raw = "GET\\n" + path + "\\n" + query
+    raw = "GET\n" + path + "\n" + query
     signed["sign"] = hmac.new(
         _HG_APP_SECRET.encode("utf-8"), raw.encode("utf-8"), hashlib.sha256
     ).hexdigest()
