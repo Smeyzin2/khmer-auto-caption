@@ -7343,6 +7343,39 @@ def _hg_player_page_info(series_id, vid=None):
         "url": str(main_url or "").strip(),
     }
 
+def _hg_get_stream_ready(url, headers, max_wait=240):
+    """GET a Hongguo stream URL and honor 202/503 Retry-After responses."""
+    deadline = time.time() + max_wait
+    last_message = ""
+    while time.time() < deadline:
+        response = requests.get(
+            url, headers=headers, stream=True, allow_redirects=True,
+            timeout=(20, 120),
+        )
+        if response.status_code in (202, 503):
+            retry_after = response.headers.get("Retry-After", "3")
+            try:
+                delay = max(1.0, min(float(retry_after), 15.0))
+            except (TypeError, ValueError):
+                delay = 3.0
+            try:
+                last_message = response.text[:240]
+            except Exception:
+                last_message = ""
+            response.close()
+            time.sleep(delay)
+            continue
+        if response.status_code == 403:
+            response.close()
+            raise RuntimeError("តំណវីដេអូផុតកំណត់ ឬ Token មិនត្រឹមត្រូវ។ សូមបង្កើត Play URL ថ្មី។")
+        response.raise_for_status()
+        return response
+    raise RuntimeError(
+        "Hongguo Stream នៅតែបង្កើតមិនទាន់រួចក្រោយរង់ចាំ។ "
+        + (last_message[:180] if last_message else "សូមសាកម្ដងទៀតក្រោយបន្តិច។")
+    )
+
+
 def _hg_download_episode_url(url, folder):
     """ទាញ Hongguo episode ដោយដោះស្រាយ CDN ដែលឆ្លើយ JSON ជំនួស media URL។"""
     url = str(url or "").strip()
@@ -7367,8 +7400,7 @@ def _hg_download_episode_url(url, folder):
             # HLS playlist ឱ្យ yt-dlp ដោះស្រាយ segments និង headers។
             if is_hls:
                 raise _HLSUrl(candidate)
-            with requests.get(candidate, headers=headers, stream=True, allow_redirects=True,
-                              timeout=(20, 120)) as response:
+            with _hg_get_stream_ready(candidate, headers) as response:
                 response.raise_for_status()
                 ctype = (response.headers.get("Content-Type") or "").lower()
                 final_url = response.url or candidate
@@ -7482,17 +7514,42 @@ def _hg_download_episode_url(url, folder):
 
 
 def _hg_get(endpoint, params=None, timeout=45):
+    """Call XiaoYingAPI using its documented canonical HMAC signature."""
     if not _HG_APP_ID or not _HG_APP_SECRET:
         raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
-    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}"  # XiaoYingAPI route: no trailing slash
+
+    # XiaoYingAPI requires the trailing slash to be present in BOTH the
+    # signed path and the final request URL.
+    path = f"{_HG_API_PREFIX}/{str(endpoint).strip('/')}/"
     signed = dict(params or {})
-    signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
-    pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
+    signed.update({
+        "app_id": _HG_APP_ID,
+        "timestamp": str(int(time.time())),
+        "nonce": secrets.token_hex(8),
+    })
+    pairs = sorted(
+        (str(k), str(v)) for k, v in signed.items()
+        if k != "sign" and v not in (None, "")
+    )
     query = "&".join(f"{k}={v}" for k, v in pairs)
-    raw = "GET\n" + path + "\n" + query
-    signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
-    response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
-                            headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
+    raw = "GET\\n" + path + "\\n" + query
+    signed["sign"] = hmac.new(
+        _HG_APP_SECRET.encode("utf-8"), raw.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+
+    try:
+        response = requests.get(
+            _HG_API_BASE + path,
+            params=signed,
+            timeout=timeout,
+            headers={
+                "Accept": "application/json",
+                "User-Agent": "KhmerAutoCaption/1.0",
+            },
+        )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"មិនអាចភ្ជាប់ XiaoYingAPI បាន៖ {str(exc)[:240]}") from exc
+
     if response.status_code == 404:
         raise RuntimeError(
             f"XiaoYingAPI HTTP 404: មិនរកឃើញ API path {path} ទេ។ "
@@ -7500,10 +7557,25 @@ def _hg_get(endpoint, params=None, timeout=45):
         )
     if not response.ok:
         raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {response.text[:300]}")
-    data = response.json()
-    if not isinstance(data, dict) or data.get("code") != 10000:
-        raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
+    if not response.content or not response.text.strip():
+        raise RuntimeError(
+            f"XiaoYingAPI HTTP {response.status_code}: API ឆ្លើយតបមកទទេ។ "
+            "សូមពិនិត្យសិទ្ធិ Project និងសាកម្ដងទៀត។"
+        )
+    try:
+        data = response.json()
+    except ValueError as exc:
+        raise RuntimeError(
+            f"XiaoYingAPI មិនបានផ្ញើ JSON ត្រឹមត្រូវ (HTTP {response.status_code})។"
+        ) from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("XiaoYingAPI បានផ្ញើទម្រង់ទិន្នន័យមិនត្រឹមត្រូវ។")
+    if data.get("code") != 10000:
+        _code = data.get("code", "ERR")
+        _msg = str(data.get("msg") or "API error")[:350]
+        raise RuntimeError(f"XiaoYingAPI ({_code}): {_msg}")
     return data.get("data") or {}
+
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_rank(page=1):
@@ -8146,7 +8218,8 @@ with tab_drama:
                                     try:
                                         _play_params = {
                                             "series_id": _hg_selected["series_id"],
-                                            "ep": _zep, "q": _hg_quality, "codec": _hg_codec
+                                            "ep": _zep, "q": _hg_quality, "codec": _hg_codec,
+                                            "mode": "file"
                                         }
                                         _play_data = {}
                                         # Prefer the official player page's direct main_url for an accessible episode.
@@ -8161,22 +8234,15 @@ with tab_drama:
                                                 pass
                                         if not _play_data.get("url"):
                                             _play_data = _hg_get("play", _play_params)
-                                        # API ខ្លះត្រឡប់ ready=false មុនពេលបង្កើត stream រួច។
-                                        for _poll in range(3):
-                                            _video_url = str(_play_data.get("url") or "").strip()
-                                            if _video_url and _play_data.get("ready") is not False:
-                                                break
-                                            if _poll < 2:
-                                                time.sleep(2)
-                                                _play_data = _hg_get("play", _play_params)
+                                        # ready=false មិនមែនជាកំហុសទេ៖ ឯកសារ file mode
+                                        # ចាប់ផ្ដើមបង្កើតនៅពេល GET URL ផ្ទាល់។ _hg_get_stream_ready()
+                                        # នឹងគោរព HTTP 202/503 និង Retry-After រហូតដល់ MP4 រួចរាល់។
                                         _video_url = str(_play_data.get("url") or "").strip()
                                         if not _video_url:
                                             raise RuntimeError(
-                                                "API មិនទាន់ផ្ដល់ URL វីដេអូទេ"
+                                                "API មិនបានផ្ដល់ URL វីដេអូទេ"
                                                 + (f" (ready={_play_data.get('ready')})" if isinstance(_play_data, dict) else "")
                                             )
-                                        if _play_data.get("ready") is False:
-                                            raise RuntimeError("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមសាកម្ដងទៀតក្រោយបន្តិច។")
                                         _episode_dir = tempfile.mkdtemp(prefix="hg_episode_")
                                         _video_path = _hg_download_episode_url(_video_url, _episode_dir)
                                         _size = os.path.getsize(_video_path)
