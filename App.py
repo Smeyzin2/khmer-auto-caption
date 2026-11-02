@@ -8144,11 +8144,14 @@ with tab_drama:
                     _hg_d = _hg_detail(_hg_selected["series_id"])
                 if _hg_d.get("intro"):
                     st.write(_hg_d["intro"])
-                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
+                # បង្ហាញភាគទាំងអស់ដែលមានក្នុងបញ្ជីរឿង។ ការបង្ហាញ/សាកទាញយក
+                # មិនមែនជាការរំលង VIP ទេ៖ ភាគដែល Hongguo មិនផ្ដល់ media URL នឹងត្រូវរាយការណ៍ថាមិនអាចទាញបាន។
+                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("vid")]
                 if not _hg_eps:
-                    st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
+                    st.info("មិនអាចអានបញ្ជីភាគពីទំព័រ Hongguo បានទេ។")
                 else:
-                    _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
+                    _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}" + (" 🔒" if not e.get("playable") else ""): int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
+                    st.caption("បង្ហាញបញ្ជីភាគទាំងអស់។ កម្មវិធីនឹងទាញយកភាគដែល Hongguo ផ្ដល់តំណសាធារណៈ; ភាគ VIP/ចាក់សោត្រូវដោះសោតាម Hongguo ផ្ទាល់។")
                     st.caption("គុណភាព និង Codec ត្រូវបានជ្រើសដោយគេហទំព័រ Hongguo ផ្ទាល់។")
                     _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
@@ -8210,7 +8213,8 @@ with tab_drama:
                         "ជ្រើសរើសភាគសម្រាប់ទាញយកជា ZIP",
                         list(_hg_ep_map.keys()),
                         default=[],
-                        key=f"hg_zip_eps_{_hg_selected['series_id']}"
+                        key=f"hg_zip_eps_{_hg_selected['series_id']}",
+                        help="អាចជ្រើសភាគទាំងអស់បាន។ ភាគដែលត្រូវការ VIP នឹងបង្ហាញថាបរាជ័យ ប្រសិនបើ Hongguo មិនផ្ដល់តំណសាធារណៈ។"
                     )
                     _hg_zip_limit = st.selectbox(
                         "ចំនួនអតិបរមាក្នុងមួយលើក",
