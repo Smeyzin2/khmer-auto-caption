@@ -7054,92 +7054,136 @@ _HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "HONGGUO_APPSECRET", "APPSECRE
 _HG_API_BASE = "https://www.xiaoyingapi.com"
 _HG_API_PREFIX = "/api/dramas/hongguo"
 
-def _hg_download_episode_url(url, folder, _depth=0, _seen=None):
-    """
-    ទាញ Hongguo MP4/HLS ទៅ disk។
-    បើ CDN/API URL ត្រឡប់ JSON ជំនួសវីដេអូ នឹងស្វែងរក media URL នៅក្នុង JSON
-    ហើយសាកទាញយកបន្ត ដោយមិនរក្សាទុក JSON ជា MP4។
-    """
+
+_HG_WEB_BASE = "https://hongguoduanju.com"
+_HG_WEB_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.7",
+    "Referer": _HG_WEB_BASE + "/",
+}
+
+def _hg_json_after_marker(source, marker="_ROUTER_DATA"):
+    """Extract a balanced JSON object after a marker without regex-brace truncation."""
+    text = str(source or "")
+    pos = text.find(marker)
+    if pos < 0:
+        return None
+    start = text.find("{", pos + len(marker))
+    if start < 0:
+        return None
+    depth, in_string, escaped = 0, False, False
+    for i in range(start, min(len(text), start + 16 * 1024 * 1024)):
+        ch = text[i]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    return json.loads(text[start:i + 1])
+                except Exception:
+                    return None
+    return None
+
+def _hg_walk_dicts(value, max_nodes=30000):
+    stack, seen, count = [value], 0
+    while stack and count < max_nodes:
+        item = stack.pop()
+        if isinstance(item, dict):
+            yield item
+            count += 1
+            stack.extend(v for v in item.values() if isinstance(v, (dict, list)))
+        elif isinstance(item, list):
+            stack.extend(v for v in item if isinstance(v, (dict, list)))
+            count += 1
+
+def _hg_player_page_info(series_id, vid=None):
+    """Read publicly playable episode metadata and main_url from the official player page."""
+    sid = str(series_id or "").strip()
+    if not sid.isdigit():
+        return {}
+    path = f"/player/{sid}" + (f"/{urllib.parse.quote(str(vid))}" if vid else "")
+    response = requests.get(_HG_WEB_BASE + path, headers=_HG_WEB_HEADERS, timeout=(12, 25))
+    response.raise_for_status()
+    if len(response.content) > 16 * 1024 * 1024:
+        raise RuntimeError("ទំព័រ Hongguo ធំពេក មិនអាចអានបានដោយសុវត្ថិភាព។")
+    page = response.text
+    router = _hg_json_after_marker(page, "_ROUTER_DATA")
+    if not isinstance(router, (dict, list)):
+        # Some deployments serialize router data in a script tag without the literal marker.
+        router = _hg_json_after_marker(page, "routerData")
+    if not isinstance(router, (dict, list)):
+        return {}
+    dicts = list(_hg_walk_dicts(router))
+    detail = next((x for x in dicts if isinstance(x.get("series_name"), str) and ("vid_list" in x or "accessible_episode_cnt" in x)), {})
+    player = next((x for x in dicts if x.get("main_url") or x.get("video_player_info")), {})
+    if isinstance(player.get("video_player_info"), dict):
+        player = player["video_player_info"]
+    main_url = player.get("main_url") or player.get("backup_url")
+    if isinstance(main_url, dict):
+        main_url = main_url.get("url") or main_url.get("main_url")
+    if isinstance(main_url, list):
+        main_url = next((x for x in main_url if isinstance(x, str) and x.startswith("http")), "")
+    vids = detail.get("vid_list") or []
+    if isinstance(vids, str):
+        try:
+            vids = json.loads(vids)
+        except Exception:
+            vids = []
+    if not isinstance(vids, list):
+        vids = []
+    try:
+        accessible = int(detail.get("accessible_episode_cnt") or 0)
+    except (TypeError, ValueError):
+        accessible = 0
+    episodes = []
+    for i, entry in enumerate(vids, 1):
+        v = entry.get("vid") or entry.get("video_id") or entry.get("id") if isinstance(entry, dict) else entry
+        if v is None:
+            continue
+        episodes.append({"ep": i, "vid": str(v), "playable": bool(accessible and i <= accessible)})
+    return {
+        "name": detail.get("series_name") or "",
+        "episode_cnt": len(vids) or detail.get("episode_count") or "",
+        "listed_cnt": accessible or len(vids),
+        "accessible_episode_cnt": accessible,
+        "episodes": episodes,
+        "url": str(main_url or "").strip(),
+    }
+
+def _hg_download_episode_url(url, folder):
+    """ទាញ Hongguo MP4/HLS ដោយពិនិត្យប្រភេទ stream និងរក្សាទុកជាឯកសារលើ disk។"""
     url = str(url or "").strip()
     if not url.startswith(("http://", "https://")):
         raise RuntimeError("API បានផ្ដល់ URL វីដេអូមិនត្រឹមត្រូវ។")
-    if _depth > 3:
-        raise RuntimeError("URL បញ្ជូនបន្តច្រើនជាន់ពេក។")
     os.makedirs(folder, exist_ok=True)
-    seen = set(_seen or ())
-    if url in seen:
-        raise RuntimeError("បានជួប URL ដដែលម្តងទៀត។")
-    seen.add(url)
-
     target = os.path.join(folder, "episode.mp4")
     errors = []
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
-        "Accept": "video/mp4,video/*;q=0.9,application/vnd.apple.mpegurl,*/*;q=0.8",
-        "Referer": "https://hongguoduanju.com/",
-    }
+    is_hls = ".m3u8" in urllib.parse.urlparse(url).path.lower()
 
-    # Direct HTTP first. JSON/HTML responses are parsed instead of being saved as MP4.
-    try:
-        with requests.get(
-            url, headers=headers, stream=True, allow_redirects=True,
-            timeout=(20, 120)
-        ) as response:
-            response.raise_for_status()
-            ctype = (response.headers.get("Content-Type") or "").lower()
-
-            if "application/json" in ctype or "text/json" in ctype:
-                try:
-                    payload = response.json()
-                except Exception:
-                    payload = {}
-                media_urls = []
-
-                def _collect_media_urls(obj, parent_key=""):
-                    if isinstance(obj, dict):
-                        # Prefer fields that commonly contain playable media URLs.
-                        preferred = (
-                            "video_url", "play_url", "playurl", "m3u8", "mp4",
-                            "video", "src", "url", "download_url", "download",
-                            "media_url", "stream_url", "file_url"
-                        )
-                        keys = sorted(
-                            obj.keys(),
-                            key=lambda k: (str(k).lower() not in preferred,
-                                           preferred.index(str(k).lower()) if str(k).lower() in preferred else 999)
-                        )
-                        for key in keys:
-                            _collect_media_urls(obj.get(key), str(key).lower())
-                    elif isinstance(obj, list):
-                        for item in obj[:30]:
-                            _collect_media_urls(item, parent_key)
-                    elif isinstance(obj, str):
-                        candidate = obj.strip()
-                        if candidate.startswith(("http://", "https://")):
-                            if candidate not in seen and candidate not in media_urls:
-                                media_urls.append(candidate)
-
-                _collect_media_urls(payload)
-                if media_urls:
-                    for candidate in media_urls[:6]:
-                        try:
-                            return _hg_download_episode_url(
-                                candidate, folder, _depth=_depth + 1, _seen=seen
-                            )
-                        except Exception as nested_exc:
-                            errors.append(
-                                "JSON media URL: " +
-                                re.sub(r"https?://\S+", "[link]", str(nested_exc))[:180]
-                            )
-                else:
-                    # Only show safe, short diagnostic data; never expose signed URLs/tokens.
-                    msg = payload.get("msg") or payload.get("message") if isinstance(payload, dict) else ""
-                    code = payload.get("code") if isinstance(payload, dict) else ""
-                    errors.append(f"URL បានត្រឡប់ JSON មិនមែនវីដេអូ (code={code}, msg={str(msg)[:100]})")
-
-            elif "text/html" in ctype:
-                errors.append("URL បានត្រឡប់ HTML page មិនមែនវីដេអូទេ")
-            else:
+    # MP4/direct CDN: HTTP streaming មុន ដើម្បីកុំឱ្យ yt-dlp បដិសេធដោយ format/max-filesize។
+    if not is_hls:
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+                "Accept": "video/mp4,video/*;q=0.9,*/*;q=0.8",
+                "Referer": "https://hongguoduanju.com/",
+            }
+            with requests.get(url, headers=headers, stream=True, allow_redirects=True, timeout=(20, 120)) as response:
+                response.raise_for_status()
+                ctype = (response.headers.get("Content-Type") or "").lower()
+                if "text/html" in ctype or "application/json" in ctype:
+                    raise RuntimeError(f"CDN បានផ្ញើ {ctype or 'HTML'} មិនមែនវីដេអូទេ (HTTP {response.status_code})")
                 written = 0
                 with open(target, "wb") as out:
                     for chunk in response.iter_content(chunk_size=1024 * 1024):
@@ -7148,26 +7192,17 @@ def _hg_download_episode_url(url, folder, _depth=0, _seen=None):
                         out.write(chunk)
                         written += len(chunk)
                 if written > 1000:
-                    # Reject obvious non-video payloads by checking file signature/content.
-                    with open(target, "rb") as check:
-                        head = check.read(512).lstrip()
-                    if head.startswith((b"{", b"[", b"<")):
-                        os.remove(target)
-                        errors.append("ទិន្នន័យដែលបានទាញមកមិនមែនជា MP4/HLS ទេ")
-                    else:
-                        return target
-                else:
-                    errors.append("Direct link បានឯកសារទទេ ឬតូចពេក")
-    except Exception as exc:
-        errors.append("Direct HTTP: " + re.sub(r"https?://\S+", "[link]", str(exc))[:220])
-    finally:
-        try:
-            if os.path.exists(target) and os.path.getsize(target) <= 1000:
-                os.remove(target)
-        except OSError:
-            pass
+                    return target
+                raise RuntimeError("Direct link បានឯកសារទទេ ឬតូចពេក")
+        except Exception as exc:
+            errors.append("Direct HTTP: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
+            try:
+                if os.path.exists(target):
+                    os.remove(target)
+            except OSError:
+                pass
 
-    # HLS or direct-link fallback through yt-dlp (supports playlists/segments).
+    # HLS/m3u8 ឬ Direct HTTP បរាជ័យ: ប្រើ yt-dlp ដោយមិនយកកំហុស MAX_DOWNLOAD_MB ទូទៅមកបិទ។
     try:
         import yt_dlp
         base = os.path.join(folder, "episode")
@@ -7183,7 +7218,10 @@ def _hg_download_episode_url(url, folder, _depth=0, _seen=None):
             "socket_timeout": 60,
             "retries": 5,
             "fragment_retries": 5,
-            "http_headers": headers,
+            "http_headers": {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://hongguoduanju.com/",
+            },
         }
         with yt_dlp.YoutubeDL(opts) as ydl:
             ydl.download([url])
@@ -7199,8 +7237,7 @@ def _hg_download_episode_url(url, folder, _depth=0, _seen=None):
             return target
         errors.append("yt-dlp មិនបានបង្កើតឯកសារវីដេអូ")
     except Exception as exc:
-        errors.append("yt-dlp: " + re.sub(r"https?://\S+", "[link]", str(exc))[:220])
-
+        errors.append("yt-dlp: " + re.sub(r"https?://\\S+", "[link]", str(exc))[:260])
     raise RuntimeError(" | ".join(errors))
 
 
@@ -7246,10 +7283,13 @@ def _hg_categories():
 
 @st.cache_data(ttl=180, show_spinner=False)
 def _hg_detail(series_id):
-    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី Hongguo API។"""
-    d = _hg_get("detail", {"series_id": str(series_id)})
+    """ទាញព័ត៌មានរឿងពី API; បើ API មិនមានភាគ ប្រើទិន្នន័យ SSR របស់ Player។"""
+    try:
+        d = _hg_get("detail", {"series_id": str(series_id)})
+    except Exception:
+        d = {}
     if not isinstance(d, dict):
-        return {}
+        d = {}
     # API versions may wrap detail data one level deeper.
     if isinstance(d.get("detail"), dict):
         d = d["detail"]
@@ -7270,6 +7310,14 @@ def _hg_detail(series_id):
             playable = bool(ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("token"))
         normalized.append({**ep, "ep": ep_no, "playable": bool(playable)})
     d["episodes"] = normalized
+    # Enrich API episode records with official player-page vid IDs and access limits.
+    try:
+        web_data = _hg_player_page_info(series_id)
+        if web_data.get("episodes"):
+            d.update({k: v for k, v in web_data.items() if v not in (None, "", [])})
+            d["episodes"] = web_data["episodes"]
+    except Exception:
+        pass
     return d
 
 
@@ -7341,7 +7389,7 @@ def _hg_extract_series_id(value):
         ids = query.get("series_id") or query.get("seriesId") or []
         if ids and str(ids[0]).strip().isdigit():
             return str(ids[0]).strip()
-        match = re.search(r"/detail/(\d+)", parsed.path)
+        match = re.search(r"/(?:detail|player)/(\d+)", parsed.path)
         if match:
             return match.group(1)
     except Exception:
@@ -7758,7 +7806,18 @@ with tab_drama:
                     _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
                     if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
                         with st.spinner("កំពុងរៀបចំវីដេអូ..."):
-                            _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                            _current_meta = next((x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_hg_epnum)), {})
+                            _current_vid = _current_meta.get("vid") or _current_meta.get("video_id") or _current_meta.get("id")
+                            _hg_play = {}
+                            if _current_vid:
+                                try:
+                                    _page_play = _hg_player_page_info(_hg_selected["series_id"], _current_vid)
+                                    if _page_play.get("url"):
+                                        _hg_play = {"url": _page_play["url"], "ready": True, "source": "hongguo_player_page"}
+                                except Exception:
+                                    pass
+                            if not _hg_play.get("url"):
+                                _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
                         if _hg_play.get("url"):
                             st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
                         else:
@@ -7811,7 +7870,19 @@ with tab_drama:
                                             "series_id": _hg_selected["series_id"],
                                             "ep": _zep, "q": _hg_quality, "codec": _hg_codec
                                         }
-                                        _play_data = _hg_get("play", _play_params)
+                                        _play_data = {}
+                                        # Prefer the official player page's direct main_url for an accessible episode.
+                                        _ep_meta = next((x for x in _hg_eps if int(x.get("ep", 0) or 0) == int(_zep)), {})
+                                        _ep_vid = _ep_meta.get("vid") or _ep_meta.get("video_id") or _ep_meta.get("id")
+                                        if _ep_vid:
+                                            try:
+                                                _page_data = _hg_player_page_info(_hg_selected["series_id"], _ep_vid)
+                                                if _page_data.get("url"):
+                                                    _play_data = {"url": _page_data["url"], "ready": True, "source": "hongguo_player_page"}
+                                            except Exception:
+                                                pass
+                                        if not _play_data.get("url"):
+                                            _play_data = _hg_get("play", _play_params)
                                         # API ខ្លះត្រឡប់ ready=false មុនពេលបង្កើត stream រួច។
                                         for _poll in range(3):
                                             _video_url = str(_play_data.get("url") or "").strip()
