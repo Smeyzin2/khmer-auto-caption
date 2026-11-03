@@ -7305,27 +7305,36 @@ def _hg_vip_is_valid(_user):
 
 
 # VIP remember-me token stored in browser localStorage; only SHA-256 hash in Supabase.
-_HG_REMEMBER_HTML = """<!doctype html><html><body><script>
-(function(){var K="kvai_hg_vip_remember_v1",sent=false,nonce=null;function send(t,d){window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:t},d),"*");}function read(){try{return localStorage.getItem(K)||"";}catch(e){return "";}}window.addEventListener("message",function(ev){var d=ev.data;if(!d||d.type!=="streamlit:render")return;var a=d.args||{};if(a.nonce!==undefined&&a.nonce!==nonce){nonce=a.nonce;try{if(a.clear)localStorage.removeItem(K);else if(a.save)localStorage.setItem(K,a.save);}catch(e){}}if(!sent){sent=true;send("streamlit:setComponentValue",{value:{token:read()},dataType:"json"});}});send("streamlit:componentReady",{apiVersion:1});send("streamlit:setFrameHeight",{height:0});})();
+_HG_REMEMBER_HTML = """<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1"></head><body><script>
+(function(){
+  var K="kvai_hg_vip_remember_v2",sent=false;
+  function send(type,data){window.parent.postMessage(Object.assign({isStreamlitMessage:true,type:type},data||{}),"*");}
+  function readToken(){try{return window.localStorage.getItem(K)||"";}catch(e){return "";}}
+  window.addEventListener("message",function(ev){
+    var d=ev.data;if(!d||d.type!=="streamlit:render")return;
+    var a=d.args||{};
+    try{if(a.clear===true){localStorage.removeItem(K);}else if(typeof a.save==="string"&&a.save.length>10){localStorage.setItem(K,a.save);}}catch(e){}
+    if(!sent){sent=true;send("streamlit:setComponentValue",{value:{token:readToken()},dataType:"json"});}
+  });
+  send("streamlit:componentReady",{apiVersion:1});send("streamlit:setFrameHeight",{height:0});
+})();
 </script></body></html>"""
 
 _HG_REMEMBER_COMPONENT = None
 
 def _hg_remember_component():
-    # Declare the component once per Python process. Avoid st.cache_resource here:
-    # Streamlit component functions are not reliably cache-hashable across versions.
     global _HG_REMEMBER_COMPONENT
     if _HG_REMEMBER_COMPONENT is None:
-        _folder=os.path.join(tempfile.gettempdir(),"kvai_hg_remember_component")
+        _folder=os.path.join(tempfile.gettempdir(),"kvai_hg_remember_component_v2")
         os.makedirs(_folder,exist_ok=True)
         with open(os.path.join(_folder,"index.html"),"w",encoding="utf-8") as _f:
             _f.write(_HG_REMEMBER_HTML)
-        _HG_REMEMBER_COMPONENT = components.declare_component("kvai_hg_vip_remember",path=_folder)
+        _HG_REMEMBER_COMPONENT=components.declare_component("kvai_hg_vip_remember_v2",path=_folder)
     return _HG_REMEMBER_COMPONENT
 
 def _hg_remember_browser(token_to_save=None,clear=False):
-    return _hg_remember_component()(key="hg_vip_remember_storage",default={"token":""},
-        nonce=secrets.token_hex(8),save=token_to_save,clear=clear)
+    return _hg_remember_component()(key="hg_vip_remember_storage_v2",default={"token":""},
+        save=str(token_to_save or ""),clear=bool(clear))
 
 def _hg_token_hash(token):
     return hashlib.sha256(str(token).encode("utf-8")).hexdigest()
@@ -7417,8 +7426,10 @@ def _hg_admin_panel():
 
 
 def _hg_vip_gate():
-    # Admin ចូលតាម VIP username ដាច់ដោយឡែក មិនប្រើ Gmail/OAuth ទៀតទេ។
-    _browser_state=_hg_remember_browser()
+    # កុំហៅ component ច្រើនដងក្នុង run តែមួយ; វាបង្ក duplicate key និងបាត់ token។
+    _pending_save=st.session_state.pop("_hg_remember_pending_save", None)
+    _pending_clear=bool(st.session_state.pop("_hg_remember_pending_clear", False))
+    _browser_state=_hg_remember_browser(token_to_save=_pending_save,clear=_pending_clear)
     _browser_token=str((_browser_state or {}).get("token","")).strip()
     _vip_name=str(st.session_state.get("_hg_vip_username","")).strip()
     try:
@@ -7427,20 +7438,23 @@ def _hg_vip_gate():
             _vip_name=str(_vip_row.get("username",_vip_name))
             st.session_state["_hg_vip_username"]=_vip_name
             if _vip_name.strip().lower() == _HG_ADMIN_USERNAME:
-                st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-                with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
+                st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រងគណនីបាន")
+                with st.expander("⚙️ Admin: បង្កើត និងគ្រប់គ្រងគណនី VIP", expanded=True):
                     _hg_admin_panel()
             else:
                 st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
             if st.button("ចាកចេញពី VIP",key="hg_vip_logout"):
                 _hg_sb_request("PATCH",params={"id":"eq."+str(_vip_row["id"])},payload={"remember_token_hash":None})
                 st.session_state.pop("_hg_vip_username",None)
-                _hg_remember_browser(clear=True)
+                st.session_state["_hg_remember_pending_clear"]=True
                 st.rerun()
             return True
-        if _browser_token: _hg_remember_browser(clear=True)
-        if _vip_name: st.session_state.pop("_hg_vip_username",None)
-        if _vip_row: st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
+        if _browser_token:
+            st.session_state["_hg_remember_pending_clear"]=True
+        if _vip_name:
+            st.session_state.pop("_hg_vip_username",None)
+        if _vip_row:
+            st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
     except Exception as err:
         st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {err}")
         return False
@@ -7449,7 +7463,7 @@ def _hg_vip_gate():
     with st.form("hg_vip_login_form"):
         u=st.text_input("Username",key="hg_vip_login_username")
         pw=st.text_input("Password",type="password",key="hg_vip_login_password")
-        remember=st.checkbox("ចងចាំការចូល 30 ថ្ងៃ (Remember me)",value=True,key="hg_vip_remember_30")
+        remember=st.checkbox("ចងចាំការចូលរហូតដល់ចាកចេញ ឬគណនីផុតកំណត់",value=True,key="hg_vip_remember_forever")
         go=st.form_submit_button("ចូលប្រើ Hongguo VIP",use_container_width=True)
     if go:
         try:
@@ -7459,11 +7473,14 @@ def _hg_vip_gate():
                 if remember:
                     token=secrets.token_urlsafe(32)
                     _hg_sb_request("PATCH",params={"id":"eq."+str(row["id"])},payload={"remember_token_hash":_hg_token_hash(token)})
-                    _hg_remember_browser(token_to_save=token)
-                else: _hg_remember_browser(clear=True)
+                    st.session_state["_hg_remember_pending_save"]=token
+                    st.session_state.pop("_hg_remember_pending_clear",None)
+                else:
+                    st.session_state["_hg_remember_pending_clear"]=True
                 st.rerun()
             st.error("Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។")
-        except Exception as err: st.error(f"មិនអាចចូល VIP បាន៖ {err}")
+        except Exception as err:
+            st.error(f"មិនអាចចូល VIP បាន៖ {err}")
     return False
 
 with tab_drama:
