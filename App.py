@@ -7483,16 +7483,13 @@ def _hg_admin_panel():
         st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
 
 
-def _hg_vip_gate(render_ui=True):
+def _hg_vip_gate():
     _email = str(_user_field("email", "")).strip().lower()
     _is_admin = _email == _HG_ADMIN_EMAIL
     if _is_admin:
-        # The same gate is evaluated in multiple Streamlit tabs. Render admin widgets
-        # only in the Hongguo tab to prevent duplicate widget IDs across tabs.
-        if render_ui:
-            st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-            with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
-                _hg_admin_panel()
+        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
+        with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
+            _hg_admin_panel()
         return True
 
     _vip_name = str(st.session_state.get("_hg_vip_username", "")).strip()
@@ -7500,11 +7497,10 @@ def _hg_vip_gate(render_ui=True):
         try:
             _vip_row = _hg_get_vip_user(_vip_name)
             if _hg_vip_is_valid(_vip_row):
-                if render_ui:
-                    st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
-                    if st.button("ចាកចេញពី VIP", key="hg_vip_logout"):
-                        st.session_state.pop("_hg_vip_username", None)
-                        st.rerun()
+                st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
+                if st.button("ចាកចេញពី VIP", key="hg_vip_logout"):
+                    st.session_state.pop("_hg_vip_username", None)
+                    st.rerun()
                 return True
             st.session_state.pop("_hg_vip_username", None)
             st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
@@ -7512,8 +7508,6 @@ def _hg_vip_gate(render_ui=True):
             st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {_err}")
             return False
 
-    if not render_ui:
-        return False
     st.markdown("### 🔒 Hongguo VIP")
     st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
     with st.form("hg_vip_login_form"):
@@ -7854,22 +7848,20 @@ with tab_drama:
 
 
 # ============================ TikTok Short Drama ============================
-# Catalog-like layout inspired by the supplied screenshot. Keep the same VIP/admin gate.
+# In-app catalog-style UI. Do not redirect to the TikTok catalog page (which can show Not Found in embedded/mobile browsers).
 with tab_tiktok:
-    # Access check only here; shared VIP/admin widgets are rendered in Hongguo tab.
-    _tt_access = _hg_vip_gate(render_ui=False)
+    _tt_access = _hg_vip_gate()
     if _tt_access:
         st.markdown("### 🎵 TikTok Short Drama")
-        st.caption("ស្វែងរករឿង TikTok Short Drama តាមឈ្មោះ ឬបិទភ្ជាប់ Link រឿង/ភាគ ដើម្បីមើល និងទាញយក។")
+        st.caption("បញ្ចូល TikTok Short Drama episode link ដើម្បីបង្កើតកាត Poster ក្នុងកម្មវិធី ហើយមើល/ទាញយកវីដេអូ។")
 
-        # Search/header panel: similar layout to Hongguo catalog.
         with st.container(border=True):
             _tt_query_col, _tt_search_col = st.columns([4, 1], gap="small")
             with _tt_query_col:
                 _tt_query = st.text_input(
                     "ស្វែងរករឿងតាមឈ្មោះ ឬ Link",
                     key="tiktok_drama_query",
-                    placeholder="ឈ្មោះរឿង ឬ https://www.tiktok.com/...",
+                    placeholder="បិទភ្ជាប់ TikTok Short Drama episode URL…",
                 )
             with _tt_search_col:
                 st.write("")
@@ -7877,57 +7869,55 @@ with tab_tiktok:
                     "🔎 ស្វែងរក", key="tiktok_drama_search",
                     type="primary", use_container_width=True,
                 )
-            st.link_button(
-                "🌐 បើកបញ្ជីរឿង TikTok Short Drama",
-                "https://www.tiktok.com/shortdrama",
-                use_container_width=True,
-            )
+            st.caption("មិនបើក TikTok ទៅក្រៅទៀតទេ។ សូមបិទភ្ជាប់ Link ភាគរឿងនៅទីនេះ ដើម្បីបង្ហាញ Poster និងវីដេអូក្នុង App។")
 
-        # This official catalog does not expose a stable public catalog-search API here.
-        # A pasted episode/video URL can be fetched via the app's existing downloader.
         _tt_query_is_link = bool(_tt_query.strip()) and is_social_link(_tt_query.strip())
         if _tt_search_click:
             if not _tt_query.strip():
-                st.warning("សូមបញ្ចូលឈ្មោះរឿង ឬ TikTok Link ជាមុនសិន។")
-            elif _tt_query_is_link:
-                with st.spinner("កំពុងទាញយកវីដេអូពី TikTok…"):
+                st.warning("សូមបញ្ចូល TikTok episode Link ជាមុនសិន។")
+            elif not _tt_query_is_link:
+                st.info("ការស្វែងរកតាមឈ្មោះមិនទាន់អាចទាញ catalog TikTok ដោយស្វ័យប្រវត្តិបានទេ។ សូមបិទភ្ជាប់ Link ភាគរឿង ដើម្បីរក Poster និងវីដេអូ។")
+            else:
+                with st.spinner("កំពុងទាញយកភាគរឿង និងរៀបចំ Poster…"):
                     _tt_result = _fetch_one(_tt_query.strip())
                 if _tt_result.get("ok") and _tt_result.get("path"):
+                    _tt_path = _tt_result["path"]
+                    _tt_poster = os.path.join(os.path.dirname(_tt_path), "tiktok_drama_poster.jpg")
+                    try:
+                        subprocess.run(
+                            [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-ss", "00:00:01", "-i", _tt_path,
+                             "-frames:v", "1", "-q:v", "3", _tt_poster],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25, check=True,
+                        )
+                    except Exception:
+                        _tt_poster = ""
                     st.session_state["_tiktok_drama_result"] = {
-                        "url": _tt_query.strip(), "path": _tt_result["path"]
+                        "url": _tt_query.strip(), "path": _tt_path,
+                        "poster": _tt_poster, "title": "TikTok Short Drama episode",
                     }
+                    st.session_state.pop("_tiktok_drama_title_search", None)
                     st.rerun()
                 else:
                     st.error("មិនអាចទាញយក Link នេះបានទេ។ TikTok ឬម្ចាស់មាតិកាអាចដាក់កម្រិតលើការចូលប្រើ។")
                     if _tt_result.get("err"):
                         st.caption(str(_tt_result["err"])[:350])
-            else:
-                st.session_state["_tiktok_drama_title_search"] = _tt_query.strip()
-                st.info("សម្រាប់ស្វែងរកតាមឈ្មោះ សូមប្រើបញ្ជី TikTok Short Drama ខាងលើ។ បន្ទាប់មក Copy Link រឿង/ភាគមកបិទភ្ជាប់ទីនេះ ដើម្បីចាក់ និងទាញយកក្នុងកម្មវិធី។")
-
-        # Display a search card for title searches and preserve state across reruns.
-        _tt_title_search = st.session_state.get("_tiktok_drama_title_search", "")
-        if _tt_title_search:
-            with st.container(border=True):
-                st.markdown("#### 🔍 លទ្ធផលស្វែងរក")
-                st.write(_tt_title_search)
-                st.caption("ការបង្ហាញបញ្ជីរឿង និងភាគដោយស្វ័យប្រវត្តិតាមឈ្មោះ ត្រូវការចំណុច API/ទិន្នន័យសាធារណៈពី TikTok ដែលមិនទាន់មាននៅក្នុង app។")
-                if st.button("លុបការស្វែងរក", key="tiktok_drama_clear_search"):
-                    st.session_state.pop("_tiktok_drama_title_search", None)
-                    st.rerun()
 
         _tt_ready = st.session_state.get("_tiktok_drama_result")
         if _tt_ready:
             _tt_path = _tt_ready.get("path", "")
             if _tt_path and os.path.isfile(_tt_path):
                 with st.container(border=True):
-                    st.markdown("#### 🎬 វីដេអូដែលបានជ្រើសរើស")
+                    st.markdown("#### 🎬 រឿងដែលបានជ្រើសរើស")
+                    _tt_poster = _tt_ready.get("poster", "")
+                    if _tt_poster and os.path.isfile(_tt_poster):
+                        st.image(_tt_poster, use_container_width=True, caption=_tt_ready.get("title", "TikTok Short Drama"))
+                    st.markdown("**ភាគ 1**")
                     st.video(_tt_path)
                     with open(_tt_path, "rb") as _tt_file:
                         _tt_bytes = _tt_file.read()
                     st.download_button(
-                        "⬇️ ទាញយកវីដេអូ", data=_tt_bytes,
-                        file_name="tiktok_short_drama.mp4", mime="video/mp4",
+                        "⬇️ ទាញយកភាគនេះ", data=_tt_bytes,
+                        file_name="tiktok_short_drama_episode.mp4", mime="video/mp4",
                         key="tiktok_drama_download", use_container_width=True,
                     )
                     if st.button(
@@ -7939,11 +7929,14 @@ with tab_tiktok:
                         st.session_state["link_searched"] = [_tt_ready["url"]]
                         st.session_state["_hg_imported_caption_notice"] = True
                         st.rerun()
+                    if st.button("🗑️ បិទរឿងនេះ", key="tiktok_drama_clear", use_container_width=True):
+                        st.session_state.pop("_tiktok_drama_result", None)
+                        st.rerun()
             else:
                 st.session_state.pop("_tiktok_drama_result", None)
                 st.info("វីដេអូដែលបានរកមុនមិននៅក្នុង session ទៀតទេ។ សូមស្វែងរកម្ដងទៀត។")
 
-        st.caption("ចំណាំ៖ ការមើល ឬទាញយកអាស្រ័យលើសិទ្ធិចូលប្រើ និងការកំណត់របស់ TikTok។ កម្មវិធីមិនអាចធានាថា Link ទាំងអស់ដំណើរការបានទេ។")
+        st.caption("ចំណាំ៖ Poster នេះបង្កើតពី frame ដំបូងនៃវីដេអូដែលអ្នកបានបញ្ចូល Link។ Catalog បង្ហាញរឿងជាច្រើន និងស្វែងរកតាមឈ្មោះដោយស្វ័យប្រវត្តិ ត្រូវការប្រភពទិន្នន័យ TikTok ដែលអាចប្រើបាន។ ទាញយកតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
