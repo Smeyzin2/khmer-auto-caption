@@ -31,7 +31,7 @@ import imageio_ffmpeg
 import edge_tts
 
 st.set_page_config(
-    page_title="TikTok Short Drama | Khmer Auto Caption",
+    page_title="TikTok Short Drama + Khmer Auto Caption",
     page_icon="🎬",
     layout="wide",
 )
@@ -6738,7 +6738,17 @@ def user_key_box():
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft"], horizontal=True, key="user_key_provider")
+        _hg_id_saved = st.session_state.get("user_hg_app_id", "")
+        _hg_secret_saved = st.session_state.get("user_hg_app_secret", "")
+        if _hg_id_saved and _hg_secret_saved:
+            any_saved = True
+            st.success(f"✅ Hongguo Drama · APPID {_hg_id_saved[:4]}…{_hg_id_saved[-3:]} · APPSECRET ••••{_hg_secret_saved[-4:]}")
+            if st.button("🗑 លុប Hongguo Drama Key", key="remove_user_hg_keys"):
+                st.session_state.pop("user_hg_app_id", None)
+                st.session_state.pop("user_hg_app_secret", None)
+                _ls_persist()
+                st.rerun()
+        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft", "Hongguo Drama"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
         if provider == "Claude":
@@ -7124,8 +7134,8 @@ tight_sync = False
 
 # ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
 
-tab_drama, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["📱 TikTok Short Drama", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+tab_drama, tab_tiktok, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🍎 Hongguo", "🎵 TikTok Short Drama", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
 )
 
 # ============================ Hongguo Drama → Khmer Auto Caption ============================
@@ -7307,37 +7317,6 @@ def _hg_extract_series_id(value):
 # ============================ Hongguo VIP Access ============================
 # All VIP checks and management use the server-only Supabase service key.
 _HG_ADMIN_EMAIL = "smeyai2000@gmail.com"
-_HG_ADMIN_USERNAME = str(get_secret("HONGGUO_ADMIN_USERNAME", "admin")).strip().lower()
-_HG_ADMIN_PASSWORD = str(get_secret("HONGGUO_ADMIN_PASSWORD", "")).strip()
-
-
-def _hg_admin_authenticated():
-    email = str(_user_field("email", "")).strip().lower()
-    return (email == _HG_ADMIN_EMAIL or
-            bool(st.session_state.get("_hg_admin_authenticated", False)))
-
-
-def _hg_admin_login_box():
-    """Admin login fallback for deployments without authenticated owner email."""
-    if _hg_admin_authenticated():
-        return True
-    with st.expander("👑 Admin / គ្រប់គ្រងគណនី និង Website", expanded=False):
-        if not _HG_ADMIN_PASSWORD:
-            st.warning("សូមកំណត់ HONGGUO_ADMIN_PASSWORD ក្នុង Streamlit Secrets ឬ Variables ដើម្បីបើក Admin Login។")
-        else:
-            with st.form("drama_admin_login_form"):
-                user = st.text_input("Admin Username", value="admin", key="drama_admin_user")
-                password = st.text_input("Admin Password", type="password", key="drama_admin_password")
-                submit = st.form_submit_button("ចូល Admin", use_container_width=True)
-            if submit:
-                valid_user = hmac.compare_digest(str(user or "").strip().lower(), _HG_ADMIN_USERNAME)
-                valid_pass = hmac.compare_digest(str(password or ""), _HG_ADMIN_PASSWORD)
-                if valid_user and valid_pass:
-                    st.session_state["_hg_admin_authenticated"] = True
-                    st.rerun()
-                else:
-                    st.error("Admin Username ឬ Password មិនត្រឹមត្រូវ។")
-    return _hg_admin_authenticated()
 
 def _hg_supabase_config():
     _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
@@ -7508,7 +7487,7 @@ def _hg_vip_gate():
     _email = str(_user_field("email", "")).strip().lower()
     _is_admin = _email == _HG_ADMIN_EMAIL
     if _is_admin:
-        st.success("👑 Admin Access — អាចប្រើ Short Drama និងគ្រប់គ្រង VIP បាន")
+        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
         with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
             _hg_admin_panel()
         return True
@@ -7529,12 +7508,12 @@ def _hg_vip_gate():
             st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {_err}")
             return False
 
-    st.markdown("### 🔒 Short Drama VIP")
-    st.info("មុខងារ Short Drama ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
+    st.markdown("### 🔒 Hongguo VIP")
+    st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
     with st.form("hg_vip_login_form"):
         _u = st.text_input("Username", key="hg_vip_login_username")
         _p = st.text_input("Password", type="password", key="hg_vip_login_password")
-        _go = st.form_submit_button("ចូលប្រើ Short Drama VIP", use_container_width=True)
+        _go = st.form_submit_button("ចូលប្រើ Hongguo VIP", use_container_width=True)
     if _go:
         try:
             _row = _hg_get_vip_user(_u)
@@ -7547,239 +7526,393 @@ def _hg_vip_gate():
     return False
 
 
-# ============================ Public full-drama catalog (no API key) ============================
-_STREAMING_VERTICALS_HOME = "https://www.streamingverticals.com/"
-
-@st.cache_data(ttl=900, show_spinner=False)
-def _sv_public_catalog(source_url=None):
-    """Collect public drama cards from HTML metadata and linked poster cards."""
-    source_url = str(source_url or _STREAMING_VERTICALS_HOME).strip()
-    parsed_source = urllib.parse.urlparse(source_url)
-    if parsed_source.scheme not in ("http", "https") or not parsed_source.netloc:
-        raise ValueError("Website URL មិនត្រឹមត្រូវទេ។")
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
-               "Accept": "text/html,application/xhtml+xml,application/json"}
-    response = requests.get(source_url, headers=headers, timeout=35)
-    response.raise_for_status()
-    html = response.text
-    rows, seen = [], set()
-
-    def add_row(cover, watch, title="", video=""):
-        cover = urllib.parse.urljoin(source_url, str(cover or "").replace("&amp;", "&"))
-        watch = urllib.parse.urljoin(source_url, str(watch or ""))
-        if not cover.startswith(("http://", "https://")) or not watch.startswith(("http://", "https://")):
-            return
-        if cover.lower().startswith(("data:", "blob:")) or any(x in cover.lower() for x in ("logo", "avatar", "icon", "banner")):
-            return
-        key = watch
-        if key in seen:
-            return
-        seen.add(key)
-        vid = re.search(r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', video or watch, re.I)
-        if not vid:
-            vid = re.search(r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"', video or "", re.I)
-        rows.append({"id": vid.group(1) if vid else "drama_" + str(abs(hash(key))),
-                     "cover": cover, "watch": video or watch,
-                     "page": watch, "title": title,
-                     "embed": f"https://www.youtube-nocookie.com/embed/{vid.group(1)}" if vid else "",
-                     "direct": (video or watch) if re.search(r'\.mp4(?:\?|$)', video or watch, re.I) else ""})
-
-    # 1) OpenGraph / Twitter / JSON-LD metadata.
-    blocks = re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S)
-    for block in blocks:
-        try: payload = json.loads(block.strip())
-        except Exception: continue
-        stack = [payload]
-        while stack:
-            obj = stack.pop()
-            if isinstance(obj, list): stack.extend(obj)
-            elif isinstance(obj, dict):
-                stack.extend(v for v in obj.values() if isinstance(v, (dict, list)))
-                image = obj.get("thumbnailUrl") or obj.get("image") or obj.get("thumbnail")
-                video = obj.get("embedUrl") or obj.get("contentUrl") or obj.get("url")
-                title = obj.get("name") or obj.get("headline") or ""
-                if isinstance(image, list): image = image[0] if image else ""
-                if isinstance(image, dict): image = image.get("url") or image.get("contentUrl") or ""
-                if isinstance(video, dict): video = video.get("url") or ""
-                if isinstance(image, str) and isinstance(video, str): add_row(image, video, title)
-
-    # 2) Card links containing poster images (works with server-rendered and many hydrated sites).
-    anchor_blocks = re.findall(r'<a\b([^>]*)>(.*?)</a\s*>', html, re.I | re.S)
-    for attrs, body in anchor_blocks:
-        href_m = re.search(r'\bhref=["\']([^"\']+)', attrs, re.I)
-        img_m = re.search(r'<img\b([^>]*)>', body, re.I | re.S)
-        if not href_m or not img_m: continue
-        href = urllib.parse.urljoin(source_url, href_m.group(1).replace('&amp;', '&'))
-        img_attrs = img_m.group(1)
-        src_m = re.search(r'\b(?:src|data-src|data-lazy-src|data-original)=["\']([^"\']+)', img_attrs, re.I)
-        if not src_m:
-            srcset_m = re.search(r'\bsrcset=["\']([^"\']+)', img_attrs, re.I)
-            if srcset_m: src_m = re.match(r'\s*(\S+)', srcset_m.group(1))
-        if not src_m: continue
-        cover = src_m.group(1)
-        title_m = re.search(r'\balt=["\']([^"\']+)', img_attrs, re.I)
-        title = title_m.group(1) if title_m else ""
-        # Prefer likely content routes; ignore site navigation/social links.
-        if urllib.parse.urlparse(href).netloc and urllib.parse.urlparse(href).netloc != parsed_source.netloc:
-            continue
-        if any(x in href.lower() for x in ("/category", "/tag/", "/about", "/contact", "#", "javascript:")):
-            continue
-        add_row(cover, href, title)
-
-    # 3) YouTube IDs embedded in page source, paired with the closest poster if available.
-    video_ids = []
-    patterns = (r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^"\'<>\s#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"')
-    for pattern in patterns:
-        for vid in re.findall(pattern, html, re.I):
-            if vid not in video_ids: video_ids.append(vid)
-    for vid in video_ids:
-        watch = f"https://www.youtube.com/watch?v={vid}"
-        add_row(f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", watch, "")
-
-    # 4) Public MP4 files only. Do not bypass protected streams or DRM.
-    for url in re.findall(r'https?[^"\'\s<>]+\.mp4(?:\?[^"\'\s<>]*)?', html, re.I):
-        add_row("", url, "")
-    return rows
-
-# ============================ TikTok Short Drama desktop-web catalog ============================
-_TT_SHORTDRAMA_URL = "https://www.tiktok.com/shortdrama"
-
-@st.cache_data(ttl=600, show_spinner=False)
-def _tt_shortdrama_catalog():
-    """Try to read public Short Drama cards from TikTok's desktop web HTML.
-
-    TikTok's desktop page is JS-heavy and may return an access challenge in hosted
-    environments. Parse only public HTML/embedded JSON; do not bypass login, DRM,
-    signed media URLs, or other access controls.
-    """
-    headers = {
-        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                       "AppleWebKit/537.36 (KHTML, like Gecko) "
-                       "Chrome/132.0.0.0 Safari/537.36"),
-        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.tiktok.com/",
-    }
-    response = requests.get(_TT_SHORTDRAMA_URL, headers=headers, timeout=25)
-    response.raise_for_status()
-    html = response.text
-    rows, seen = [], set()
-
-    def add(title, cover, url, category=""):
-        title = re.sub(r"\s+", " ", str(title or "")).strip()
-        cover = urllib.parse.urljoin(_TT_SHORTDRAMA_URL, str(cover or "").replace("&amp;", "&"))
-        url = urllib.parse.urljoin(_TT_SHORTDRAMA_URL, str(url or ""))
-        if not title or not url.startswith("https://www.tiktok.com/"):
-            return
-        if "/shortdrama" not in url.lower() and "/series/" not in url.lower():
-            return
-        if not cover.startswith(("https://", "http://")) or any(x in cover.lower() for x in ("avatar", "logo", "icon")):
-            return
-        if url in seen:
-            return
-        seen.add(url)
-        rows.append({"title": title[:180], "cover": cover, "url": url, "category": category[:80]})
-
-    # Extract links/cards with image and nearby accessible title text.
-    anchors = re.findall(r"<a\b[^>]*href=[\"']([^\"']*shortdrama[^\"']*)[\"'][^>]*>(.*?)</a>", html, re.I | re.S)
-    for href, body in anchors:
-        image_match = re.search(r"<img\b[^>]*(?:src|data-src)=[\"']([^\"']+)[\"'][^>]*>", body, re.I | re.S)
-        title_match = re.search(r"(?:alt|title)=[\"']([^\"']+)[\"']", body, re.I)
-        if not title_match:
-            text_body = re.sub(r"<[^>]+>", " ", body)
-            title_match = re.search(r"([^\s].{2,160})", re.sub(r"\s+", " ", text_body))
-        if image_match and title_match:
-            add(title_match.group(1), image_match.group(1), href)
-
-    # Parse common TikTok hydration / universal-data JSON blobs.
-    for match in re.finditer(r"""<script[^>]+id=["'](?:__UNIVERSAL_DATA_FOR_REHYDRATION__|SIGI_STATE|__NEXT_DATA__)["'][^>]*>(.*?)</script>""", html, re.I | re.S):
-        blob = match.group(1).strip()
-        try:
-            payload = json.loads(blob)
-        except Exception:
-            continue
-        stack = [payload]
-        while stack:
-            obj = stack.pop()
-            if isinstance(obj, dict):
-                title = obj.get("title") or obj.get("name") or obj.get("seriesTitle")
-                cover = obj.get("cover") or obj.get("coverUrl") or obj.get("poster") or obj.get("posterUrl")
-                url = obj.get("url") or obj.get("webUrl") or obj.get("shareUrl")
-                if isinstance(title, str) and isinstance(cover, str) and isinstance(url, str):
-                    add(title, cover, url, obj.get("category", ""))
-                stack.extend(obj.values())
-            elif isinstance(obj, list):
-                stack.extend(obj)
-
-    return rows, response.url
-
 with tab_drama:
-    st.markdown("## 📱 TikTok Short Drama")
-    st.caption("បញ្ជី Poster ព្យាយាមយកពី Desktop Web របស់ TikTok ដោយផ្ទាល់។")
-
-    # Keep the existing secure Admin/VIP account workflow intact.
-    _is_drama_admin = _hg_admin_login_box()
-    if _is_drama_admin:
-        st.success("👑 Admin Access")
-        with st.expander("⚙️ Admin: បង្កើត និងគ្រប់គ្រងគណនី VIP", expanded=False):
-            _hg_admin_panel()
-        if st.button("ចាកចេញពី Admin", key="drama_admin_logout"):
-            st.session_state.pop("_hg_admin_authenticated", None)
-            st.rerun()
-
-    _td_col1, _td_col2 = st.columns([3, 1], gap="small")
-    with _td_col1:
-        st.markdown("### 🎞️ Poster រឿង និងភាគ")
-    with _td_col2:
-        if st.button("↻ ផ្ទុកឡើងវិញ", key="tiktok_shortdrama_refresh", use_container_width=True):
-            _tt_shortdrama_catalog.clear()
-            st.rerun()
-
-    st.link_button("🌐 បើក Desktop Web របស់ TikTok", _TT_SHORTDRAMA_URL, use_container_width=True)
-    try:
-        with st.spinner("កំពុងទាញ Poster ពី TikTok Desktop Web..."):
-            _td_rows, _td_final_url = _tt_shortdrama_catalog()
-        if _td_rows:
-            _td_categories = sorted({r.get("category", "") for r in _td_rows if r.get("category")})
-            _td_filter = st.selectbox("🎭 ប្រភេទរឿង", ["គ្រប់ប្រភេទ"] + _td_categories, key="tt_drama_category")
-            _td_shown = [r for r in _td_rows if _td_filter == "គ្រប់ប្រភេទ" or r.get("category") == _td_filter]
-            _td_search = st.text_input("🔎 ស្វែងរកឈ្មោះរឿង", key="tt_drama_search", placeholder="វាយឈ្មោះរឿង...")
-            if _td_search.strip():
-                _td_shown = [r for r in _td_shown if _td_search.casefold() in r["title"].casefold()]
-            for _td_i in range(0, len(_td_shown), 3):
-                _td_cols = st.columns(3, gap="small")
-                for _td_col, _td_item in zip(_td_cols, _td_shown[_td_i:_td_i+3]):
-                    with _td_col:
-                        st.image(_td_item["cover"], use_container_width=True)
-                        st.caption(_td_item["title"])
-                        if st.button("▶️ មើលរឿង", key=f"tt_shortdrama_open_{_td_i}_{abs(hash(_td_item['url']))}", use_container_width=True):
-                            st.session_state["_tt_shortdrama_selected"] = _td_item
+    _hg_access = _hg_vip_gate()
+    if _hg_access:
+        st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
+        st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
+        if not _HG_APP_ID or not _HG_APP_SECRET:
+            st.warning("សូមបញ្ចូល Hongguo APPID និង APPSECRET នៅផ្ទាំង «🌐 បកប្រែ» → API Key ផ្ទាល់ខ្លួន → Hongguo Drama។")
+        _hg_q1, _hg_q2 = st.columns([3, 1])
+        with _hg_q1:
+            _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
+        with _hg_q2:
+            st.write("")
+            _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
+        if "_hg_rows" not in st.session_state:
+            st.session_state["_hg_rows"] = []
+        if "_hg_page" not in st.session_state:
+            st.session_state["_hg_page"] = 1
+        if "_hg_catalog_mode" not in st.session_state:
+            st.session_state["_hg_catalog_mode"] = "hot"
+        _hg_c1, _hg_c2 = st.columns([3, 1])
+        with _hg_c1:
+            try:
+                _hg_categories = _hg_categories() if _HG_APP_ID and _HG_APP_SECRET else []
+            except Exception as _cat_err:
+                _hg_categories = []
+                st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
+            _hg_cat_map = _hg_flat_categories(_hg_categories)
+            _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
+            _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
+            if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
+                _hg_categories.clear()
+                st.rerun()
+        with _hg_c2:
+            st.write("")
+            _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
+        _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
+        if _hg_load_category:
+            st.session_state["_hg_page"] = 1
+            st.session_state["_hg_catalog_mode"] = ("hot" if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                                                      else "category:" + _hg_cat_map.get(_hg_cat_choice, ""))
+            st.session_state.pop("_hg_selected", None)
+            try:
+                with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
+                    st.session_state["_hg_rows"] = (
+                        _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                        else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
+                    )
+            except Exception as e:
+                st.error(_hg_error_khmer(e))
+        if _hg_search_click and _hg_keyword.strip():
+            st.session_state["_hg_page"] = 1
+            st.session_state["_hg_catalog_mode"] = "search:" + _hg_keyword.strip()
+            try:
+                _direct_series_id = _hg_extract_series_id(_hg_keyword)
+                if _direct_series_id:
+                    with st.spinner("កំពុងបើករឿងតាម Link..."):
+                        _direct_detail = _hg_detail(_direct_series_id)
+                    st.session_state["_hg_selected"] = {
+                        "series_id": _direct_series_id,
+                        "name": _direct_detail.get("name") or "រឿង Hongguo",
+                        "cover": _direct_detail.get("cover") or "",
+                        "episode_cnt": _direct_detail.get("episode_cnt") or "",
+                        "listed_cnt": _direct_detail.get("listed_cnt") or "",
+                        "intro": _direct_detail.get("intro") or "",
+                    }
+                    st.session_state["_hg_rows"] = []
+                    st.rerun()
+                else:
+                    with st.spinner("កំពុងស្វែងរករឿង..."):
+                        st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+                    st.session_state.pop("_hg_selected", None)
+                    if not st.session_state["_hg_rows"]:
+                        st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
+            except Exception as e:
+                st.error(str(e))
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
+            try:
+                st.session_state["_hg_page"] = 1
+                st.session_state["_hg_catalog_mode"] = "hot"
+                with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
+                    st.session_state["_hg_rows"] = _hg_rank(1)
+            except Exception as e:
+                st.error(str(e))
+        _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
+        _hg_selected = st.session_state.get("_hg_selected")
+        if _hg_selected:
+            if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
+                st.session_state.pop("_hg_selected", None)
+                st.rerun()
+            st.subheader(_hg_selected.get("name") or "រឿង")
+            _hg_cover = _hg_selected.get("cover")
+            if _hg_cover:
+                st.image(_hg_cover, use_container_width=True)
+            try:
+                with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
+                    _hg_d = _hg_detail(_hg_selected["series_id"])
+                if _hg_d.get("intro"):
+                    st.write(_hg_d["intro"])
+                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
+                if not _hg_eps:
+                    st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
+                else:
+                    _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
+                    _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
+                    _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
+                    _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
+                    _hg_epnum = _hg_ep_map[_hg_ep_label]
+                    _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
+                    if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
+                        with st.spinner("កំពុងរៀបចំវីដេអូ..."):
+                            _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                        if _hg_play.get("url"):
+                            st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
+                        else:
+                            st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
+                    _hg_saved = st.session_state.get(_hg_play_key)
+                    if _hg_saved:
+                        st.video(_hg_saved["url"])
+                        st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
+                        if _hg_saved.get("ready") is False:
+                            st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
+                        if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
+                            st.session_state["mode_pick"] = "🔗 Link"
+                            st.session_state["link_text_area"] = _hg_saved["url"]
+                            st.session_state["link_searched"] = [_hg_saved["url"]]
+                            st.session_state["_hg_imported_caption_notice"] = True
                             st.rerun()
-            _td_selected = st.session_state.get("_tt_shortdrama_selected")
-            if _td_selected:
-                st.markdown(f"### {_td_selected.get('title', 'រឿងដែលបានជ្រើស')}")
-                st.link_button("▶️ មើលរឿងនៅ TikTok", _td_selected["url"], use_container_width=True)
-                st.caption("TikTok អាចតម្រូវឱ្យមើលតាមគេហទំព័ររបស់វា។ ការទាញយកមានតែពេលមាន URL វីដេអូសាធារណៈដែលអាចទាញយកបាន និងអនុញ្ញាត។")
-        else:
-            st.info("TikTok Desktop Web មិនបានផ្ញើ Poster មកក្នុង HTML ដែល App អាចអានបានទេ។ សូមបើក Desktop Web ដោយប៊ូតុងខាងលើ។")
-    except Exception as _td_err:
-        st.warning("មិនអាចអាន Poster ពី TikTok Desktop Web បាននៅលើ Server នេះទេ។")
-        if _is_drama_admin:
-            st.caption(str(_td_err)[:300])
 
-    with st.expander("📥 បញ្ចូលតំណភាគទៅផ្ទាំងវីដេអូ", expanded=False):
-        _td_episode_url = st.text_input(
-            "តំណភាគ TikTok Short Drama",
-            placeholder="បិទភ្ជាប់ TikTok share link នៅទីនេះ",
-            key="tiktok_shortdrama_episode_url",
+                    # Download multiple Hongguo episodes in one ZIP (all or selected)
+                    st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ")
+                    _hg_dl_all = st.checkbox(
+                        f"ជ្រើសរើសភាគទាំងអស់ ({len(_hg_ep_map)} ភាគ)",
+                        value=False,
+                        key=f"hg_dl_all_{_hg_selected['series_id']}"
+                    )
+                    _hg_dl_labels = st.multiselect(
+                        "ឬជ្រើសរើសតែភាគដែលចង់ទាញយក",
+                        list(_hg_ep_map.keys()),
+                        default=list(_hg_ep_map.keys()) if _hg_dl_all else [],
+                        key=f"hg_dl_eps_{_hg_selected['series_id']}"
+                    )
+                    _hg_dl_max = st.selectbox(
+                        "ចំនួនអតិបរមាក្នុងមួយលើក",
+                        [5, 10, 20, 50, 100],
+                        index=2,
+                        key=f"hg_dl_limit_{_hg_selected['series_id']}"
+                    )
+                    if st.button(
+                        f"📦 ទាញយក {_hg_dl_labels.__len__() if _hg_dl_all else len(_hg_dl_labels)} ភាគជា ZIP",
+                        key=f"hg_dl_start_{_hg_selected['series_id']}",
+                        disabled=(not (_hg_dl_all or _hg_dl_labels) or busy),
+                        use_container_width=True
+                    ):
+                        _chosen_dl_labels = list(_hg_ep_map.keys()) if _hg_dl_all else list(_hg_dl_labels)
+                        _chosen_dl_labels = _chosen_dl_labels[:_hg_dl_max]
+                        _dl_folder = tempfile.mkdtemp(prefix="hongguo_batch_")
+                        _dl_zip_path = os.path.join(_dl_folder, "hongguo_episodes.zip")
+                        _dl_errors = []
+                        _dl_ok = 0
+                        _dl_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
+                        try:
+                            with zipfile.ZipFile(_dl_zip_path, "w", compression=zipfile.ZIP_STORED) as _dl_zip:
+                                for _di, _dl_label in enumerate(_chosen_dl_labels, start=1):
+                                    _dl_ep = _hg_ep_map[_dl_label]
+                                    _dl_tmp = None
+                                    try:
+                                        _dl_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _dl_ep, "q": _hg_quality, "codec": _hg_codec})
+                                        _dl_url = str(_dl_play.get("url") or "").strip()
+                                        if not _dl_url:
+                                            raise RuntimeError("API មិនបានផ្ដល់តំណវីដេអូ")
+                                        _dl_result = _fetch_one(_dl_url)
+                                        if not _dl_result.get("ok") or not _dl_result.get("path"):
+                                            raise RuntimeError(_dl_result.get("err") or "ទាញយកវីដេអូមិនបាន")
+                                        _dl_tmp = _dl_result["path"]
+                                        _dl_size = os.path.getsize(_dl_tmp)
+                                        _dl_current = sum(x.file_size for x in _dl_zip.filelist)
+                                        if _dl_current + _dl_size > MAX_ZIP_MB * 1024 * 1024:
+                                            raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
+                                        _dl_zip.write(_dl_tmp, f"episode_{_dl_ep:04d}.mp4")
+                                        _dl_ok += 1
+                                    except Exception as _dl_err:
+                                        _dl_errors.append(f"ភាគ {_dl_ep}: {str(_dl_err)[:180]}")
+                                    finally:
+                                        if _dl_tmp:
+                                            shutil.rmtree(os.path.dirname(_dl_tmp), ignore_errors=True)
+                                    _dl_bar.progress(_di / max(1, len(_chosen_dl_labels)), text=f"ទាញយកបាន {_dl_ok}/{len(_chosen_dl_labels)} ភាគ · កំពុងដំណើរការ {_di}/{len(_chosen_dl_labels)}")
+                            _dl_bar.empty()
+                            if _dl_ok:
+                                st.session_state[f"_hg_dl_ready_{_hg_selected['series_id']}"] = {
+                                    "path": _dl_zip_path,
+                                    "folder": _dl_folder,
+                                    "count": _dl_ok,
+                                    "name": safe_filename(_hg_selected.get("name") or "hongguo")
+                                }
+                                st.success(f"បានរៀបចំទាញយកបាន {_dl_ok} ភាគរួចរាល់។")
+                            else:
+                                shutil.rmtree(_dl_folder, ignore_errors=True)
+                                st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
+                            if _dl_errors:
+                                with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_dl_errors)})"):
+                                    for _de in _dl_errors:
+                                        st.warning(_de)
+                        except Exception as _dl_fatal:
+                            shutil.rmtree(_dl_folder, ignore_errors=True)
+                            st.error(f"រៀបចំ ZIP មិនបាន៖ {_dl_fatal}")
+                    _dl_ready = st.session_state.get(f"_hg_dl_ready_{_hg_selected['series_id']}")
+                    if _dl_ready and os.path.isfile(_dl_ready.get("path", "")):
+                        with open(_dl_ready["path"], "rb") as _dl_file:
+                            dl_button(
+                                f"⬇️ ទាញយក ZIP ({_dl_ready['count']} ភាគ)",
+                                _dl_file,
+                                f"{_dl_ready['name']}_episodes.zip",
+                                "application/zip",
+                                key=f"hg_dl_file_{_hg_selected['series_id']}",
+                                use_container_width=True
+                            )
+
+                    st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
+                    _hg_batch_labels = st.multiselect(
+                        "ជ្រើសរើសភាគដែលចង់បកប្រែ",
+                        list(_hg_ep_map.keys()),
+                        default=[],
+                        key=f"hg_batch_eps_{_hg_selected['series_id']}",
+                        help="អាចជ្រើសរើសភាគជាច្រើនបាន។ កម្មវិធីនឹងរៀបចំ Link រួចបញ្ជូនទៅ Khmer Auto Caption តាមលំដាប់។"
+                    )
+                    _hg_batch_limit = st.selectbox(
+                        "ចំនួនភាគក្នុងមួយលើក",
+                        [2, 3, 5, 10, 20],
+                        index=2,
+                        key=f"hg_batch_limit_{_hg_selected['series_id']}"
+                    )
+                    if st.button(
+                        f"🚀 រៀបចំ និងបកប្រែ {len(_hg_batch_labels)} ភាគ",
+                        type="primary",
+                        disabled=not _hg_batch_labels or busy,
+                        key=f"hg_batch_start_{_hg_selected['series_id']}",
+                        use_container_width=True
+                    ):
+                        _batch_eps = [_hg_ep_map[x] for x in _hg_batch_labels][:_hg_batch_limit]
+                        _batch_urls = []
+                        _batch_errors = []
+                        _batch_bar = st.progress(0, text="កំពុងរៀបចំតំណភាគ...")
+                        for _bi, _be in enumerate(_batch_eps, start=1):
+                            try:
+                                _bp = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _be, "q": _hg_quality, "codec": _hg_codec})
+                                _bu = str(_bp.get("url") or "").strip()
+                                if _bu:
+                                    _batch_urls.append(_bu)
+                                else:
+                                    _batch_errors.append(f"ភាគ {_be}: API មិនបានផ្ដល់ URL")
+                            except Exception as _be_err:
+                                _batch_errors.append(f"ភាគ {_be}: {_hg_error_khmer(_be_err)}")
+                            _batch_bar.progress(_bi / len(_batch_eps), text=f"កំពុងរៀបចំភាគ {_bi}/{len(_batch_eps)}")
+                        _batch_bar.empty()
+                        if _batch_urls:
+                            st.session_state["mode_pick"] = "🔗 Link"
+                            st.session_state["link_text_area"] = "\n".join(_batch_urls)
+                            st.session_state["link_searched"] = list(_batch_urls)
+                            st.session_state["_hg_imported_caption_notice"] = True
+                            st.session_state["_auto_translate"] = True
+                            st.session_state["_hg_batch_count"] = len(_batch_urls)
+                            st.rerun()
+                        if _batch_errors:
+                            st.warning("មិនអាចរៀបចំបានខ្លះ៖ " + " · ".join(_batch_errors[:5]))
+            except Exception as e:
+                st.error(str(e))
+        elif _hg_rows:
+            for _hg_i in range(0, len(_hg_rows), 3):
+                _hg_cols = st.columns(3, gap="small")
+                for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
+                    with _hg_col:
+                        if _hg_row.get("cover"):
+                            st.image(_hg_row["cover"], use_container_width=True)
+                        st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
+                        st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
+                        if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
+                            st.session_state["_hg_selected"] = _hg_row
+                            st.rerun()
+            _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
+            _hg_page_end = _hg_page_start + len(_hg_rows) - 1
+            st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
+            _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
+            with _hg_prev:
+                if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
+                             disabled=st.session_state.get("_hg_page", 1) <= 1):
+                    st.session_state["_hg_page"] -= 1
+                    _p = st.session_state["_hg_page"]
+                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
+                    try:
+                        if _mode == "hot":
+                            st.session_state["_hg_rows"] = _hg_rank(_p)
+                        elif _mode.startswith("category:"):
+                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
+                        elif _mode.startswith("search:"):
+                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
+                    except Exception as e:
+                        st.error(str(e))
+                    st.rerun()
+            with _hg_page_label:
+                st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {st.session_state.get('_hg_page',1)}</div>", unsafe_allow_html=True)
+            with _hg_next:
+                if st.button("បន្ទាប់ ➡️", key="hg_page_next", use_container_width=True,
+                             disabled=len(_hg_rows) < 20):
+                    st.session_state["_hg_page"] += 1
+                    _p = st.session_state["_hg_page"]
+                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
+                    try:
+                        if _mode == "hot":
+                            st.session_state["_hg_rows"] = _hg_rank(_p)
+                        elif _mode.startswith("category:"):
+                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
+                        elif _mode.startswith("search:"):
+                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
+                    except Exception as e:
+                        st.error(str(e))
+                    st.rerun()
+
+
+
+
+
+# ============================ TikTok Short Drama ============================
+# Preserve the existing VIP gate and admin account controls; this is an additional source.
+with tab_tiktok:
+    _tt_access = _hg_vip_gate()
+    if _tt_access:
+        st.markdown("### 🎵 TikTok Short Drama")
+        st.caption("បិទភ្ជាប់តំណរឿង/វីដេអូ TikTok ដែលអ្នកមានសិទ្ធិប្រើប្រាស់។ អាចមើល ទាញយក និងបញ្ជូនទៅ Khmer Auto Caption។")
+        st.link_button("🌐 បើក TikTok Short Drama", "https://www.tiktok.com/shortdrama",
+                       use_container_width=True)
+        _tt_url = st.text_input(
+            "តំណ TikTok Short Drama ឬតំណវីដេអូ",
+            key="tiktok_drama_url",
+            placeholder="https://www.tiktok.com/…",
         )
-        if _td_episode_url.strip():
-            st.link_button("▶️ បើកភាគនេះ", _td_episode_url.strip(), use_container_width=True)
-            if st.button("📋 ប្រើតំណនេះនៅផ្ទាំងវីដេអូ", key="td_send_to_video_tab", use_container_width=True):
-                st.session_state["mode_pick"] = "🔗 Link"
-                st.session_state["link_text_area"] = _td_episode_url.strip()
-                st.session_state["_hg_imported_caption_notice"] = True
-                st.success("បានផ្ទេរតំណទៅប្រអប់ Link ក្នុងផ្ទាំង 🏠 វីដេអូ។")
+        _tt_is_link = bool(_tt_url.strip()) and is_social_link(_tt_url.strip())
+        if _tt_url.strip() and not _tt_is_link:
+            st.warning("សូមបញ្ចូលតំណ TikTok ដែលមាន domain tiktok.com។")
+        _tt_fetch = st.button(
+            "🔎 ស្វែងរក / ទាញយកវីដេអូ",
+            key="tiktok_drama_fetch",
+            type="primary",
+            disabled=not _tt_is_link or busy,
+            use_container_width=True,
+        )
+        if _tt_fetch:
+            with st.spinner("កំពុងទាញយកវីដេអូពី TikTok…"):
+                _tt_result = _fetch_one(_tt_url.strip())
+            if _tt_result.get("ok") and _tt_result.get("path"):
+                st.session_state["_tiktok_drama_result"] = {
+                    "url": _tt_url.strip(),
+                    "path": _tt_result["path"],
+                }
+            else:
+                st.error("មិនអាចទាញយកវីដេអូនេះបានទេ។ TikTok ឬអ្នកផ្តល់មាតិកាអាចដាក់កម្រិតលើតំណនេះ។")
+                if _tt_result.get("err"):
+                    st.caption(str(_tt_result["err"])[:350])
+        _tt_ready = st.session_state.get("_tiktok_drama_result")
+        if _tt_ready:
+            _tt_path = _tt_ready.get("path", "")
+            if _tt_path and os.path.isfile(_tt_path):
+                st.video(_tt_path)
+                with open(_tt_path, "rb") as _tt_file:
+                    _tt_bytes = _tt_file.read()
+                st.download_button(
+                    "⬇️ ទាញយកវីដេអូ",
+                    data=_tt_bytes,
+                    file_name="tiktok_short_drama.mp4",
+                    mime="video/mp4",
+                    key="tiktok_drama_download",
+                    use_container_width=True,
+                )
+                if st.button(
+                    "✨ បញ្ជូនទៅ Khmer Auto Caption",
+                    type="primary",
+                    key="tiktok_drama_to_caption",
+                    use_container_width=True,
+                ):
+                    st.session_state["mode_pick"] = "🔗 Link"
+                    st.session_state["link_text_area"] = _tt_ready["url"]
+                    st.session_state["link_searched"] = [_tt_ready["url"]]
+                    st.session_state["_hg_imported_caption_notice"] = True
+                    st.rerun()
+            else:
+                st.session_state.pop("_tiktok_drama_result", None)
+                st.info("វីដេអូដែលបានរកមុនមិននៅក្នុង session ទៀតទេ។ សូមស្វែងរកម្ដងទៀត.")
+        st.caption("ចំណាំ៖ ការចូលមើល ឬទាញយកអាស្រ័យលើសិទ្ធិចូលប្រើ និងការកំណត់របស់ TikTok។ មិនអាចធានាថាតំណទាំងអស់ដំណើរការបានទេ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
@@ -7800,12 +7933,12 @@ with tab_vid:
             else:
                 st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
                 link_text = st.text_area(
-                    "តំណវីដេអូ TikTok ឬ Short Drama",
+                    "តំណវីដេអូ (TikTok ឬភាគ Hongguo ដែលបានជ្រើស)",
                     key="link_text_area",
                     placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
                     height=68)
                 if st.session_state.pop("_hg_imported_caption_notice", False):
-                    st.success("បានទទួលតំណ Short Drama ហើយ។ កម្មវិធីនឹងស្វែងរក និងដំណើរការវីដេអូ បើតំណអាចទាញយកបាន។")
+                    st.success("បានទទួលភាគ Hongguo ហើយ។ កម្មវិធីនឹងស្វែងរក និងចាប់ផ្ដើមបកប្រែដោយស្វ័យប្រវត្តិ បើតំណវីដេអូអាចទាញយកបាន។")
                 _all_links = extract_links(link_text)
                 _link_lines = _all_links[:link_limit]
                 if _all_links:
