@@ -7521,88 +7521,104 @@ _STREAMING_VERTICALS_HOME = "https://www.streamingverticals.com/"
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _sv_public_catalog():
-    """Read public catalog markup only; no private API, login, token or paywall bypass."""
-    headers = {"User-Agent": "Mozilla/5.0 (compatible; KhmerAutoCaption/1.0)",
-               "Accept": "text/html,application/xhtml+xml"}
-    response = requests.get(_STREAMING_VERTICALS_HOME, headers=headers, timeout=25)
+    """Collect public poster/video pairs from Streaming Verticals page metadata."""
+    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+               "Accept": "text/html,application/xhtml+xml,application/json"}
+    response = requests.get(_STREAMING_VERTICALS_HOME, headers=headers, timeout=30)
     response.raise_for_status()
     html = response.text
     rows, seen = [], set()
 
-    # Collect public YouTube video IDs exposed in the page source. YouTube's own
-    # thumbnails are used as posters; the official YouTube player handles playback.
-    ids = []
-    for pat in (r'youtube\.com/embed/([A-Za-z0-9_-]{11})',
-                r'youtube\.com/watch\?v=([A-Za-z0-9_-]{11})',
-                r'youtu\.be/([A-Za-z0-9_-]{11})',
-                r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"'):
-        for vid in re.findall(pat, html):
-            if vid not in seen:
-                seen.add(vid); ids.append(vid)
-    for vid in ids:
-        rows.append({"id": vid, "cover": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
-                     "watch": f"https://www.youtube.com/watch?v={vid}",
-                     "embed": f"https://www.youtube-nocookie.com/embed/{vid}",
-                     "direct": ""})
+    # Parse structured metadata used by modern catalog pages (JSON-LD / hydration data).
+    blocks = re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S)
+    for block in blocks:
+        try:
+            payload = json.loads(block.strip())
+        except Exception:
+            continue
+        stack = payload if isinstance(payload, list) else [payload]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, list):
+                stack.extend(obj)
+            elif isinstance(obj, dict):
+                stack.extend(v for v in obj.values() if isinstance(v, (dict, list)))
+                image = obj.get("thumbnailUrl") or obj.get("image") or obj.get("thumbnail")
+                video = obj.get("embedUrl") or obj.get("contentUrl") or obj.get("url")
+                if isinstance(image, list): image = image[0] if image else ""
+                if isinstance(image, dict): image = image.get("url") or image.get("contentUrl") or ""
+                if isinstance(video, dict): video = video.get("url") or ""
+                if isinstance(image, str) and image.startswith("http") and isinstance(video, str) and video.startswith("http"):
+                    key = video
+                    if key not in seen:
+                        seen.add(key)
+                        vid = re.search(r'(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?(?:[^#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', video)
+                        rows.append({"id": vid.group(1) if vid else "sv_" + str(abs(hash(key))),
+                                     "cover": image, "watch": video,
+                                     "embed": f"https://www.youtube-nocookie.com/embed/{vid.group(1)}" if vid else "",
+                                     "direct": video if re.search(r'\.mp4(?:\?|$)', video, re.I) else ""})
 
-    # Also recognize direct public MP4 links if the catalog exposes them.
-    for url in re.findall(r'https?[^\"\'\s<>]+\.mp4(?:\?[^\"\'\s<>]*)?', html, re.I):
+    # Broadly recognize YouTube links in the public HTML, including Shorts and nocookie embeds.
+    video_patterns = (
+        r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^"\'<>\s#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})',
+        r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"',
+    )
+    video_ids = []
+    for pattern in video_patterns:
+        for vid in re.findall(pattern, html, re.I):
+            if vid not in video_ids:
+                video_ids.append(vid)
+    for vid in video_ids:
+        watch = f"https://www.youtube.com/watch?v={vid}"
+        if watch not in seen:
+            seen.add(watch)
+            rows.append({"id": vid, "cover": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
+                         "watch": watch, "embed": f"https://www.youtube-nocookie.com/embed/{vid}", "direct": ""})
+
+    # Public MP4 files only; never extract or bypass protected streams.
+    for url in re.findall(r'https?[^"\'\s<>]+\.mp4(?:\?[^"\'\s<>]*)?', html, re.I):
         url = url.replace('&amp;', '&')
-        key = "mp4_" + str(abs(hash(url)))
-        if key not in seen:
-            seen.add(key)
-            rows.append({"id": key, "cover": "", "watch": url, "embed": "", "direct": url})
+        if url not in seen:
+            seen.add(url)
+            rows.append({"id": "mp4_" + str(abs(hash(url))), "cover": "", "watch": url, "embed": "", "direct": url})
     return rows
 
 with tab_drama:
-    st.markdown("### 🎬 រឿងខ្លីពេញៗ — ប្រភពសាធារណៈ")
-    st.caption("គ្មាន Hongguo API / APPID / APPSECRET។ បង្ហាញជា Poster ជាជួរដូចទម្រង់ចាស់។")
-    _sv_a, _sv_b = st.columns([3, 1])
-    with _sv_a:
-        _sv_filter = st.text_input("ស្វែងរកក្នុងបញ្ជី Poster", key="sv_catalog_filter",
-                                   placeholder="វាយពាក្យស្វែងរក (បើមានចំណងជើងក្នុងទំព័រ)")
-    with _sv_b:
-        st.write("")
-        _sv_reload = st.button("🔄 ផ្ទុកឡើងវិញ", key="sv_reload", use_container_width=True)
+    # Clean, poster-first screen: no title, source explanation, search labels or metadata.
+    _sv_reload = st.button("↻", key="sv_reload", help="ផ្ទុក Poster ឡើងវិញ")
     if _sv_reload:
         _sv_public_catalog.clear()
     try:
-        with st.spinner("កំពុងអាន Poster ពី Streaming Verticals..."):
-            _sv_rows = _sv_public_catalog()
-        if not _sv_rows:
-            st.warning("មិនអាចទាញយក Poster ពីប្រភពនេះបានទេ។ សូមបើកវេបសាយផ្ទាល់ ឬសាកម្ដងទៀត។")
-            st.link_button("បើក Streaming Verticals", _STREAMING_VERTICALS_HOME, use_container_width=True)
-        else:
-            # Preserve the old three-column poster gallery and hide every title.
-            _sv_cols_per_row = 3
-            for _sv_i in range(0, len(_sv_rows), _sv_cols_per_row):
-                _sv_cols = st.columns(_sv_cols_per_row, gap="small")
-                for _sv_col, _sv_item in zip(_sv_cols, _sv_rows[_sv_i:_sv_i+_sv_cols_per_row]):
+        _sv_rows = _sv_public_catalog()
+        if _sv_rows:
+            for _sv_i in range(0, len(_sv_rows), 3):
+                _sv_cols = st.columns(3, gap="small")
+                for _sv_col, _sv_item in zip(_sv_cols, _sv_rows[_sv_i:_sv_i+3]):
                     with _sv_col:
                         if _sv_item.get("cover"):
                             st.image(_sv_item["cover"], use_container_width=True)
                         else:
-                            st.markdown("<div style='height:170px;border-radius:12px;background:#202735;display:flex;align-items:center;justify-content:center;color:white'>🎬</div>", unsafe_allow_html=True)
-                        if st.button("▶ មើលរឿង", key=f"sv_pick_{_sv_item['id']}", use_container_width=True):
+                            st.markdown("<div style='aspect-ratio:2/3;border-radius:12px;background:linear-gradient(145deg,#18254c,#07152f);display:flex;align-items:center;justify-content:center;color:#fff;font-size:34px'>🎬</div>", unsafe_allow_html=True)
+                        if st.button("▶", key=f"sv_pick_{_sv_item['id']}", use_container_width=True):
                             st.session_state["_sv_selected"] = _sv_item
                             st.rerun()
-            st.caption(f"បង្ហាញ Poster ចំនួន {len(_sv_rows)} · ប្រភព Streaming Verticals")
+        else:
+            st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូមចុច ↻ ម្តងទៀត។")
         _sv_selected = st.session_state.get("_sv_selected")
         if _sv_selected:
-            st.divider()
-            if st.button("← ត្រឡប់ទៅ Poster", key="sv_back", use_container_width=True):
+            if st.button("←", key="sv_back"):
                 st.session_state.pop("_sv_selected", None)
                 st.rerun()
             if _sv_selected.get("embed"):
                 components.iframe(_sv_selected["embed"], height=520, scrolling=False)
-                st.link_button("បើកវីដេអូដើមនៅ YouTube", _sv_selected["watch"], use_container_width=True)
-                st.info("វីដេអូនេះចាក់តាម YouTube ផ្លូវការ។ ការទាញយក MP4 មិនត្រូវបានផ្ដល់ដោយប្រភពនេះទេ; ប្រើមុខងារ Download ផ្លូវការរបស់ YouTube ប្រសិនបើមានសម្រាប់វីដេអូ/គណនីរបស់អ្នក។")
+                st.link_button("▶", _sv_selected["watch"], use_container_width=True)
             elif _sv_selected.get("direct"):
                 st.video(_sv_selected["direct"])
-                st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _sv_selected["direct"], use_container_width=True)
-    except Exception as _sv_err:
-        st.error(f"មិនអាចភ្ជាប់ប្រភពសាធារណៈបាន៖ {str(_sv_err)[:240]}")
-        st.link_button("បើក Streaming Verticals", _STREAMING_VERTICALS_HOME, use_container_width=True)
+                st.link_button("⬇️", _sv_selected["direct"], use_container_width=True)
+            else:
+                st.link_button("▶", _sv_selected["watch"], use_container_width=True)
+    except Exception:
+        st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូមចុច ↻ ម្តងទៀត។")
 
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
