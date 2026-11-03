@@ -7641,9 +7641,81 @@ def _sv_public_catalog(source_url=None):
         add_row("", url, "")
     return rows
 
+# ============================ TikTok Short Drama desktop-web catalog ============================
+_TT_SHORTDRAMA_URL = "https://www.tiktok.com/shortdrama"
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _tt_shortdrama_catalog():
+    """Try to read public Short Drama cards from TikTok's desktop web HTML.
+
+    TikTok's desktop page is JS-heavy and may return an access challenge in hosted
+    environments. Parse only public HTML/embedded JSON; do not bypass login, DRM,
+    signed media URLs, or other access controls.
+    """
+    headers = {
+        "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                       "AppleWebKit/537.36 (KHTML, like Gecko) "
+                       "Chrome/132.0.0.0 Safari/537.36"),
+        "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Referer": "https://www.tiktok.com/",
+    }
+    response = requests.get(_TT_SHORTDRAMA_URL, headers=headers, timeout=25)
+    response.raise_for_status()
+    html = response.text
+    rows, seen = [], set()
+
+    def add(title, cover, url, category=""):
+        title = re.sub(r"\s+", " ", str(title or "")).strip()
+        cover = urllib.parse.urljoin(_TT_SHORTDRAMA_URL, str(cover or "").replace("&amp;", "&"))
+        url = urllib.parse.urljoin(_TT_SHORTDRAMA_URL, str(url or ""))
+        if not title or not url.startswith("https://www.tiktok.com/"):
+            return
+        if "/shortdrama" not in url.lower() and "/series/" not in url.lower():
+            return
+        if not cover.startswith(("https://", "http://")) or any(x in cover.lower() for x in ("avatar", "logo", "icon")):
+            return
+        if url in seen:
+            return
+        seen.add(url)
+        rows.append({"title": title[:180], "cover": cover, "url": url, "category": category[:80]})
+
+    # Extract links/cards with image and nearby accessible title text.
+    anchors = re.findall(r"<a\b[^>]*href=[\"']([^\"']*shortdrama[^\"']*)[\"'][^>]*>(.*?)</a>", html, re.I | re.S)
+    for href, body in anchors:
+        image_match = re.search(r"<img\b[^>]*(?:src|data-src)=[\"']([^\"']+)[\"'][^>]*>", body, re.I | re.S)
+        title_match = re.search(r"(?:alt|title)=[\"']([^\"']+)[\"']", body, re.I)
+        if not title_match:
+            text_body = re.sub(r"<[^>]+>", " ", body)
+            title_match = re.search(r"([^\s].{2,160})", re.sub(r"\s+", " ", text_body))
+        if image_match and title_match:
+            add(title_match.group(1), image_match.group(1), href)
+
+    # Parse common TikTok hydration / universal-data JSON blobs.
+    for match in re.finditer(r"""<script[^>]+id=["'](?:__UNIVERSAL_DATA_FOR_REHYDRATION__|SIGI_STATE|__NEXT_DATA__)["'][^>]*>(.*?)</script>""", html, re.I | re.S):
+        blob = match.group(1).strip()
+        try:
+            payload = json.loads(blob)
+        except Exception:
+            continue
+        stack = [payload]
+        while stack:
+            obj = stack.pop()
+            if isinstance(obj, dict):
+                title = obj.get("title") or obj.get("name") or obj.get("seriesTitle")
+                cover = obj.get("cover") or obj.get("coverUrl") or obj.get("poster") or obj.get("posterUrl")
+                url = obj.get("url") or obj.get("webUrl") or obj.get("shareUrl")
+                if isinstance(title, str) and isinstance(cover, str) and isinstance(url, str):
+                    add(title, cover, url, obj.get("category", ""))
+                stack.extend(obj.values())
+            elif isinstance(obj, list):
+                stack.extend(obj)
+
+    return rows, response.url
+
 with tab_drama:
     st.markdown("## 📱 TikTok Short Drama")
-    st.caption("មាតិកា TikTok Short Drama ត្រូវបានបង្ហាញនៅក្នុង App នេះ ដោយមិនចាំបាច់ចេញទៅវេបសាយផ្សេង។")
+    st.caption("បញ្ជី Poster ព្យាយាមយកពី Desktop Web របស់ TikTok ដោយផ្ទាល់។")
 
     # Keep the existing secure Admin/VIP account workflow intact.
     _is_drama_admin = _hg_admin_login_box()
@@ -7660,25 +7732,42 @@ with tab_drama:
         st.markdown("### 🎞️ Poster រឿង និងភាគ")
     with _td_col2:
         if st.button("↻ ផ្ទុកឡើងវិញ", key="tiktok_shortdrama_refresh", use_container_width=True):
+            _tt_shortdrama_catalog.clear()
             st.rerun()
 
-    _td_url = "https://www.tiktok.com/shortdrama"
-    # TikTok's /shortdrama landing page sends X-Frame-Options/CSP restrictions
-    # that make it fail inside Streamlit's embedded browser. Do not render a broken
-    # WebView. Provide an explicit external launch and accept a copied episode URL.
-    st.warning(
-        "TikTok បិទការបង្ហាញទំព័រ /shortdrama នៅក្នុង WebView របស់ App "
-        "(net::ERR_BLOCKED_BY_RESPONSE)។ ដូច្នេះ Poster និងបញ្ជីភាគមិនអាចទាញចេញពី iframe នេះបានទេ។ "
-        "បើកទំព័រដើមខាងក្រោម រួចចម្លងតំណភាគមក App។"
-    )
-    st.link_button("📱 បើក TikTok Short Drama", _td_url, use_container_width=True)
+    st.link_button("🌐 បើក Desktop Web របស់ TikTok", _TT_SHORTDRAMA_URL, use_container_width=True)
+    try:
+        with st.spinner("កំពុងទាញ Poster ពី TikTok Desktop Web..."):
+            _td_rows, _td_final_url = _tt_shortdrama_catalog()
+        if _td_rows:
+            _td_categories = sorted({r.get("category", "") for r in _td_rows if r.get("category")})
+            _td_filter = st.selectbox("🎭 ប្រភេទរឿង", ["គ្រប់ប្រភេទ"] + _td_categories, key="tt_drama_category")
+            _td_shown = [r for r in _td_rows if _td_filter == "គ្រប់ប្រភេទ" or r.get("category") == _td_filter]
+            _td_search = st.text_input("🔎 ស្វែងរកឈ្មោះរឿង", key="tt_drama_search", placeholder="វាយឈ្មោះរឿង...")
+            if _td_search.strip():
+                _td_shown = [r for r in _td_shown if _td_search.casefold() in r["title"].casefold()]
+            for _td_i in range(0, len(_td_shown), 3):
+                _td_cols = st.columns(3, gap="small")
+                for _td_col, _td_item in zip(_td_cols, _td_shown[_td_i:_td_i+3]):
+                    with _td_col:
+                        st.image(_td_item["cover"], use_container_width=True)
+                        st.caption(_td_item["title"])
+                        if st.button("▶️ មើលរឿង", key=f"tt_shortdrama_open_{_td_i}_{abs(hash(_td_item['url']))}", use_container_width=True):
+                            st.session_state["_tt_shortdrama_selected"] = _td_item
+                            st.rerun()
+            _td_selected = st.session_state.get("_tt_shortdrama_selected")
+            if _td_selected:
+                st.markdown(f"### {_td_selected.get('title', 'រឿងដែលបានជ្រើស')}")
+                st.link_button("▶️ មើលរឿងនៅ TikTok", _td_selected["url"], use_container_width=True)
+                st.caption("TikTok អាចតម្រូវឱ្យមើលតាមគេហទំព័ររបស់វា។ ការទាញយកមានតែពេលមាន URL វីដេអូសាធារណៈដែលអាចទាញយកបាន និងអនុញ្ញាត។")
+        else:
+            st.info("TikTok Desktop Web មិនបានផ្ញើ Poster មកក្នុង HTML ដែល App អាចអានបានទេ។ សូមបើក Desktop Web ដោយប៊ូតុងខាងលើ។")
+    except Exception as _td_err:
+        st.warning("មិនអាចអាន Poster ពី TikTok Desktop Web បាននៅលើ Server នេះទេ។")
+        if _is_drama_admin:
+            st.caption(str(_td_err)[:300])
 
-    with st.expander("📥 ភ្ជាប់ភាគក្នុង App / ផ្ទេរទៅ Download ឬបកប្រែ", expanded=True):
-        st.caption(
-            "នៅ TikTok ចុច Share → Copy link ហើយបិទភ្ជាប់។ "
-            "តំណភាគនឹងត្រូវប្រើជាមួយមុខងារ Link នៅផ្ទាំងវីដេអូ។ "
-            "TikTok មិនផ្តល់សិទ្ធិឱ្យ App ខាងក្រៅបង្ហាញ catalog និងទាញយកគ្រប់ភាគដោយស្វ័យប្រវត្តិទេ។"
-        )
+    with st.expander("📥 បញ្ចូលតំណភាគទៅផ្ទាំងវីដេអូ", expanded=False):
         _td_episode_url = st.text_input(
             "តំណភាគ TikTok Short Drama",
             placeholder="បិទភ្ជាប់ TikTok share link នៅទីនេះ",
@@ -7686,13 +7775,11 @@ with tab_drama:
         )
         if _td_episode_url.strip():
             st.link_button("▶️ បើកភាគនេះ", _td_episode_url.strip(), use_container_width=True)
-            st.code(_td_episode_url.strip(), language=None)
             if st.button("📋 ប្រើតំណនេះនៅផ្ទាំងវីដេអូ", key="td_send_to_video_tab", use_container_width=True):
                 st.session_state["mode_pick"] = "🔗 Link"
                 st.session_state["link_text_area"] = _td_episode_url.strip()
                 st.session_state["_hg_imported_caption_notice"] = True
                 st.success("បានផ្ទេរតំណទៅប្រអប់ Link ក្នុងផ្ទាំង 🏠 វីដេអូ។")
-            st.caption("ការទាញយកត្រូវអាស្រ័យលើការចូលប្រើវីដេអូ និងសិទ្ធិរបស់ TikTok។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
