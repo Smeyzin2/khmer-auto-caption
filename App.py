@@ -7542,6 +7542,20 @@ def _hg_vip_gate(show_admin_panel=True):
     return False
 
 
+def _hg_has_access():
+    """ពិនិត្យសិទ្ធិ Admin/VIP ដោយមិនបង្កើត widget (សុវត្ថិភាពសម្រាប់ហៅក្នុងច្រើនផ្ទាំង)។"""
+    _email = str(_user_field("email", "")).strip().lower()
+    if _email == _HG_ADMIN_EMAIL:
+        return True
+    _name = str(st.session_state.get("_hg_vip_username", "")).strip()
+    if not _name:
+        return False
+    try:
+        return bool(_hg_vip_is_valid(_hg_get_vip_user(_name)))
+    except Exception:
+        return False
+
+
 with tab_drama:
     _hg_access = _hg_vip_gate()
     if _hg_access:
@@ -7943,7 +7957,9 @@ def _tt_apply_ep_input():
 
 
 with tab_tiktok:
-    _tt_access = _hg_vip_gate(show_admin_panel=False)
+    _tt_access = _hg_has_access()
+    if not _tt_access:
+        st.info("🔒 ផ្ទាំងនេះសម្រាប់សមាជិក VIP។ សូមចូលគណនី VIP នៅផ្ទាំង 🍎 Hongguo មុន រួចត្រឡប់មកទីនេះ។")
     if _tt_access:
         st.markdown("### 🎵 TikTok Short Drama")
         st.caption("បិទភ្ជាប់ Episode URL មួយ រួចប្រើប៊ូតុង ⏮ ភាគមុន / ភាគបន្ទាប់ ⏭ ដើម្បីប្តូរភាគ ដូច Hongguo។")
