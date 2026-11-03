@@ -7141,38 +7141,25 @@ tab_drama, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = s
 # ============================ Hongguo Drama → Khmer Auto Caption ============================
 # API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
 def _hg_secret(*names):
-    """អាន Hongguo credentials ពី Streamlit Secrets ដោយទទួលយកឈ្មោះស្តង់ដារច្រើន។"""
-    is_id = bool(names and names[0] in ("XIAOYING_APPID", "APPID", "HONGGUO_APPID"))
-    is_secret = bool(names and names[0] in ("XIAOYING_APPSECRET", "APPSECRET", "HONGGUO_APPSECRET"))
-    if is_id:
+    # Personal Browser credentials override app-wide Secrets; each user's session stays separate.
+    if names and names[0] in ("XIAOYING_APPID", "APPID"):
         personal = st.session_state.get("user_hg_app_id", "")
         if personal:
             return str(personal).strip()
-        aliases = ("HONGGUO_APPID", "XIAOYING_APPID", "APPID", "XIAOYING_APP_ID")
-    elif is_secret:
+    if names and names[0] in ("XIAOYING_APPSECRET", "APPSECRET"):
         personal = st.session_state.get("user_hg_app_secret", "")
         if personal:
             return str(personal).strip()
-        aliases = ("HONGGUO_APPSECRET", "XIAOYING_APPSECRET", "APPSECRET", "XIAOYING_APP_SECRET")
-    else:
-        aliases = tuple(names)
-
-    for name in aliases:
+    for name in names:
         try:
             value = st.secrets.get(name, "")
-            if value:
-                return str(value).strip()
-            section = st.secrets.get("hongguo", {})
-            if isinstance(section, dict):
-                for nested in (name, name.lower(), "appid" if is_id else "appsecret"):
-                    value = section.get(nested, "")
-                    if value:
-                        return str(value).strip()
         except Exception:
-            pass
-        value = os.environ.get(name, "")
+            value = ""
         if value:
             return str(value).strip()
+        value = os.environ.get(name, "")
+        if value:
+            return value.strip()
     return ""
 
 _HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
@@ -7203,68 +7190,6 @@ def _hg_get(endpoint, params=None, timeout=45):
     if not isinstance(data, dict) or data.get("code") != 10000:
         raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
     return data.get("data") or {}
-
-
-def _hg_find_video_url(payload):
-    """រក URL វីដេអូពី response របស់ API ទោះបី API រុំ data ជាច្រើនជាន់ក៏ដោយ។"""
-    if isinstance(payload, str):
-        value = payload.strip()
-        return value if value.startswith(("http://", "https://")) else ""
-    if isinstance(payload, list):
-        for item in payload:
-            found = _hg_find_video_url(item)
-            if found:
-                return found
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    for key in ("url", "play_url", "video_url", "hdplay", "play", "m3u8", "src", "download_url"):
-        value = payload.get(key)
-        found = _hg_find_video_url(value)
-        if found:
-            return found
-    for key in ("data", "result", "play_info", "video", "stream", "source", "urls"):
-        if key in payload:
-            found = _hg_find_video_url(payload[key])
-            if found:
-                return found
-    return ""
-
-
-def _hg_download_for_preview(url):
-    """ទាញ stream ទៅជា file ក្នុង server ដើម្បីឱ្យ player របស់ទូរស័ព្ទអាចចាក់បាន។"""
-    url = str(url or "").strip()
-    if not url.startswith(("http://", "https://")):
-        raise RuntimeError("API មិនបានផ្ដល់ URL វីដេអូត្រឹមត្រូវទេ។")
-    folder = tempfile.mkdtemp(prefix="hg_preview_")
-    target = os.path.join(folder, "episode.mp4")
-    try:
-        import yt_dlp
-        opts = {
-            "outtmpl": target,
-            "format": "best[ext=mp4]/best",
-            "merge_output_format": "mp4",
-            "quiet": True,
-            "no_warnings": True,
-            "noplaylist": True,
-            "socket_timeout": 45,
-            "retries": 3,
-            "ffmpeg_location": imageio_ffmpeg.get_ffmpeg_exe(),
-            "http_headers": {"User-Agent": "Mozilla/5.0"},
-        }
-        with yt_dlp.YoutubeDL(opts) as ydl:
-            ydl.download([url])
-        if os.path.isfile(target) and os.path.getsize(target) > 1024:
-            return target
-        candidates = [os.path.join(folder, x) for x in os.listdir(folder)]
-        candidates = [x for x in candidates if os.path.isfile(x) and os.path.getsize(x) > 1024]
-        if candidates:
-            return candidates[0]
-        raise RuntimeError("yt-dlp មិនបានបង្កើតឯកសារវីដេអូទេ។")
-    except Exception as exc:
-        shutil.rmtree(folder, ignore_errors=True)
-        raise RuntimeError(f"មិនអាចរៀបចំ stream សម្រាប់ចាក់បាន៖ {str(exc)[:220]}") from exc
-
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_rank(page=1):
@@ -7690,15 +7615,13 @@ with tab_drama:
             if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
                 st.session_state.pop("_hg_selected", None)
                 st.rerun()
-            st.subheader(_hg_selected.get("name") or "រឿង")
+            # Poster-only detail view: hide the drama title and show its cover.
             _hg_cover = _hg_selected.get("cover")
             if _hg_cover:
                 st.image(_hg_cover, use_container_width=True)
             try:
                 with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
                     _hg_d = _hg_detail(_hg_selected["series_id"])
-                if _hg_d.get("intro"):
-                    st.write(_hg_d["intro"])
                 _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
                 if not _hg_eps:
                     st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
@@ -7710,28 +7633,29 @@ with tab_drama:
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
                     _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
                     if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
-                        try:
-                            with st.spinner("កំពុងស្នើ API និងរៀបចំវីដេអូសម្រាប់ចាក់..."):
-                                _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
-                                _hg_url = _hg_find_video_url(_hg_play)
-                                if not _hg_url:
-                                    raise RuntimeError("API បានឆ្លើយតប ប៉ុន្តែមិនមាន URL វីដេអូក្នុង response ទេ។ សូមពិនិត្យសិទ្ធិភាគ ឬ API endpoint។")
-                                _hg_local_path = _hg_download_for_preview(_hg_url)
-                            st.session_state[_hg_play_key] = {
-                                "url": _hg_url, "path": _hg_local_path,
-                                "ready": _hg_play.get("ready") if isinstance(_hg_play, dict) else None,
-                                "source": _hg_play.get("source") if isinstance(_hg_play, dict) else None,
-                            }
-                        except Exception as _play_err:
-                            st.error("បើកវីដេអូមិនបាន៖ " + _hg_error_khmer(_play_err))
+                        with st.spinner("កំពុងរៀបចំវីដេអូ..."):
+                            _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
+                        if _hg_play.get("url"):
+                            st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
+                        else:
+                            st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
                     _hg_saved = st.session_state.get(_hg_play_key)
                     if _hg_saved:
-                        _hg_local = _hg_saved.get("path", "")
-                        if _hg_local and os.path.isfile(_hg_local) and os.path.getsize(_hg_local) > 1024:
-                            st.video(_hg_local)
-                        else:
-                            st.warning("មិនទាន់មានឯកសារវីដេអូសម្រាប់ Preview ទេ។ អាចសាកបើកតំណផ្ទាល់ខាងក្រោម។")
-                        st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
+                        st.video(_hg_saved["url"])
+                        st.link_button("▶️ បើកវីដេអូ", _hg_saved["url"], use_container_width=True)
+                        _hg_single_dl_key = f"_hg_single_dl_{_hg_selected['series_id']}_{_hg_epnum}"
+                        if st.button("⬇️ រៀបចំទាញយកភាគនេះ", key=f"hg_single_dl_start_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
+                            with st.spinner("កំពុងទាញយកវីដេអូ... សូមរង់ចាំ"):
+                                _one_result = _fetch_one(_hg_saved["url"])
+                            if _one_result.get("ok") and _one_result.get("path"):
+                                st.session_state[_hg_single_dl_key] = _one_result["path"]
+                                st.success("វីដេអូរួចរាល់សម្រាប់រក្សាទុកក្នុងទូរស័ព្ទ។")
+                            else:
+                                st.error(_one_result.get("err") or "ទាញយកវីដេអូមិនបានទេ។")
+                        _hg_single_dl_path = st.session_state.get(_hg_single_dl_key)
+                        if _hg_single_dl_path and os.path.isfile(_hg_single_dl_path):
+                            with open(_hg_single_dl_path, "rb") as _one_file:
+                                dl_button("📥 ទាញយក MP4", _one_file, f"episode_{_hg_epnum:04d}.mp4", "video/mp4", key=f"hg_single_dl_file_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True)
                         if _hg_saved.get("ready") is False:
                             st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
                         if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
@@ -7805,7 +7729,7 @@ with tab_drama:
                                     "path": _dl_zip_path,
                                     "folder": _dl_folder,
                                     "count": _dl_ok,
-                                    "name": safe_filename(_hg_selected.get("name") or "hongguo")
+                                    "name": "drama"
                                 }
                                 st.success(f"បានរៀបចំទាញយកបាន {_dl_ok} ភាគរួចរាល់។")
                             else:
@@ -7886,9 +7810,9 @@ with tab_drama:
                     with _hg_col:
                         if _hg_row.get("cover"):
                             st.image(_hg_row["cover"], use_container_width=True)
-                        st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
-                        st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
-                        if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
+                        else:
+                            st.markdown("<div style='aspect-ratio:2/3;background:#20242c;border-radius:10px;display:flex;align-items:center;justify-content:center;color:#9aa4b2'>Poster មិនមាន</div>", unsafe_allow_html=True)
+                        if st.button("▶️", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True, help="បើករឿងនេះ"):
                             st.session_state["_hg_selected"] = _hg_row
                             st.rerun()
             _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
