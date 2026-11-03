@@ -9727,3 +9727,36 @@ TITLE_CODE_FIX_CSS = r"""
 </style>
 """
 st.markdown(TITLE_CODE_FIX_CSS, unsafe_allow_html=True)
+
+
+# =====================================================================
+# FIX (Nov 2026): 1) hide "trouble loading App.kvai_local_storage" warning
+#                 2) make the Hongguo search row fit the phone screen
+# The local-storage components only remember keys/login in the browser.
+# If the network is slow they may time out; the app still works, so the
+# warning box is hidden instead of shown to the user.
+# =====================================================================
+KVAI_FIX_CSS = r"""
+<style>
+.st-key-kv_ls, .st-key-kv_login_ls,
+[data-testid="stElementContainer"]:has(iframe[title*="kvai_local_storage"]),
+[data-testid="stElementContainer"]:has(iframe[title*="kvai_login_storage"]) {
+  position:absolute !important; width:1px !important; height:1px !important;
+  overflow:hidden !important; opacity:0 !important; pointer-events:none !important;
+  margin:0 !important; padding:0 !important; border:0 !important;
+}
+@media (max-width: 759px) {
+  /* Swipe layout only for the 3 main panels (Upload / Preview / AI).
+     Every other row (e.g. Hongguo search box + buttons) fills the screen width. */
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title):not(:has(> [data-testid="stColumn"]:nth-child(3))) {
+    overflow-x:visible !important;
+  }
+  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title):not(:has(> [data-testid="stColumn"]:nth-child(3))) > [data-testid="stColumn"] {
+    flex:1 1 0 !important; min-width:0 !important; width:0 !important; max-width:none !important;
+  }
+  .block-container, [data-testid="stMainBlockContainer"] { max-width:100vw !important; overflow-x:hidden !important; }
+  [data-testid="stTextInput"], [data-testid="stSelectbox"], [data-testid="stButton"] { max-width:100% !important; }
+}
+</style>
+"""
+st.markdown(KVAI_FIX_CSS, unsafe_allow_html=True)
