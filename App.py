@@ -547,6 +547,9 @@ CINEMATIC_DASHBOARD_CSS = """
 .drama-hero-pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
 .drama-hero-pills span{font-size:11px;color:#eaf8ff!important;border:1px solid rgba(90,220,255,.38);background:rgba(25,65,120,.42);padding:5px 9px;border-radius:999px}
 .drama-card-title{font-weight:800;font-size:14px;line-height:1.45;min-height:40px;margin-top:8px;color:#fff!important}
+[data-testid="stImage"] img{width:100%;aspect-ratio:3/4;object-fit:cover!important;border-radius:12px!important;background:#111b43}
+.drama-poster-fallback{aspect-ratio:3/4;height:auto!important;min-height:180px;max-height:280px}
+
 .drama-card-meta{font-size:12px;color:#a9c5ef!important;margin:5px 0 8px}
 .drama-poster-fallback{height:210px;border-radius:12px;background:linear-gradient(145deg,#17275c,#101632 55%,#34205c);display:flex;align-items:center;justify-content:center;flex-direction:column;font-size:44px;color:#bcefff}
 .drama-poster-fallback small{font-size:10px;letter-spacing:2px;color:#b9c8ef;margin-top:8px}
@@ -7516,8 +7519,58 @@ def _hg_public_walk(value, max_nodes=40000):
             stack.extend(v for v in item if isinstance(v, (dict, list)))
 
 
+def _hg_image_url(value):
+    """ស្រង់ URL រូបភាពពី string/list/dict ដែល SSR អាចដាក់ជាច្រើនទម្រង់។"""
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("//"):
+            return "https:" + text
+        if text.startswith(("https://", "http://")):
+            return text.replace("http://", "https://", 1)
+        return ""
+    if isinstance(value, list):
+        for part in value:
+            found = _hg_image_url(part)
+            if found:
+                return found
+    if isinstance(value, dict):
+        for key in ("url", "uri", "src", "image_url", "img_url", "url_list",
+                    "origin_url", "large", "medium", "thumb", "urls"):
+            if key in value:
+                found = _hg_image_url(value.get(key))
+                if found:
+                    return found
+        for child in value.values():
+            if isinstance(child, (dict, list)):
+                found = _hg_image_url(child)
+                if found:
+                    return found
+    return ""
+
+
+def _hg_find_cover(obj):
+    """រក poster តាម key រូបភាពគ្រប់កម្រិតក្នុង record។"""
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if re.search(r"cover|poster|thumb|image|picture|pic|avatar|vertical", str(key), re.I):
+                found = _hg_image_url(value)
+                if found:
+                    return found
+        for value in obj.values():
+            if isinstance(value, (dict, list)):
+                found = _hg_find_cover(value)
+                if found:
+                    return found
+    elif isinstance(obj, list):
+        for value in obj:
+            found = _hg_find_cover(value)
+            if found:
+                return found
+    return ""
+
+
 def _hg_normalize_public_drama(item):
-    """បម្លែង record SSR របស់គេហទំព័រទៅ schema ដែល UI ចាស់ប្រើ។"""
+    """បម្លែង record SSR ទៅ schema UI និងរក Poster ពី nested payload។"""
     if not isinstance(item, dict):
         return None
     raw = item.get("video_data") if isinstance(item.get("video_data"), dict) else item
@@ -7527,17 +7580,29 @@ def _hg_normalize_public_drama(item):
             or raw.get("book_name") or raw.get("seriesTitle"))
     if not sid or not name:
         return None
-    cover = (raw.get("cover") or raw.get("coverUrl") or raw.get("cover_url")
-             or raw.get("cover_image") or raw.get("poster") or raw.get("thumb_url")
-             or raw.get("vertical_cover"))
+    cover = _hg_find_cover(item) or _hg_find_cover(raw)
     intro = (raw.get("description") or raw.get("intro") or raw.get("desc") or "")
     count = (raw.get("episodeCount") or raw.get("episode_count")
-             or raw.get("total_episode") or raw.get("serial_count"))
+             or raw.get("total_episode") or raw.get("serial_count")
+             or raw.get("episode_cnt") or raw.get("series_count"))
     return {
-        "series_id": str(sid), "name": str(name), "cover": str(cover or ""),
+        "series_id": str(sid), "name": str(name), "cover": cover,
         "intro": str(intro or ""), "episode_cnt": count or "", "listed_cnt": count or "",
         "url": str(raw.get("url") or raw.get("detail_url") or ""),
     }
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def _hg_to_khmer(text):
+    """បកប្រែឈ្មោះរឿង/ប្រភេទ/សេចក្ដីពិពណ៌នាចិនទៅខ្មែរ និង cache មួយថ្ងៃ។"""
+    value = str(text or "").strip()
+    if not value or not re.search(r"[\\u3400-\\u9fff]", value):
+        return value
+    try:
+        translated = google_translate_request(value, retries=1)
+        return translated.strip() if translated and translated.strip() else value
+    except Exception:
+        return value
 
 
 def _hg_public_records(router, preferred_keys=()):
@@ -8096,7 +8161,8 @@ with tab_drama:
             except Exception as _cat_err:
                 _hg_category_rows = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-            _hg_cat_map = _hg_flat_categories(_hg_category_rows)
+            _hg_cat_map_raw = _hg_flat_categories(_hg_category_rows)
+            _hg_cat_map = {_hg_to_khmer(label): slug for label, slug in _hg_cat_map_raw.items()}
             _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
@@ -8159,7 +8225,7 @@ with tab_drama:
             if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
                 st.session_state.pop("_hg_selected", None)
                 st.rerun()
-            st.subheader(_hg_selected.get("name") or "រឿង")
+            st.subheader(_hg_to_khmer(_hg_selected.get("name") or "រឿង"))
             _hg_cover = _hg_selected.get("cover")
             if _hg_cover:
                 st.image(_hg_cover, use_container_width=True)
@@ -8167,7 +8233,7 @@ with tab_drama:
                 with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
                     _hg_d = _hg_detail(_hg_selected["series_id"])
                 if _hg_d.get("intro"):
-                    st.write(_hg_d["intro"])
+                    st.write(_hg_to_khmer(_hg_d["intro"]))
                 _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
                 if not _hg_eps:
                     st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
@@ -8406,12 +8472,16 @@ with tab_drama:
                 for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+4]):
                     with _hg_col:
                         with st.container(border=True):
-                            _cover = str(_hg_row.get("cover") or "").strip()
-                            if _cover.startswith(("http://", "https://")):
-                                st.image(_cover, use_container_width=True)
+                            _cover = _hg_image_url(_hg_row.get("cover") or "")
+                            if _cover:
+                                try:
+                                    st.image(_cover, use_container_width=True)
+                                except Exception:
+                                    st.markdown('<div class="drama-poster-fallback">🎬<small>POSTER</small></div>', unsafe_allow_html=True)
                             else:
-                                st.markdown('<div class="drama-poster-fallback">🎬<small>DRAMA POSTER</small></div>', unsafe_allow_html=True)
-                            _title = str(_hg_row.get("name") or "រឿងថ្មី").strip()
+                                st.markdown('<div class="drama-poster-fallback">🎬<small>POSTER</small></div>', unsafe_allow_html=True)
+                            _title_raw = str(_hg_row.get("name") or "រឿងថ្មី").strip()
+                            _title = _hg_to_khmer(_title_raw)
                             st.markdown(f'<div class="drama-card-title">{_title[:54]}</div>', unsafe_allow_html=True)
                             _eps_count = _hg_row.get("episode_cnt") or _hg_row.get("listed_cnt") or "—"
                             st.markdown(f'<div class="drama-card-meta">📺 {_eps_count} ភាគ</div>', unsafe_allow_html=True)
