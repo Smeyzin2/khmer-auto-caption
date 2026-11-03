@@ -7936,10 +7936,33 @@ with tab_tiktok:
                 st.write("")
                 _tt_search_click = st.button("🔎 បើករឿង", key="tiktok_drama_search", type="primary", use_container_width=True)
 
-        _tt_match = re.search(r"tiktok\.com/shortdrama/episode/(\d+)/(\d+)", (_tt_query or "").strip())
+        _tt_match = None
+        _tt_resolved_url = (_tt_query or "").strip()
         if _tt_search_click:
+            # Resolve TikTok short links (vt.tiktok.com / vm.tiktok.com) first.
+            if re.search(r"^https?://(?:vt|vm)\\.tiktok\\.com/", _tt_resolved_url, re.I):
+                try:
+                    _tt_redirect = requests.get(
+                        _tt_resolved_url,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"},
+                        allow_redirects=True,
+                        timeout=18,
+                    )
+                    _tt_resolved_url = _tt_redirect.url or _tt_resolved_url
+                    _tt_canonical = re.search(
+                        r"<link[^>]+rel=['\\\"]canonical['\\\"][^>]+href=['\\\"]([^'\\\"]+)",
+                        _tt_redirect.text[:1_000_000], re.I,
+                    )
+                    if _tt_canonical:
+                        _tt_resolved_url = requests.utils.unquote(_tt_canonical.group(1))
+                except Exception as _tt_redirect_err:
+                    st.warning(f"មិនអាចបើក Short Link បាន៖ {_tt_redirect_err}")
+            _tt_match = re.search(
+                r"tiktok\\.com/shortdrama/episode/(\\d+)/(\\d+)",
+                _tt_resolved_url, re.I,
+            )
             if not _tt_match:
-                st.warning("សូមបញ្ចូល TikTok Short Drama episode URL ដែលមាន series ID និង episode number។")
+                st.warning("មិនអាចរក Series ID និងលេខភាគពី Link នេះបានទេ។ សូមបិទភ្ជាប់ URL ពេញរបស់ TikTok Short Drama episode។")
             else:
                 _tt_series_id, _tt_ep = _tt_match.group(1), int(_tt_match.group(2))
                 _tt_clean_url = _tt_ep_url(_tt_series_id, _tt_ep)
