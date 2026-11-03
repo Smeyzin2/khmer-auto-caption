@@ -1562,13 +1562,35 @@ def _download_with_ssstik(url, path, progress):
 
 
 def download_social_video(url, path, progress):
-    """ទាញវីដេអូ TikTok៖ SSSTik មុន រួច yt-dlp រួច tikwm (មិនបង្ហាញតំណដល់អ្នកប្រើ)។"""
+    """ទាញវីដេអូ TikTok និង Short Drama តាម downloader ដែលសមស្រប។"""
     reasons = []
     try:
-        host = (urllib.parse.urlparse(url).hostname or "").lower()
+        parsed = urllib.parse.urlparse(url)
+        host = (parsed.hostname or "").lower()
+        is_tiktok = host == "tiktok.com" or host.endswith(".tiktok.com")
+        is_short_drama = is_tiktok and "/shortdrama/episode/" in (parsed.path or "").lower()
     except Exception:
-        host = ""
-    if host == "tiktok.com" or host.endswith(".tiktok.com"):
+        host, is_tiktok, is_short_drama = "", False, False
+
+    # Short Drama episode URLs are not regular TikTok post URLs.
+    # Try yt-dlp first instead of sending the episode page to SSSTik.
+    if is_short_drama:
+        try:
+            _download_with_ytdlp(url, path, progress)
+            return
+        except Exception as e:
+            reasons.append("shortdrama yt-dlp: " + (str(e) or type(e).__name__))
+        try:
+            _download_with_tikwm(url, path, progress)
+            return
+        except Exception as e:
+            reasons.append("shortdrama tikwm: " + (str(e) or type(e).__name__))
+        raise UserError(
+            "TikTok Short Drama មិនបានផ្តល់វីដេអូដែលអាចទាញបានតាម URL នេះ។ "
+            "សូមពិនិត្យថាភាគអាចមើលបាន និងសាកល្បងម្ដងទៀត។ | " + " | ".join(reasons)
+        )
+
+    if is_tiktok:
         try:
             _download_with_ssstik(url, path, progress)
             return
