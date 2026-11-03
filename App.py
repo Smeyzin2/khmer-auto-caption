@@ -7940,7 +7940,7 @@ with tab_tiktok:
         _tt_resolved_url = (_tt_query or "").strip()
         if _tt_search_click:
             # Resolve TikTok short links (vt.tiktok.com / vm.tiktok.com) first.
-            if re.search(r"^https?://(?:vt|vm)\\.tiktok\\.com/", _tt_resolved_url, re.I):
+            if re.search(r"^https?://(?:vt|vm)\.tiktok\.com/", _tt_resolved_url, re.I):
                 try:
                     _tt_redirect = requests.get(
                         _tt_resolved_url,
@@ -7958,7 +7958,7 @@ with tab_tiktok:
                 except Exception as _tt_redirect_err:
                     st.warning(f"មិនអាចបើក Short Link បាន៖ {_tt_redirect_err}")
             _tt_match = re.search(
-                r"tiktok\\.com/shortdrama/episode/(\\d+)/(\\d+)",
+                r"tiktok\.com/shortdrama/episode/(\d+)/(\d+)",
                 _tt_resolved_url, re.I,
             )
             if not _tt_match:
