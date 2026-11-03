@@ -7885,6 +7885,23 @@ def _tt_go_ep(delta):
         st.session_state["_tt_want_fetch"] = True
 
 
+def _tt_select_ep(ep):
+    """ជ្រើសភាគពីបញ្ជីភាគ ហើយទាញដោយស្វ័យប្រវត្តិ ប្រសិនបើបានបើក auto។"""
+    _res = st.session_state.get("_tiktok_drama_result")
+    if not _res:
+        return
+    _new = int(ep)
+    _total = int(st.session_state.get("tiktok_drama_total", 60) or 60)
+    _new = max(1, min(_total, _new))
+    _tt_free_media(_res)
+    _res["episode"] = _new
+    _res["url"] = _tt_ep_url(_res["series_id"], _new)
+    st.session_state["tiktok_drama_episode_number"] = _new
+    st.session_state["_tiktok_drama_result"] = _res
+    if st.session_state.get("tiktok_drama_auto", True):
+        st.session_state["_tt_want_fetch"] = True
+
+
 def _tt_apply_ep_input():
     """Callback ពេលវាយលេខភាគដោយផ្ទាល់។"""
     _res = st.session_state.get("_tiktok_drama_result")
@@ -7967,6 +7984,27 @@ with tab_tiktok:
                     )
                 if _tt_ready.get("description"):
                     st.caption(_tt_ready["description"])
+
+                # Episode list: fast selection while preserving the existing episode navigation.
+                st.markdown("#### 📚 បញ្ជីភាគ")
+                _tt_total_for_list = int(st.session_state.get("tiktok_drama_total", 60) or 60)
+                _tt_list_page = st.number_input(
+                    "បង្ហាញបញ្ជីភាគ (ចាប់ពីភាគ)", min_value=1,
+                    max_value=max(1, _tt_total_for_list), value=1, step=20,
+                    key="tiktok_drama_list_start",
+                )
+                _tt_list_eps = list(range(int(_tt_list_page), min(_tt_total_for_list, int(_tt_list_page) + 19) + 1))
+                _tt_ep_cols = st.columns(5, gap="small")
+                _tt_selected_ep = int(st.session_state.get("tiktok_drama_episode_number", _tt_ready.get("episode", 1)))
+                for _tt_idx, _tt_ep_item in enumerate(_tt_list_eps):
+                    with _tt_ep_cols[_tt_idx % 5]:
+                        st.button(
+                            f"ភាគ {_tt_ep_item}" + (" ✓" if _tt_ep_item == _tt_selected_ep else ""),
+                            key=f"tiktok_episode_pick_{_tt_ready.get('series_id')}_{_tt_ep_item}",
+                            type="primary" if _tt_ep_item == _tt_selected_ep else "secondary",
+                            use_container_width=True,
+                            on_click=_tt_select_ep, args=(_tt_ep_item,),
+                        )
 
                 # ---------- Episode navigator ----------
                 _tt_total = st.number_input(
