@@ -7483,13 +7483,16 @@ def _hg_admin_panel():
         st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
 
 
-def _hg_vip_gate():
+def _hg_vip_gate(show_admin_panel=True):
     _email = str(_user_field("email", "")).strip().lower()
     _is_admin = _email == _HG_ADMIN_EMAIL
     if _is_admin:
         st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-        with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
-            _hg_admin_panel()
+        # Render the Admin controls only in the primary Hongguo tab.
+        # Calling this gate from another tab must not create duplicate Streamlit widget keys.
+        if show_admin_panel:
+            with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
+                _hg_admin_panel()
         return True
 
     _vip_name = str(st.session_state.get("_hg_vip_username", "")).strip()
@@ -7850,7 +7853,7 @@ with tab_drama:
 # ============================ TikTok Short Drama ============================
 # In-app catalog-style UI. Do not redirect to the TikTok catalog page (which can show Not Found in embedded/mobile browsers).
 with tab_tiktok:
-    _tt_access = _hg_vip_gate()
+    _tt_access = _hg_vip_gate(show_admin_panel=False)
     if _tt_access:
         st.markdown("### 🎵 TikTok Short Drama")
         st.caption("បញ្ចូល TikTok Short Drama episode link ដើម្បីបង្កើតកាត Poster ក្នុងកម្មវិធី ហើយមើល/ទាញយកវីដេអូ។")
