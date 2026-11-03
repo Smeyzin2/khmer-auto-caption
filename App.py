@@ -7534,8 +7534,6 @@ with tab_drama:
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
-        if not _HG_APP_ID or not _HG_APP_SECRET:
-            st.warning("មិនទាន់រកឃើញ Hongguo APPID/APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin ពិនិត្យ Secrets របស់កម្មវិធី។ អ្នកប្រើមិនចាំបាច់បញ្ចូល API នៅផ្ទាំងផ្សេងទៀតទេ។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
