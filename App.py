@@ -7643,7 +7643,7 @@ def _sv_public_catalog(source_url=None):
 
 with tab_drama:
     st.markdown("## 📱 TikTok Short Drama")
-    st.caption("ស្វែងរករឿងភាគខ្លីលើ TikTok រួចចម្លងតំណវីដេអូមកកាន់ផ្ទាំង «វីដេអូ» ដើម្បីទាញយក ឬបកប្រែ។")
+    st.caption("មាតិកា TikTok Short Drama ត្រូវបានបង្ហាញនៅក្នុង App នេះ ដោយមិនចាំបាច់ចេញទៅវេបសាយផ្សេង។")
 
     # Keep the existing secure Admin/VIP account workflow intact.
     _is_drama_admin = _hg_admin_login_box()
@@ -7655,26 +7655,34 @@ with tab_drama:
             st.session_state.pop("_hg_admin_authenticated", None)
             st.rerun()
 
-    _tiktok_search_term = st.text_input(
-        "🔍 ស្វែងរករឿងខ្លី",
-        placeholder="ឧ. Chinese short drama Khmer, រឿងសងសឹក, CEO short drama",
-        key="tiktok_short_drama_search",
-    )
-    if _tiktok_search_term.strip():
-        _tiktok_search_url = "https://www.tiktok.com/search?q=" + urllib.parse.quote(_tiktok_search_term.strip())
-        st.link_button("🔎 បើកលទ្ធផលស្វែងរក TikTok", _tiktok_search_url, use_container_width=True)
-    else:
-        st.link_button("📱 បើក TikTok ស្វែងរក Short Drama", "https://www.tiktok.com/search?q=short%20drama", use_container_width=True)
+    _td_col1, _td_col2 = st.columns([3, 1], gap="small")
+    with _td_col1:
+        st.markdown("### 🎞️ Poster រឿង និងភាគ")
+    with _td_col2:
+        if st.button("↻ ផ្ទុកឡើងវិញ", key="tiktok_shortdrama_refresh", use_container_width=True):
+            st.rerun()
 
-    with st.container(border=True):
-        st.markdown("**របៀបមើល និងទាញយក**")
-        st.markdown(
-            "1. វាយពាក្យស្វែងរកខាងលើ ហើយបើកលទ្ធផល TikTok។\n\n"
-            "2. នៅលើ TikTok ចុច **Share → Copy link** លើវីដេអូរឿងដែលចង់បាន។\n\n"
-            "3. ត្រឡប់មកផ្ទាំង **🏠 វីដេអូ → 🔗 Link** ហើយបិទភ្ជាប់តំណ។\n\n"
-            "4. ចុច **ស្វែងរក** ដើម្បីទាញយកវីដេអូដែលអាចចូលប្រើបាន។"
+    _td_url = "https://www.tiktok.com/shortdrama"
+    try:
+        # Embed the actual TikTok Short Drama page. This lets TikTok provide its own
+        # current poster cards, genres, episode navigation and player in the app view.
+        st.components.v1.iframe(_td_url, height=760, scrolling=True)
+        st.caption("ប្រភព៖ TikTok Short Drama · Poster និងប្រភេទរឿងត្រូវបានផ្ទុកពីវេបសាយដើម។")
+    except Exception as _td_embed_error:
+        st.warning("TikTok មិនអនុញ្ញាតឱ្យបង្ហាញវេបសាយក្នុង App នៅលើការតភ្ជាប់នេះទេ។")
+        st.link_button("បើក TikTok Short Drama", _td_url, use_container_width=True)
+
+    with st.expander("📥 ទាញយករឿង ឬបញ្ចូលទៅមុខងារបកប្រែ"):
+        st.caption("បើមានតំណភាគដែលអាចប្រើបាន សូមបិទភ្ជាប់ទីនេះ។ អ្នកអាចយកតំណទៅផ្ទាំង «🏠 វីដេអូ → 🔗 Link» ដើម្បីដំណើរការបន្ថែម។")
+        _td_episode_url = st.text_input(
+            "តំណភាគ TikTok Short Drama",
+            placeholder="https://www.tiktok.com/shortdrama/episode/...",
+            key="tiktok_shortdrama_episode_url",
         )
-        st.caption("ចំណាំ៖ TikTok មិនផ្តល់លទ្ធផលស្វែងរកទាំងអស់ឱ្យបង្ហាញផ្ទាល់ក្នុង App ដោយគ្មាន API/ការចូលគណនីទេ។ ប៊ូតុងខាងលើបើកការស្វែងរកនៅលើ TikTok ផ្ទាល់។")
+        if _td_episode_url.strip():
+            st.link_button("▶️ បើកភាគនេះ", _td_episode_url.strip(), use_container_width=True)
+            st.code(_td_episode_url.strip(), language=None)
+            st.caption("ការទាញយកភាគអាស្រ័យលើការអនុញ្ញាតរបស់ TikTok និងប្រភពវីដេអូ។ មិនអាចធានាថាគ្រប់ភាគអាចទាញយកបានទេ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
