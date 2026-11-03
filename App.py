@@ -7701,23 +7701,11 @@ with tab_drama:
         _sv_public_catalog.clear()
     try:
         _sv_rows = _sv_public_catalog(_active_source)
-        if _sv_rows:
-            for _sv_i in range(0, len(_sv_rows), 3):
-                _sv_cols = st.columns(3, gap="small")
-                for _sv_col, _sv_item in zip(_sv_cols, _sv_rows[_sv_i:_sv_i+3]):
-                    with _sv_col:
-                        if _sv_item.get("cover"):
-                            st.image(_sv_item["cover"], use_container_width=True)
-                        else:
-                            st.markdown("<div style='aspect-ratio:2/3;border-radius:12px;background:linear-gradient(145deg,#18254c,#07152f);display:flex;align-items:center;justify-content:center;color:#fff;font-size:34px'>🎬</div>", unsafe_allow_html=True)
-                        if st.button("▶", key=f"sv_pick_{_sv_item['id']}", use_container_width=True):
-                            st.session_state["_sv_selected"] = _sv_item
-                            st.rerun()
-        else:
-            st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូម Admin ពិនិត្យ Website URL ឬចុច ↻ ម្ដងទៀត។")
+        # Render the selected drama player first, so a poster tap opens playback
+        # immediately at the top rather than below the full poster grid.
         _sv_selected = st.session_state.get("_sv_selected")
         if _sv_selected:
-            if st.button("←", key="sv_back"):
+            if st.button("← ត្រឡប់ទៅ Poster", key="sv_back", use_container_width=True):
                 st.session_state.pop("_sv_selected", None)
                 st.rerun()
             _play_item = dict(_sv_selected)
@@ -7736,14 +7724,30 @@ with tab_drama:
                 except Exception:
                     pass
             if _play_item.get("embed"):
-                components.iframe(_play_item["embed"], height=520, scrolling=False)
-                st.link_button("▶", _play_item["watch"], use_container_width=True)
+                # In-app player only: don't send users out to YouTube.
+                components.iframe(_play_item["embed"] + "?autoplay=1", height=520, scrolling=False)
+                st.caption("វីដេអូនេះចាក់តាម Player របស់ YouTube នៅក្នុង App។ ប្រភពនេះមិនផ្តល់តំណ Download ដោយផ្ទាល់ទេ។")
             elif _play_item.get("direct"):
                 st.video(_play_item["direct"])
-                st.link_button("⬇️", _play_item["direct"], use_container_width=True)
+                st.download_button("⬇️ ទាញយកវីដេអូ", data=requests.get(_play_item["direct"], timeout=45).content,
+                                   file_name="drama.mp4", mime="video/mp4", use_container_width=True)
             else:
-                st.warning("Website នេះមាន Poster ប៉ុន្តែមិនទាន់រកឃើញវីដេអូសាធារណៈសម្រាប់ចាក់ក្នុង App ទេ។")
-                st.link_button("មើលរឿងនៅ Website", _play_item.get("page") or _play_item["watch"], use_container_width=True)
+                st.warning("មិនទាន់រកឃើញវីដេអូសាធារណៈដែលអាចចាក់ក្នុង App បានទេ។ ប្រភពនេះអាចផ្តល់តែ Poster/ទំព័រព័ត៌មាន។")
+
+        if _sv_rows:
+            for _sv_i in range(0, len(_sv_rows), 3):
+                _sv_cols = st.columns(3, gap="small")
+                for _sv_col, _sv_item in zip(_sv_cols, _sv_rows[_sv_i:_sv_i+3]):
+                    with _sv_col:
+                        if _sv_item.get("cover"):
+                            st.image(_sv_item["cover"], use_container_width=True)
+                        else:
+                            st.markdown("<div style='aspect-ratio:2/3;border-radius:12px;background:linear-gradient(145deg,#18254c,#07152f);display:flex;align-items:center;justify-content:center;color:#fff;font-size:34px'>🎬</div>", unsafe_allow_html=True)
+                        if st.button("▶", key=f"sv_pick_{_sv_item['id']}", use_container_width=True):
+                            st.session_state["_sv_selected"] = _sv_item
+                            st.rerun()
+        else:
+            st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូម Admin ពិនិត្យ Website URL ឬចុច ↻ ម្ដងទៀត។")
     except Exception as _sv_error:
         st.info("មិនអាចផ្ទុក Poster ពី Website នេះបានទេ។")
         if _is_drama_admin:
