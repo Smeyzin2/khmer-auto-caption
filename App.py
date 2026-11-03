@@ -6907,55 +6907,211 @@ def user_key_box():
             st.rerun()
 
 
-# =====================================================================
-#  ចូលប្រើតាមគណនី Google (Gmail) — ត្រូវចូលមុនទើបប្រើកម្មវិធីបាន
-#  ► បិទបាន៖ ដាក់ REQUIRE_LOGIN = "0" ក្នុង Secrets
-#  ► កំណត់អ្នកអនុញ្ញាត (មិនចាំបាច់)៖ ALLOWED_EMAILS = "a@gmail.com, b@gmail.com"
-# =====================================================================
-REQUIRE_LOGIN = str(get_secret("REQUIRE_LOGIN", "1")).strip().lower() not in ("0", "false", "no", "off")
+# ============================ Hongguo VIP Access ============================
+# All VIP checks and management use the server-only Supabase service key.
 
-_AUTH_SETUP_HELP = """# .streamlit/secrets.toml (ឬ Streamlit Cloud → Settings → Secrets)
-[auth]
-redirect_uri = "https://ឈ្មោះកម្មវិធីរបស់អ្នក.streamlit.app/oauth2callback"
-cookie_secret = "ដាក់អក្សរចៃដន្យវែងៗ ៣២ តួឡើង"
+def _hg_supabase_config():
+    _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
+    # SUPABASE_URL must be the project root, not a REST endpoint.
+    # Accept a pasted URL ending in /rest/v1 and normalize it to avoid
+    # requesting /rest/v1/rest/v1/... (PostgREST PGRST125).
+    for _suffix in ("/rest/v1", "/rest/v1/"):
+        if _url.lower().endswith(_suffix):
+            _url = _url[:-len(_suffix)].rstrip("/")
+            break
+    _key = str(get_secret("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
+    if not _key:
+        # Support the newer Supabase secret-key name if the owner used it.
+        _key = str(get_secret("SUPABASE_SECRET_KEY", "")).strip()
+    return _url, _key
 
-[auth.google]
-client_id = "xxxx.apps.googleusercontent.com"
-client_secret = "xxxx"
-server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
-"""
 
-
-def _auth_configured():
+def _hg_sb_request(method, path="", params=None, payload=None):
+    _url, _key = _hg_supabase_config()
+    if not _url or not _key:
+        raise RuntimeError("មិនទាន់កំណត់ SUPABASE_URL និង SUPABASE_SERVICE_ROLE_KEY ក្នុង Streamlit Secrets ទេ។")
+    _headers = {
+        "apikey": _key,
+        "Authorization": "Bearer " + _key,
+        "Content-Type": "application/json",
+        "Prefer": "return=representation",
+    }
+    _resp = requests.request(
+        method, _url + "/rest/v1/hongguo_vip_users" + path,
+        headers=_headers, params=params, json=payload, timeout=20,
+    )
+    if not _resp.ok:
+        raise RuntimeError(f"Supabase HTTP {_resp.status_code}: {_resp.text[:300]}")
+    if not _resp.text.strip():
+        return []
     try:
-        _a = st.secrets["auth"]
-        return bool(_a.get("cookie_secret")) and bool(_a.get("redirect_uri")) and "google" in _a
+        return _resp.json()
+    except Exception:
+        return []
+
+
+def _hg_password_hash(password):
+    _salt = secrets.token_bytes(16)
+    _rounds = 310000
+    _digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt, _rounds)
+    return "pbkdf2_sha256${}${}${}".format(
+        _rounds, base64.urlsafe_b64encode(_salt).decode().rstrip("="),
+        base64.urlsafe_b64encode(_digest).decode().rstrip("="),
+    )
+
+
+def _hg_password_verify(password, stored):
+    try:
+        _algo, _rounds, _salt, _expected = stored.split("$", 3)
+        if _algo != "pbkdf2_sha256":
+            return False
+        _salt_b = base64.urlsafe_b64decode(_salt + "=" * (-len(_salt) % 4))
+        _expected_b = base64.urlsafe_b64decode(_expected + "=" * (-len(_expected) % 4))
+        _actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt_b, int(_rounds))
+        return hmac.compare_digest(_actual, _expected_b)
     except Exception:
         return False
 
 
-def _user_field(key, default=""):
+def _hg_get_vip_user(username):
+    _rows = _hg_sb_request("GET", params={
+        "select": "id,username,password_hash,expires_at,is_active,created_at,note",
+        "username": "eq." + str(username).strip(),
+        "limit": "1",
+    })
+    return _rows[0] if _rows else None
+
+
+def _hg_vip_is_valid(_user):
+    if not _user or not _user.get("is_active"):
+        return False
     try:
-        v = st.user.get(key)
-        return default if v is None else v
+        _expiry = str(_user.get("expires_at", "")).replace("Z", "+00:00")
+        _dt = datetime.fromisoformat(_expiry)
+        if _dt.tzinfo is None:
+            _dt = _dt.replace(tzinfo=timezone.utc)
+        return _dt > datetime.now(timezone.utc)
     except Exception:
-        try:
-            v = getattr(st.user, key)
-            return default if v is None else v
-        except Exception:
-            return default
+        return False
 
 
-def _allowed_email_set():
-    raw = get_secret("ALLOWED_EMAILS", "")
-    if isinstance(raw, (list, tuple)):
-        items = list(raw)
-    else:
-        items = re.split(r"[,\n;\s]+", str(raw or ""))
-    return {str(x).strip().lower() for x in items if str(x).strip()}
+def _hg_admin_panel():
+    st.markdown("#### 👑 គ្រប់គ្រងគណនី VIP")
+    with st.form("hg_vip_create_form", clear_on_submit=True):
+        _c1, _c2 = st.columns(2)
+        with _c1:
+            _new_user = st.text_input("ឈ្មោះអ្នកប្រើ VIP", key="hg_admin_new_username")
+            _new_pass = st.text_input("ពាក្យសម្ងាត់ VIP", type="password", key="hg_admin_new_password")
+        with _c2:
+            _days = st.selectbox("រយៈពេលប្រើប្រាស់", [7, 30, 90, 180, 365], index=1, format_func=lambda x: f"{x} ថ្ងៃ")
+            _note = st.text_input("កំណត់ចំណាំ (មិនចាំបាច់)")
+        _create = st.form_submit_button("➕ បង្កើតគណនី VIP", use_container_width=True)
+    if _create:
+        _u = str(_new_user or "").strip()
+        if len(_u) < 3 or len(_new_pass or "") < 8:
+            st.error("Username ត្រូវមានយ៉ាងតិច ៣ តួ និង Password យ៉ាងតិច ៨ តួ។")
+        else:
+            try:
+                if _hg_get_vip_user(_u):
+                    st.error("Username នេះមានរួចហើយ។")
+                else:
+                    _expiry = (datetime.now(timezone.utc) + timedelta(days=int(_days))).isoformat()
+                    _hg_sb_request("POST", payload={
+                        "username": _u,
+                        "password_hash": _hg_password_hash(_new_pass),
+                        "expires_at": _expiry,
+                        "is_active": True,
+                        "note": str(_note or "").strip(),
+                    })
+                    st.success(f"បានបង្កើត VIP '{_u}' រយៈពេល {_days} ថ្ងៃ។")
+                    st.rerun()
+            except Exception as _err:
+                st.error(f"បង្កើតគណនីមិនបាន៖ {_err}")
+
+    try:
+        _users = _hg_sb_request("GET", params={
+            "select": "id,username,expires_at,is_active,created_at,note",
+            "order": "created_at.desc", "limit": "200",
+        })
+        if _users:
+            st.markdown("**បញ្ជី VIP**")
+            for _u in _users:
+                _x = str(_u.get("expires_at", ""))[:10]
+                _status = "សកម្ម" if _hg_vip_is_valid(_u) else "ផុតកំណត់/បិទ"
+                _a, _b, _c, _d = st.columns([2.2, 1.7, 1.3, 1.3])
+                _a.write(f"**{_u.get('username','')}**")
+                _b.caption(f"{_status} · ដល់ {_x}")
+                with _c:
+                    _extend_days = st.selectbox("បន្ថែមថ្ងៃ", [7, 30, 90, 180, 365], index=1,
+                                                key="hg_vip_extend_days_" + str(_u["id"]), label_visibility="collapsed")
+                    if st.button("បន្ថែម", key="hg_vip_extend_" + str(_u["id"]), use_container_width=True):
+                        try:
+                            _base = datetime.now(timezone.utc)
+                            try:
+                                _old_exp = datetime.fromisoformat(str(_u.get("expires_at", "")).replace("Z", "+00:00"))
+                                if _old_exp.tzinfo is None:
+                                    _old_exp = _old_exp.replace(tzinfo=timezone.utc)
+                                if _old_exp > _base:
+                                    _base = _old_exp
+                            except Exception:
+                                pass
+                            _new_exp = (_base + timedelta(days=int(_extend_days))).isoformat()
+                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])},
+                                           payload={"expires_at": _new_exp, "is_active": True})
+                            st.success("បានបន្ថែមថ្ងៃ VIP រួចរាល់។")
+                            st.rerun()
+                        except Exception as _extend_err:
+                            st.error(f"បន្ថែមថ្ងៃមិនបាន៖ {_extend_err}")
+                with _d:
+                    if _u.get("is_active"):
+                        if st.button("បិទ", key="hg_vip_off_" + str(_u["id"]), use_container_width=True):
+                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": False})
+                            st.rerun()
+                    else:
+                        if st.button("បើកវិញ", key="hg_vip_on_" + str(_u["id"]), use_container_width=True):
+                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": True})
+                            st.rerun()
+    except Exception as _err:
+        st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
 
 
-_GOOGLE_G_URI = "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E"
+def _hg_vip_gate(show_admin_panel=True):
+    if _is_admin_session():
+        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
+        # Render the Admin controls only in the primary Hongguo tab.
+        # Calling this gate from another tab must not create duplicate Streamlit widget keys.
+        if show_admin_panel:
+            with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
+                _hg_admin_panel()
+        return True
+    if st.session_state.get("_auth_role") == "vip":
+        _exp = str(st.session_state.get("_auth_expires", ""))
+        st.caption(f"🔐 VIP: {st.session_state.get('_auth_user', '')}" + (f" · ផុតកំណត់ {_exp}" if _exp else ""))
+        return True
+    st.warning("សូមចូលគណនីជាមុនសិន។")
+    return False
+
+
+def _hg_has_access():
+    """ពិនិត្យសិទ្ធិ Admin/VIP ដោយមិនបង្កើត widget (សុវត្ថិភាពសម្រាប់ហៅក្នុងច្រើនផ្ទាំង)។"""
+    return _is_logged_in()
+
+
+
+# =====================================================================
+#  ចូលប្រើដោយ Username / Password — គណនីបង្កើតដោយ Admin ប៉ុណ្ណោះ (មិនប្រើ Gmail/Google ទៀតទេ)
+#  ► Admin ចូលដោយ ADMIN_USERNAME / ADMIN_PASSWORD ដែលដាក់ក្នុង Secrets
+#  ► អ្នកប្រើផ្សេងទៀត ចូលដោយគណនីដែល Admin បង្កើតក្នុង «គ្រប់គ្រងគណនី VIP»
+# =====================================================================
+from html import escape as _esc
+
+_AUTH_SETUP_HELP = """# Streamlit Cloud → Settings → Secrets
+# (ដាក់នៅខាងលើបំផុត មុនបន្ទាត់ [section] ណាមួយ)
+ADMIN_USERNAME = "admin"
+ADMIN_PASSWORD = "ដាក់ពាក្យសម្ងាត់វែងៗ យ៉ាងតិច ១២ តួ"
+SUPABASE_URL = "https://xxxx.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY = "xxxx"
+"""
 
 _LOGIN_CSS = """<style>
 .st-key-kv_login{max-width:460px;margin:3vh auto 0;padding:30px 24px 22px;border-radius:26px;
@@ -6968,13 +7124,8 @@ background:linear-gradient(135deg,#FF2DAA,#7B5CFF 60%,#19B7FF);box-shadow:0 10px
 .st-key-kv_login .kv-l{margin:0 0 20px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);}
 .st-key-kv_login .kv-l div{font-size:14px;line-height:1.95;color:#DCE3FF!important;}
 .st-key-kv_login .kv-f{margin-top:14px;text-align:center;font-size:12.5px;line-height:1.6;color:#8E9BCB!important;}
-.st-key-kv_login_btn button,.st-key-kv_logout_unverified button,.st-key-kv_logout_denied button{
-width:100%;min-height:54px;border-radius:14px!important;border:none!important;background:#FFFFFF!important;
-box-shadow:0 8px 22px rgba(0,0,0,.35);transition:transform .12s ease,box-shadow .12s ease;}
-.st-key-kv_login_btn button:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.45);}
-.st-key-kv_login_btn button p,.st-key-kv_logout_unverified button p,.st-key-kv_logout_denied button p{color:#1F2A44!important;font-weight:700;font-size:16px;}
-.st-key-kv_login_btn button p::before{content:"";display:inline-block;width:22px;height:22px;margin-right:12px;vertical-align:-5px;
-background:url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E") center/contain no-repeat;}
+.st-key-kv_login [data-testid="stForm"]{border:none!important;padding:0!important;}
+.st-key-kv_login button{width:100%;min-height:52px;border-radius:14px!important;font-weight:700;font-size:16px;}
 </style>"""
 
 _ACCOUNT_CSS = """<style>
@@ -6993,7 +7144,7 @@ _ACCOUNT_CSS = """<style>
 
 
 def _login_screen(icon, title, sub, items=None):
-    """បង្ហាញកាតចូលប្រើតាម theme ងងឹត ហើយត្រឡប់ container ដើម្បីដាក់ប៊ូតុងក្នុងកាត។"""
+    """បង្ហាញកាតចូលប្រើតាម theme ងងឹត ហើយត្រឡប់ container ដើម្បីដាក់ form ក្នុងកាត។"""
     st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
     box = st.container(key="kv_login")
     with box:
@@ -7004,69 +7155,244 @@ def _login_screen(icon, title, sub, items=None):
     return box
 
 
-def require_login():
-    """បិទមិនឱ្យប្រើកម្មវិធី ទាល់តែចូលតាមគណនី Google។ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិពេលចូលលើកដំបូង។"""
-    if not REQUIRE_LOGIN:
-        return
-    if not (hasattr(st, "login") and hasattr(st, "user")):
-        st.error("Streamlit ចាស់ពេក — សូមដាក់ `streamlit>=1.42.0` និង `Authlib>=1.3.2` ក្នុង requirements.txt។")
-        st.stop()
-    if not _auth_configured():
-        _login_screen("⚙️", "កម្មវិធីកំពុងរៀបចំ", "អ្នកគ្រប់គ្រងមិនទាន់កំណត់ Google Login ទេ។ សូមត្រឡប់មកវិញពេលក្រោយ។")
-        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
-            st.markdown(
-                "1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** (Web application)។\n"
-                "2. ដាក់ **Authorized redirect URI** ជា `https://ឈ្មោះកម្មវិធី.streamlit.app/oauth2callback` "
-                "(ក្នុងម៉ាស៊ីនខ្លួនឯង៖ `http://localhost:8501/oauth2callback`)។\n"
-                "3. ដាក់ Secrets ដូចខាងក្រោម ហើយដាក់ `Authlib>=1.3.2` ក្នុង requirements.txt។"
-            )
-            st.code(_AUTH_SETUP_HELP, language="toml")
-        st.stop()
+def _admin_creds():
+    """Username/Password របស់ Admin ពី Secrets (មិនដាក់ក្នុង code)។"""
+    return (str(get_secret("ADMIN_USERNAME", "") or "").strip(),
+            str(get_secret("ADMIN_PASSWORD", "") or ""))
 
-    if not _user_field("is_logged_in", False):
-        box = _login_screen(
-            "🎬", "ចូលប្រើ Khmer Video AI",
-            "ចូលតាមគណនី Google របស់អ្នក ដើម្បីចាប់ផ្តើមបកប្រែវីដេអូ",
-            ["🎙️ បកប្រែវីដេអូជាសំឡេង និង Subtitle ខ្មែរ",
-             "⚡ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិ",
-             "🔒 យើងមិនឃើញពាក្យសម្ងាត់ Google របស់អ្នកទេ"],
-        )
-        with box:
-            st.button("ចូលតាម Google", key="kv_login_btn", use_container_width=True,
-                      on_click=st.login, args=("google",))
-            st.markdown('<div class="kv-f">ត្រូវការគណនី Gmail ឬ Google ដើម្បីប្រើកម្មវិធី</div>', unsafe_allow_html=True)
-        st.stop()
 
-    _email = str(_user_field("email", "")).strip().lower()
-    if not _email or _user_field("email_verified", True) is False:
-        box = _login_screen("⚠️", "អ៊ីមែលមិនទាន់បញ្ជាក់", "គណនី Google នេះមិនទាន់បញ្ជាក់អ៊ីមែលទេ។ សូមប្រើគណនីផ្សេង។")
-        with box:
-            st.button("ចាកចេញ", key="kv_logout_unverified", on_click=st.logout, use_container_width=True)
-        st.stop()
-    _allowed = _allowed_email_set()
-    if _allowed and _email not in _allowed:
-        from html import escape as _esc
-        box = _login_screen("⛔", "គ្មានសិទ្ធិប្រើ", f"គណនី <b>{_esc(_email)}</b> មិនមានក្នុងបញ្ជីអនុញ្ញាតទេ។")
-        with box:
-            st.button("ចាកចេញ", key="kv_logout_denied", on_click=st.logout, use_container_width=True)
-        st.stop()
+def _is_admin_session():
+    return st.session_state.get("_auth_role") == "admin"
 
-    from html import escape as _esc
-    _name = str(_user_field("name", "") or _email)
-    _pic = str(_user_field("picture", "") or "")
+
+def _is_logged_in():
+    return st.session_state.get("_auth_role") in ("admin", "vip")
+
+
+_LOGIN_LS_HTML = """<!doctype html><html><body><script>
+(function () {
+  var KEY = "kvai_login_v1", lastNonce = null, sent = false;
+  function send(type, data) {
+    window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
+  }
+  function readStore() { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
+  window.addEventListener("message", function (ev) {
+    var d = ev.data;
+    if (!d || d.type !== "streamlit:render") return;
+    var a = d.args || {};
+    if (a.nonce !== undefined && a.nonce !== lastNonce) {
+      lastNonce = a.nonce;
+      if (a.save !== null && a.save !== undefined) {
+        try {
+          if (a.save === "") localStorage.removeItem(KEY); else localStorage.setItem(KEY, a.save);
+        } catch (e) {}
+      }
+    }
+    if (!sent) {
+      sent = true;
+      send("streamlit:setComponentValue", {value: {data: readStore()}, dataType: "json"});
+    }
+  });
+  send("streamlit:componentReady", {apiVersion: 1});
+  send("streamlit:setFrameHeight", {height: 0});
+})();
+</script></body></html>"""
+
+
+@st.cache_resource(show_spinner=False)
+def _login_component():
+    folder = os.path.join(tempfile.gettempdir(), "kvai_login_component")
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, "index.html"), "w", encoding="utf-8") as f:
+        f.write(_LOGIN_LS_HTML)
+    return components.declare_component("kvai_login_storage", path=folder)
+
+
+def _auth_ls():
+    """សរសេរ/អាន token ចូលក្នុង localStorage របស់ Browser (ដើម្បីមិនបាច់ចូលម្តងទៀត)។"""
+    try:
+        return _login_component()(save=st.session_state.get("_auth_ls_payload"),
+                                  nonce=st.session_state.get("_auth_ls_nonce", 0),
+                                  default=None, key="kv_login_ls")
+    except Exception:
+        return None
+
+
+def _auth_secret():
+    _adm_p = _admin_creds()[1]
+    _, _sb_key = _hg_supabase_config()
+    base = str(get_secret("LOGIN_SECRET", "") or "") or (_adm_p + "|" + _sb_key)
+    if not base.strip("|"):
+        return b""
+    return hashlib.sha256(("kvai-login|" + base).encode("utf-8")).digest()
+
+
+def _auth_make_token(role, username):
+    sec = _auth_secret()
+    if not sec:
+        return ""
+    body = base64.urlsafe_b64encode(json.dumps(
+        {"r": role, "u": username, "e": int(time.time()) + 365 * 86400}).encode("utf-8")).decode().rstrip("=")
+    return body + "." + hmac.new(sec, body.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _auth_read_token(token):
+    try:
+        body, sig = str(token).split(".", 1)
+        sec = _auth_secret()
+        if not sec or not hmac.compare_digest(sig, hmac.new(sec, body.encode("utf-8"), hashlib.sha256).hexdigest()):
+            return None
+        d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+        return d if int(d.get("e", 0)) > time.time() else None
+    except Exception:
+        return None
+
+
+def _auth_restore(token):
+    """ចូលវិញដោយស្វ័យប្រវត្តិពី token ដែលបានរក្សាទុក។"""
+    d = _auth_read_token(token) if token else None
+    if not d:
+        return False
+    if d.get("r") == "admin":
+        _adm_u = _admin_creds()[0]
+        if _adm_u and d.get("u") == _adm_u:
+            _auth_sign_in("admin", _adm_u)
+            return True
+    elif d.get("r") == "vip":
+        try:
+            row = _hg_get_vip_user(d.get("u", ""))
+        except Exception:
+            return False
+        if _hg_vip_is_valid(row):
+            _auth_sign_in("vip", row["username"], str(row.get("expires_at", ""))[:10])
+            return True
+    return False
+
+
+def _auth_sign_in(role, username, expires=""):
+    st.session_state["_auth_role"] = role
+    st.session_state["_auth_user"] = username
+    st.session_state["_auth_expires"] = expires
+    st.session_state["_auth_checked_at"] = time.time()
+    st.session_state.pop("_auth_logged_out", None)
+    st.session_state["_auth_ls_payload"] = _auth_make_token(role, username)
+    st.session_state["_auth_ls_nonce"] = st.session_state.get("_auth_ls_nonce", 0) + 1
+
+
+def _auth_sign_out():
+    for _k in ("_auth_role", "_auth_user", "_auth_expires", "_auth_checked_at"):
+        st.session_state.pop(_k, None)
+    st.session_state["_auth_logged_out"] = True
+    st.session_state["_auth_ls_payload"] = ""   # លុប token ក្នុង Browser
+    st.session_state["_auth_ls_nonce"] = st.session_state.get("_auth_ls_nonce", 0) + 1
+
+
+def _auth_check(username, password):
+    """ត្រឡប់ (role, username, expires) បើត្រូវ ឬ (None, "", សារកំហុស) បើខុស។"""
+    u = str(username or "").strip()
+    p = str(password or "")
+    if not u or not p:
+        return None, "", "សូមបញ្ចូល Username និង Password។"
+    adm_u, adm_p = _admin_creds()
+    if (adm_u and adm_p
+            and hmac.compare_digest(u.encode("utf-8"), adm_u.encode("utf-8"))
+            and hmac.compare_digest(p.encode("utf-8"), adm_p.encode("utf-8"))):
+        return "admin", adm_u, ""
+    try:
+        row = _hg_get_vip_user(u)
+    except Exception:
+        return None, "", "មិនអាចផ្ទៀងផ្ទាត់គណនីបាន។ សូមព្យាយាមម្តងទៀត ឬទាក់ទង Admin។"
+    if _hg_vip_is_valid(row) and _hg_password_verify(p, row.get("password_hash", "")):
+        return "vip", row["username"], str(row.get("expires_at", ""))[:10]
+    return None, "", "Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។"
+
+
+def _auth_revalidate():
+    """គណនី VIP៖ ពិនិត្យម្តងទៀតរៀងរាល់ ៥ នាទី (ក្រែងផុតកំណត់ ឬ Admin បិទគណនី)។"""
+    if st.session_state.get("_auth_role") != "vip":
+        return True
+    if time.time() - float(st.session_state.get("_auth_checked_at", 0) or 0) < 300:
+        return True
+    try:
+        row = _hg_get_vip_user(st.session_state.get("_auth_user", ""))
+    except Exception:
+        return True  # បណ្តាញមានបញ្ហាបណ្តោះអាសន្ន — កុំទាញអ្នកប្រើចេញ
+    if _hg_vip_is_valid(row):
+        st.session_state["_auth_checked_at"] = time.time()
+        st.session_state["_auth_expires"] = str(row.get("expires_at", ""))[:10]
+        return True
+    return False
+
+
+def _render_account_bar():
+    _name = str(st.session_state.get("_auth_user", ""))
+    _exp = str(st.session_state.get("_auth_expires", ""))
+    if _is_admin_session():
+        _meta = "👑 Admin"
+    else:
+        _meta = f"VIP · ផុតកំណត់ {_exp}" if _exp else "VIP"
     st.markdown(_ACCOUNT_CSS, unsafe_allow_html=True)
     with st.container(key="kv_account"):
         _a, _b = st.columns([6, 2])
         with _a:
-            _av = (f'<img src="{_esc(_pic)}" referrerpolicy="no-referrer">' if _pic.startswith("https://")
-                   else f'<div class="kv-av">{_esc(_name[:1].upper())}</div>')
             st.markdown(
-                f'<div class="kv-u">{_av}<div class="kv-t2"><div class="kv-n">{_esc(_name)}</div>'
-                f'<div class="kv-m">{_esc(_email)}</div></div></div>',
+                f'<div class="kv-u"><div class="kv-av">{_esc(_name[:1].upper())}</div>'
+                f'<div class="kv-t2"><div class="kv-n">{_esc(_name)}</div>'
+                f'<div class="kv-m">{_esc(_meta)}</div></div></div>',
                 unsafe_allow_html=True,
             )
         with _b:
-            st.button("ចាកចេញ", key="kv_logout_btn", on_click=st.logout)
+            st.button("ចាកចេញ", key="kv_logout_btn", on_click=_auth_sign_out)
+
+
+def require_login():
+    """បិទមិនឱ្យប្រើកម្មវិធី ទាល់តែចូលដោយគណនីដែល Admin បង្កើត។"""
+    _ls_res = _auth_ls()
+    if _is_logged_in():
+        if _auth_revalidate():
+            _render_account_bar()
+            return
+        _auth_sign_out()
+        st.warning("គណនីរបស់អ្នកបានផុតកំណត់ ឬត្រូវបានបិទ។ សូមទាក់ទង Admin។")
+    elif (_ls_res and not st.session_state.get("_auth_logged_out")
+          and not st.session_state.get("_auth_restore_tried")):
+        st.session_state["_auth_restore_tried"] = True
+        _raw = (_ls_res.get("data") if isinstance(_ls_res, dict) else "") or ""
+        if _auth_restore(_raw):
+            st.rerun()
+
+    _adm_u, _adm_p = _admin_creds()
+    _sb_url, _sb_key = _hg_supabase_config()
+    if not (_adm_u and _adm_p) and not (_sb_url and _sb_key):
+        _login_screen("⚙️", "កម្មវិធីកំពុងរៀបចំ",
+                      "អ្នកគ្រប់គ្រងមិនទាន់កំណត់គណនី Admin ទេ។ សូមត្រឡប់មកវិញពេលក្រោយ។")
+        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
+            st.markdown("ដាក់ Secrets ដូចខាងក្រោម រួច Reboot កម្មវិធី៖")
+            st.code(_AUTH_SETUP_HELP, language="toml")
+        st.stop()
+
+    box = _login_screen(
+        "🎬", "ចូលប្រើ Khmer Video AI",
+        "បញ្ចូល Username និង Password ដែល Admin ផ្តល់ឱ្យ",
+        ["🎙️ បកប្រែវីដេអូជាសំឡេង និង Subtitle ខ្មែរ",
+         "🔒 គណនីត្រូវបានបង្កើតដោយ Admin ប៉ុណ្ណោះ"],
+    )
+    with box:
+        with st.form("kv_login_form"):
+            _u = st.text_input("Username", key="kv_login_user")
+            _p = st.text_input("Password", type="password", key="kv_login_pass")
+            _go = st.form_submit_button("ចូលប្រើ", type="primary", use_container_width=True)
+        if _go:
+            _role, _name, _info = _auth_check(_u, _p)
+            if _role:
+                _auth_sign_in(_role, _name, _info if _role == "vip" else "")
+                st.rerun()
+            time.sleep(1)  # ពន្យឺតបន្តិច កាត់បន្ថយការទាយពាក្យសម្ងាត់
+            st.error(_info)
+        st.markdown('<div class="kv-f">មិនទាន់មានគណនី? សូមទាក់ទង Admin ដើម្បីទទួលគណនី</div>',
+                    unsafe_allow_html=True)
+    st.stop()
+
 
 
 GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
@@ -7327,235 +7653,6 @@ def _hg_extract_series_id(value):
         return value
     return ""
 
-# ============================ Hongguo VIP Access ============================
-# All VIP checks and management use the server-only Supabase service key.
-_HG_ADMIN_EMAIL = "smeyai2000@gmail.com"
-
-def _hg_supabase_config():
-    _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
-    # SUPABASE_URL must be the project root, not a REST endpoint.
-    # Accept a pasted URL ending in /rest/v1 and normalize it to avoid
-    # requesting /rest/v1/rest/v1/... (PostgREST PGRST125).
-    for _suffix in ("/rest/v1", "/rest/v1/"):
-        if _url.lower().endswith(_suffix):
-            _url = _url[:-len(_suffix)].rstrip("/")
-            break
-    _key = str(get_secret("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
-    if not _key:
-        # Support the newer Supabase secret-key name if the owner used it.
-        _key = str(get_secret("SUPABASE_SECRET_KEY", "")).strip()
-    return _url, _key
-
-
-def _hg_sb_request(method, path="", params=None, payload=None):
-    _url, _key = _hg_supabase_config()
-    if not _url or not _key:
-        raise RuntimeError("មិនទាន់កំណត់ SUPABASE_URL និង SUPABASE_SERVICE_ROLE_KEY ក្នុង Streamlit Secrets ទេ។")
-    _headers = {
-        "apikey": _key,
-        "Authorization": "Bearer " + _key,
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-    _resp = requests.request(
-        method, _url + "/rest/v1/hongguo_vip_users" + path,
-        headers=_headers, params=params, json=payload, timeout=20,
-    )
-    if not _resp.ok:
-        raise RuntimeError(f"Supabase HTTP {_resp.status_code}: {_resp.text[:300]}")
-    if not _resp.text.strip():
-        return []
-    try:
-        return _resp.json()
-    except Exception:
-        return []
-
-
-def _hg_password_hash(password):
-    _salt = secrets.token_bytes(16)
-    _rounds = 310000
-    _digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt, _rounds)
-    return "pbkdf2_sha256${}${}${}".format(
-        _rounds, base64.urlsafe_b64encode(_salt).decode().rstrip("="),
-        base64.urlsafe_b64encode(_digest).decode().rstrip("="),
-    )
-
-
-def _hg_password_verify(password, stored):
-    try:
-        _algo, _rounds, _salt, _expected = stored.split("$", 3)
-        if _algo != "pbkdf2_sha256":
-            return False
-        _salt_b = base64.urlsafe_b64decode(_salt + "=" * (-len(_salt) % 4))
-        _expected_b = base64.urlsafe_b64decode(_expected + "=" * (-len(_expected) % 4))
-        _actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt_b, int(_rounds))
-        return hmac.compare_digest(_actual, _expected_b)
-    except Exception:
-        return False
-
-
-def _hg_get_vip_user(username):
-    _rows = _hg_sb_request("GET", params={
-        "select": "id,username,password_hash,expires_at,is_active,created_at,note",
-        "username": "eq." + str(username).strip(),
-        "limit": "1",
-    })
-    return _rows[0] if _rows else None
-
-
-def _hg_vip_is_valid(_user):
-    if not _user or not _user.get("is_active"):
-        return False
-    try:
-        _expiry = str(_user.get("expires_at", "")).replace("Z", "+00:00")
-        _dt = datetime.fromisoformat(_expiry)
-        if _dt.tzinfo is None:
-            _dt = _dt.replace(tzinfo=timezone.utc)
-        return _dt > datetime.now(timezone.utc)
-    except Exception:
-        return False
-
-
-def _hg_admin_panel():
-    st.markdown("#### 👑 គ្រប់គ្រងគណនី VIP")
-    with st.form("hg_vip_create_form", clear_on_submit=True):
-        _c1, _c2 = st.columns(2)
-        with _c1:
-            _new_user = st.text_input("ឈ្មោះអ្នកប្រើ VIP", key="hg_admin_new_username")
-            _new_pass = st.text_input("ពាក្យសម្ងាត់ VIP", type="password", key="hg_admin_new_password")
-        with _c2:
-            _days = st.selectbox("រយៈពេលប្រើប្រាស់", [7, 30, 90, 180, 365], index=1, format_func=lambda x: f"{x} ថ្ងៃ")
-            _note = st.text_input("កំណត់ចំណាំ (មិនចាំបាច់)")
-        _create = st.form_submit_button("➕ បង្កើតគណនី VIP", use_container_width=True)
-    if _create:
-        _u = str(_new_user or "").strip()
-        if len(_u) < 3 or len(_new_pass or "") < 8:
-            st.error("Username ត្រូវមានយ៉ាងតិច ៣ តួ និង Password យ៉ាងតិច ៨ តួ។")
-        else:
-            try:
-                if _hg_get_vip_user(_u):
-                    st.error("Username នេះមានរួចហើយ។")
-                else:
-                    _expiry = (datetime.now(timezone.utc) + timedelta(days=int(_days))).isoformat()
-                    _hg_sb_request("POST", payload={
-                        "username": _u,
-                        "password_hash": _hg_password_hash(_new_pass),
-                        "expires_at": _expiry,
-                        "is_active": True,
-                        "note": str(_note or "").strip(),
-                    })
-                    st.success(f"បានបង្កើត VIP '{_u}' រយៈពេល {_days} ថ្ងៃ។")
-                    st.rerun()
-            except Exception as _err:
-                st.error(f"បង្កើតគណនីមិនបាន៖ {_err}")
-
-    try:
-        _users = _hg_sb_request("GET", params={
-            "select": "id,username,expires_at,is_active,created_at,note",
-            "order": "created_at.desc", "limit": "200",
-        })
-        if _users:
-            st.markdown("**បញ្ជី VIP**")
-            for _u in _users:
-                _x = str(_u.get("expires_at", ""))[:10]
-                _status = "សកម្ម" if _hg_vip_is_valid(_u) else "ផុតកំណត់/បិទ"
-                _a, _b, _c, _d = st.columns([2.2, 1.7, 1.3, 1.3])
-                _a.write(f"**{_u.get('username','')}**")
-                _b.caption(f"{_status} · ដល់ {_x}")
-                with _c:
-                    _extend_days = st.selectbox("បន្ថែមថ្ងៃ", [7, 30, 90, 180, 365], index=1,
-                                                key="hg_vip_extend_days_" + str(_u["id"]), label_visibility="collapsed")
-                    if st.button("បន្ថែម", key="hg_vip_extend_" + str(_u["id"]), use_container_width=True):
-                        try:
-                            _base = datetime.now(timezone.utc)
-                            try:
-                                _old_exp = datetime.fromisoformat(str(_u.get("expires_at", "")).replace("Z", "+00:00"))
-                                if _old_exp.tzinfo is None:
-                                    _old_exp = _old_exp.replace(tzinfo=timezone.utc)
-                                if _old_exp > _base:
-                                    _base = _old_exp
-                            except Exception:
-                                pass
-                            _new_exp = (_base + timedelta(days=int(_extend_days))).isoformat()
-                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])},
-                                           payload={"expires_at": _new_exp, "is_active": True})
-                            st.success("បានបន្ថែមថ្ងៃ VIP រួចរាល់។")
-                            st.rerun()
-                        except Exception as _extend_err:
-                            st.error(f"បន្ថែមថ្ងៃមិនបាន៖ {_extend_err}")
-                with _d:
-                    if _u.get("is_active"):
-                        if st.button("បិទ", key="hg_vip_off_" + str(_u["id"]), use_container_width=True):
-                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": False})
-                            st.rerun()
-                    else:
-                        if st.button("បើកវិញ", key="hg_vip_on_" + str(_u["id"]), use_container_width=True):
-                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": True})
-                            st.rerun()
-    except Exception as _err:
-        st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
-
-
-def _hg_vip_gate(show_admin_panel=True):
-    _email = str(_user_field("email", "")).strip().lower()
-    _is_admin = _email == _HG_ADMIN_EMAIL
-    if _is_admin:
-        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-        # Render the Admin controls only in the primary Hongguo tab.
-        # Calling this gate from another tab must not create duplicate Streamlit widget keys.
-        if show_admin_panel:
-            with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
-                _hg_admin_panel()
-        return True
-
-    _vip_name = str(st.session_state.get("_hg_vip_username", "")).strip()
-    if _vip_name:
-        try:
-            _vip_row = _hg_get_vip_user(_vip_name)
-            if _hg_vip_is_valid(_vip_row):
-                st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
-                if st.button("ចាកចេញពី VIP", key="hg_vip_logout"):
-                    st.session_state.pop("_hg_vip_username", None)
-                    st.rerun()
-                return True
-            st.session_state.pop("_hg_vip_username", None)
-            st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
-        except Exception as _err:
-            st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {_err}")
-            return False
-
-    st.markdown("### 🔒 Hongguo VIP")
-    st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
-    with st.form("hg_vip_login_form"):
-        _u = st.text_input("Username", key="hg_vip_login_username")
-        _p = st.text_input("Password", type="password", key="hg_vip_login_password")
-        _go = st.form_submit_button("ចូលប្រើ Hongguo VIP", use_container_width=True)
-    if _go:
-        try:
-            _row = _hg_get_vip_user(_u)
-            if _hg_vip_is_valid(_row) and _hg_password_verify(_p, _row.get("password_hash", "")):
-                st.session_state["_hg_vip_username"] = _row["username"]
-                st.rerun()
-            st.error("Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។")
-        except Exception as _err:
-            st.error(f"មិនអាចចូល VIP បាន៖ {_err}")
-    return False
-
-
-def _hg_has_access():
-    """ពិនិត្យសិទ្ធិ Admin/VIP ដោយមិនបង្កើត widget (សុវត្ថិភាពសម្រាប់ហៅក្នុងច្រើនផ្ទាំង)។"""
-    _email = str(_user_field("email", "")).strip().lower()
-    if _email == _HG_ADMIN_EMAIL:
-        return True
-    _name = str(st.session_state.get("_hg_vip_username", "")).strip()
-    if not _name:
-        return False
-    try:
-        return bool(_hg_vip_is_valid(_hg_get_vip_user(_name)))
-    except Exception:
-        return False
-
-
 with tab_drama:
     _hg_access = _hg_vip_gate()
     if _hg_access:
@@ -7563,12 +7660,12 @@ with tab_drama:
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
         if not _HG_APP_ID or not _HG_APP_SECRET:
             st.warning("មិនទាន់រកឃើញ Hongguo APPID/APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin ពិនិត្យ Secrets របស់កម្មវិធី។ អ្នកប្រើមិនចាំបាច់បញ្ចូល API នៅផ្ទាំងផ្សេងទៀតទេ។")
-            if str(_user_field("email", "")).strip().lower() == _HG_ADMIN_EMAIL:
+            if _is_admin_session():
                 with st.expander("🔧 Admin: មើលមូលហេតុ (មិនបង្ហាញតម្លៃ Secret)"):
                     st.write("APPID រកឃើញ:", "✅" if _HG_APP_ID else "❌", " · APPSECRET រកឃើញ:", "✅" if _HG_APP_SECRET else "❌")
                     _names = _hg_secret_key_names()
                     st.write("ឈ្មោះ key ដែលកម្មវិធីឃើញក្នុង Secrets:", ", ".join(_names) if _names else "(គ្មានសោះ)")
-                    st.caption("ឈ្មោះដែលទទួល៖ XIAOYING_APPID / APPID / HONGGUO_APPID និង XIAOYING_APPSECRET / APPSECRET / HONGGUO_APPSECRET។ ត្រូវដាក់នៅផ្នែកខាងលើបំផុតនៃ Secrets មុនបន្ទាត់ [auth] ឬ [...] ណាមួយ។")
+                    st.caption("ឈ្មោះដែលទទួល៖ XIAOYING_APPID / APPID / HONGGUO_APPID និង XIAOYING_APPSECRET / APPSECRET / HONGGUO_APPSECRET។ ត្រូវដាក់នៅផ្នែកខាងលើបំផុតនៃ Secrets មុនបន្ទាត់ [section] ណាមួយ។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
