@@ -7552,70 +7552,93 @@ _STREAMING_VERTICALS_HOME = "https://www.streamingverticals.com/"
 
 @st.cache_data(ttl=900, show_spinner=False)
 def _sv_public_catalog(source_url=None):
-    """Collect public poster/video pairs from a public website URL."""
+    """Collect public drama cards from HTML metadata and linked poster cards."""
     source_url = str(source_url or _STREAMING_VERTICALS_HOME).strip()
     parsed_source = urllib.parse.urlparse(source_url)
     if parsed_source.scheme not in ("http", "https") or not parsed_source.netloc:
         raise ValueError("Website URL មិនត្រឹមត្រូវទេ។")
-    headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36",
                "Accept": "text/html,application/xhtml+xml,application/json"}
-    response = requests.get(source_url, headers=headers, timeout=30)
+    response = requests.get(source_url, headers=headers, timeout=35)
     response.raise_for_status()
     html = response.text
     rows, seen = [], set()
 
-    # Parse structured metadata used by modern catalog pages (JSON-LD / hydration data).
+    def add_row(cover, watch, title="", video=""):
+        cover = urllib.parse.urljoin(source_url, str(cover or "").replace("&amp;", "&"))
+        watch = urllib.parse.urljoin(source_url, str(watch or ""))
+        if not cover.startswith(("http://", "https://")) or not watch.startswith(("http://", "https://")):
+            return
+        if cover.lower().startswith(("data:", "blob:")) or any(x in cover.lower() for x in ("logo", "avatar", "icon", "banner")):
+            return
+        key = watch
+        if key in seen:
+            return
+        seen.add(key)
+        vid = re.search(r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', video or watch, re.I)
+        if not vid:
+            vid = re.search(r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"', video or "", re.I)
+        rows.append({"id": vid.group(1) if vid else "drama_" + str(abs(hash(key))),
+                     "cover": cover, "watch": video or watch,
+                     "page": watch, "title": title,
+                     "embed": f"https://www.youtube-nocookie.com/embed/{vid.group(1)}" if vid else "",
+                     "direct": (video or watch) if re.search(r'\.mp4(?:\?|$)', video or watch, re.I) else ""})
+
+    # 1) OpenGraph / Twitter / JSON-LD metadata.
     blocks = re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, re.I | re.S)
     for block in blocks:
-        try:
-            payload = json.loads(block.strip())
-        except Exception:
-            continue
-        stack = payload if isinstance(payload, list) else [payload]
+        try: payload = json.loads(block.strip())
+        except Exception: continue
+        stack = [payload]
         while stack:
             obj = stack.pop()
-            if isinstance(obj, list):
-                stack.extend(obj)
+            if isinstance(obj, list): stack.extend(obj)
             elif isinstance(obj, dict):
                 stack.extend(v for v in obj.values() if isinstance(v, (dict, list)))
                 image = obj.get("thumbnailUrl") or obj.get("image") or obj.get("thumbnail")
                 video = obj.get("embedUrl") or obj.get("contentUrl") or obj.get("url")
+                title = obj.get("name") or obj.get("headline") or ""
                 if isinstance(image, list): image = image[0] if image else ""
                 if isinstance(image, dict): image = image.get("url") or image.get("contentUrl") or ""
                 if isinstance(video, dict): video = video.get("url") or ""
-                if isinstance(image, str) and image.startswith("http") and isinstance(video, str) and video.startswith("http"):
-                    key = video
-                    if key not in seen:
-                        seen.add(key)
-                        vid = re.search(r'(?:youtube(?:-nocookie)?\.com/(?:embed/|watch\?(?:[^#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', video)
-                        rows.append({"id": vid.group(1) if vid else "sv_" + str(abs(hash(key))),
-                                     "cover": image, "watch": video,
-                                     "embed": f"https://www.youtube-nocookie.com/embed/{vid.group(1)}" if vid else "",
-                                     "direct": video if re.search(r'\.mp4(?:\?|$)', video, re.I) else ""})
+                if isinstance(image, str) and isinstance(video, str): add_row(image, video, title)
 
-    # Broadly recognize YouTube links in the public HTML, including Shorts and nocookie embeds.
-    video_patterns = (
-        r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^"\'<>\s#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})',
-        r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"',
-    )
+    # 2) Card links containing poster images (works with server-rendered and many hydrated sites).
+    anchor_blocks = re.findall(r'<a\b([^>]*)>(.*?)</a\s*>', html, re.I | re.S)
+    for attrs, body in anchor_blocks:
+        href_m = re.search(r'\bhref=["\']([^"\']+)', attrs, re.I)
+        img_m = re.search(r'<img\b([^>]*)>', body, re.I | re.S)
+        if not href_m or not img_m: continue
+        href = urllib.parse.urljoin(source_url, href_m.group(1).replace('&amp;', '&'))
+        img_attrs = img_m.group(1)
+        src_m = re.search(r'\b(?:src|data-src|data-lazy-src|data-original)=["\']([^"\']+)', img_attrs, re.I)
+        if not src_m:
+            srcset_m = re.search(r'\bsrcset=["\']([^"\']+)', img_attrs, re.I)
+            if srcset_m: src_m = re.match(r'\s*(\S+)', srcset_m.group(1))
+        if not src_m: continue
+        cover = src_m.group(1)
+        title_m = re.search(r'\balt=["\']([^"\']+)', img_attrs, re.I)
+        title = title_m.group(1) if title_m else ""
+        # Prefer likely content routes; ignore site navigation/social links.
+        if urllib.parse.urlparse(href).netloc and urllib.parse.urlparse(href).netloc != parsed_source.netloc:
+            continue
+        if any(x in href.lower() for x in ("/category", "/tag/", "/about", "/contact", "#", "javascript:")):
+            continue
+        add_row(cover, href, title)
+
+    # 3) YouTube IDs embedded in page source, paired with the closest poster if available.
     video_ids = []
-    for pattern in video_patterns:
+    patterns = (r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^"\'<>\s#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"')
+    for pattern in patterns:
         for vid in re.findall(pattern, html, re.I):
-            if vid not in video_ids:
-                video_ids.append(vid)
+            if vid not in video_ids: video_ids.append(vid)
     for vid in video_ids:
         watch = f"https://www.youtube.com/watch?v={vid}"
-        if watch not in seen:
-            seen.add(watch)
-            rows.append({"id": vid, "cover": f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg",
-                         "watch": watch, "embed": f"https://www.youtube-nocookie.com/embed/{vid}", "direct": ""})
+        add_row(f"https://i.ytimg.com/vi/{vid}/hqdefault.jpg", watch, "")
 
-    # Public MP4 files only; never extract or bypass protected streams.
+    # 4) Public MP4 files only. Do not bypass protected streams or DRM.
     for url in re.findall(r'https?[^"\'\s<>]+\.mp4(?:\?[^"\'\s<>]*)?', html, re.I):
-        url = url.replace('&amp;', '&')
-        if url not in seen:
-            seen.add(url)
-            rows.append({"id": "mp4_" + str(abs(hash(url))), "cover": "", "watch": url, "embed": "", "direct": url})
+        add_row("", url, "")
     return rows
 
 with tab_drama:
@@ -7624,40 +7647,50 @@ with tab_drama:
         st.success("👑 Admin Access")
         with st.expander("⚙️ Admin: បង្កើត និងគ្រប់គ្រងគណនី VIP", expanded=False):
             _hg_admin_panel()
-        with st.expander("🌐 បន្ថែម Website រឿង", expanded=True):
-            st.caption("បញ្ចូល URL គេហទំព័រសាធារណៈដែលមាន Poster និងវីដេអូ។ មិនអាចទាញយកមាតិកាដែលចាក់សោ/VIP ឬ DRM បានទេ។")
-            _new_source = st.text_input("Website URL", value="", key="sv_new_source_url",
+        with st.expander("🌐 គ្រប់គ្រង Website រឿង", expanded=True):
+            st.caption("បញ្ចូលឈ្មោះ Website និង URL។ អ្នកប្រើនឹងឃើញតែឈ្មោះ មិនបង្ហាញ URL ទេ។")
+            _new_source_name = st.text_input("ឈ្មោះ Website", value="", key="sv_new_source_name",
+                                             placeholder="ឧ. Streaming Verticals")
+            _new_source = st.text_input("URL (សម្រាប់ Admin ប៉ុណ្ណោះ)", value="", key="sv_new_source_url",
                                         placeholder="https://example.com/")
             if st.button("➕ បន្ថែម Website", key="sv_add_source", use_container_width=True):
                 _candidate = str(_new_source or "").strip()
+                _name = str(_new_source_name or "").strip()
                 _parsed = urllib.parse.urlparse(_candidate)
                 if _parsed.scheme not in ("http", "https") or not _parsed.netloc:
                     st.error("សូមបញ្ចូល URL ដែលចាប់ផ្ដើមដោយ https:// ឬ http://")
+                elif not _name:
+                    st.error("សូមបញ្ចូលឈ្មោះ Website ជាមុន។")
                 else:
-                    _sources = st.session_state.setdefault("_sv_sources", [_STREAMING_VERTICALS_HOME])
-                    if _candidate not in _sources:
-                        _sources.append(_candidate)
+                    _sources = st.session_state.setdefault("_sv_sources", [{"name": "Streaming Verticals", "url": _STREAMING_VERTICALS_HOME}])
+                    _sources = [x if isinstance(x, dict) else {"name": urllib.parse.urlparse(str(x)).netloc.replace("www.", "") or "Website", "url": str(x)} for x in _sources]
+                    st.session_state["_sv_sources"] = _sources
+                    if not any(x.get("url") == _candidate for x in _sources):
+                        _sources.append({"name": _name, "url": _candidate})
                     st.session_state["_sv_active_source"] = _candidate
                     _sv_public_catalog.clear()
-                    st.success("បានបន្ថែម Website ក្នុង Session នេះហើយ។")
+                    st.success("បានបន្ថែម Website រួចរាល់។")
                     st.rerun()
-            _sources = st.session_state.setdefault("_sv_sources", [_STREAMING_VERTICALS_HOME])
-            _source_labels = [f"Website {i+1}: {u}" for i, u in enumerate(_sources)]
+            _sources = st.session_state.setdefault("_sv_sources", [{"name": "Streaming Verticals", "url": _STREAMING_VERTICALS_HOME}])
+            # Upgrade older session format (list of URL strings) to named sources.
+            _sources = [x if isinstance(x, dict) else {"name": urllib.parse.urlparse(str(x)).netloc.replace("www.", "") or "Website", "url": str(x)} for x in _sources]
+            st.session_state["_sv_sources"] = _sources
+            _source_names = [str(x.get("name") or "Website") for x in _sources]
             _active_default = str(st.session_state.get("_sv_active_source", _STREAMING_VERTICALS_HOME))
-            _active_index = _sources.index(_active_default) if _active_default in _sources else 0
-            _picked_source_label = st.selectbox("ជ្រើស Website", _source_labels, index=_active_index,
-                                                key="sv_admin_source_select")
-            st.session_state["_sv_active_source"] = _sources[_source_labels.index(_picked_source_label)]
+            _active_index = next((i for i,x in enumerate(_sources) if x.get("url") == _active_default), 0)
+            _picked_name = st.selectbox("ជ្រើស Website", _source_names, index=_active_index,
+                                        key="sv_admin_source_select")
+            st.session_state["_sv_active_source"] = _sources[_source_names.index(_picked_name)]["url"]
             if len(_sources) > 1:
                 _remove_idx = st.selectbox("លុប Website", list(range(len(_sources))),
-                                           format_func=lambda i: _sources[i], key="sv_remove_source_idx")
+                                           format_func=lambda i: _sources[i].get("name", "Website"), key="sv_remove_source_idx")
                 if st.button("🗑 លុប Website ដែលបានជ្រើស", key="sv_remove_source", use_container_width=True):
                     _removed = _sources.pop(_remove_idx)
-                    if st.session_state.get("_sv_active_source") == _removed:
-                        st.session_state["_sv_active_source"] = _sources[0]
+                    if st.session_state.get("_sv_active_source") == _removed.get("url"):
+                        st.session_state["_sv_active_source"] = _sources[0]["url"]
                     _sv_public_catalog.clear()
                     st.rerun()
-            st.caption("ចំណាំ៖ បញ្ជី Website នេះរក្សាទុកក្នុង Session បច្ចុប្បន្នប៉ុណ្ណោះ។ ដើម្បីឱ្យអ្នកប្រើទាំងអស់ឃើញជាអចិន្ត្រៃយ៍ ត្រូវភ្ជាប់តារាង Database សម្រាប់រក្សាទុក URL។")
+            st.caption("URL ត្រូវបានលាក់ពីអ្នកប្រើធម្មតា។ បញ្ជីនេះនៅក្នុង Session បច្ចុប្បន្នប៉ុណ្ណោះ រហូតដល់ភ្ជាប់ Database។")
         if st.button("ចាកចេញពី Admin", key="drama_admin_logout"):
             st.session_state.pop("_hg_admin_authenticated", None)
             st.rerun()
@@ -7687,14 +7720,30 @@ with tab_drama:
             if st.button("←", key="sv_back"):
                 st.session_state.pop("_sv_selected", None)
                 st.rerun()
-            if _sv_selected.get("embed"):
-                components.iframe(_sv_selected["embed"], height=520, scrolling=False)
-                st.link_button("▶", _sv_selected["watch"], use_container_width=True)
-            elif _sv_selected.get("direct"):
-                st.video(_sv_selected["direct"])
-                st.link_button("⬇️", _sv_selected["direct"], use_container_width=True)
+            _play_item = dict(_sv_selected)
+            if not _play_item.get("embed") and not _play_item.get("direct") and _play_item.get("page"):
+                try:
+                    _detail_html = requests.get(_play_item["page"], headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"}, timeout=25).text
+                    _vid_match = re.search(r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', _detail_html, re.I)
+                    if not _vid_match:
+                        _vid_match = re.search(r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"', _detail_html)
+                    _mp4_match = re.search(r'https?[^"\'\s<>]+\.mp4(?:\?[^"\'\s<>]*)?', _detail_html, re.I)
+                    if _vid_match:
+                        _play_item["embed"] = "https://www.youtube-nocookie.com/embed/" + _vid_match.group(1)
+                        _play_item["watch"] = "https://www.youtube.com/watch?v=" + _vid_match.group(1)
+                    elif _mp4_match:
+                        _play_item["direct"] = _mp4_match.group(0).replace("&amp;", "&")
+                except Exception:
+                    pass
+            if _play_item.get("embed"):
+                components.iframe(_play_item["embed"], height=520, scrolling=False)
+                st.link_button("▶", _play_item["watch"], use_container_width=True)
+            elif _play_item.get("direct"):
+                st.video(_play_item["direct"])
+                st.link_button("⬇️", _play_item["direct"], use_container_width=True)
             else:
-                st.link_button("▶", _sv_selected["watch"], use_container_width=True)
+                st.warning("Website នេះមាន Poster ប៉ុន្តែមិនទាន់រកឃើញវីដេអូសាធារណៈសម្រាប់ចាក់ក្នុង App ទេ។")
+                st.link_button("មើលរឿងនៅ Website", _play_item.get("page") or _play_item["watch"], use_container_width=True)
     except Exception as _sv_error:
         st.info("មិនអាចផ្ទុក Poster ពី Website នេះបានទេ។")
         if _is_drama_admin:
