@@ -6738,17 +6738,7 @@ def user_key_box():
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        _hg_id_saved = st.session_state.get("user_hg_app_id", "")
-        _hg_secret_saved = st.session_state.get("user_hg_app_secret", "")
-        if _hg_id_saved and _hg_secret_saved:
-            any_saved = True
-            st.success(f"✅ Hongguo Drama · APPID {_hg_id_saved[:4]}…{_hg_id_saved[-3:]} · APPSECRET ••••{_hg_secret_saved[-4:]}")
-            if st.button("🗑 លុប Hongguo Drama Key", key="remove_user_hg_keys"):
-                st.session_state.pop("user_hg_app_id", None)
-                st.session_state.pop("user_hg_app_secret", None)
-                _ls_persist()
-                st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft", "Hongguo Drama"], horizontal=True, key="user_key_provider")
+        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
         if provider == "Claude":
@@ -6761,12 +6751,6 @@ def user_key_box():
                                          value=st.session_state.get("user_claude_model", "claude-sonnet-5-5"),
                                          key="user_claude_model_input")
             st.caption("Claude ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទជាខ្មែរ (សាកមុនគេ)។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq Key ព្រោះ Claude មិនស្តាប់សំឡេងទេ។")
-        elif provider == "Hongguo Drama":
-            hg_app_id_in = st.text_input("Hongguo APPID", value=st.session_state.get("user_hg_app_id", ""),
-                                         placeholder="បិទភ្ជាប់ APPID", key="user_hg_app_id_input")
-            hg_app_secret_in = st.text_input("Hongguo APPSECRET", value=st.session_state.get("user_hg_app_secret", ""),
-                                             placeholder="បិទភ្ជាប់ APPSECRET", type="password", key="user_hg_app_secret_input")
-            st.caption("🔒 Key នេះរក្សាទុកក្នុង Browser ឧបករណ៍របស់អ្នកដូច Key ផ្សេងៗ។ វាប្រើសម្រាប់ Hongguo Drama ប៉ុណ្ណោះ។")
         elif provider == "CodeCraft":
             typed = st.text_input("CodeCraft API Key", type="password",
                                   placeholder="cc_...", key="user_key_input")
@@ -6846,18 +6830,6 @@ def user_key_box():
                     st.session_state["_key_msg"] = ("ok" if _added else "warn", _text)
                     if _added:
                         st.session_state["_clear_key_input"] = True
-                    st.rerun()
-            elif provider == "Hongguo Drama":
-                _hg_id = str(st.session_state.get("user_hg_app_id_input", "") or "").strip()
-                _hg_secret_value = str(st.session_state.get("user_hg_app_secret_input", "") or "").strip()
-                if not _hg_id or not _hg_secret_value:
-                    st.error("សូមបញ្ចូលទាំង APPID និង APPSECRET។")
-                else:
-                    st.session_state["user_hg_app_id"] = _hg_id
-                    st.session_state["user_hg_app_secret"] = _hg_secret_value
-                    _ls_persist()
-                    st.session_state["_key_msg"] = ("ok", "បានរក្សាទុក Hongguo Drama Key ក្នុង Browser របស់អ្នកហើយ ✅")
-                    st.session_state["_clear_key_input"] = True
                     st.rerun()
             elif provider == "CodeCraft":
                 _cc_base = (oai_base_in or "https://codecraftapi.com/v1").strip().rstrip("/")
@@ -7141,15 +7113,9 @@ tab_drama, tab_tiktok, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx,
 # ============================ Hongguo Drama → Khmer Auto Caption ============================
 # API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
 def _hg_secret(*names):
-    # Personal Browser credentials override app-wide Secrets; each user's session stays separate.
-    if names and names[0] in ("XIAOYING_APPID", "APPID"):
-        personal = st.session_state.get("user_hg_app_id", "")
-        if personal:
-            return str(personal).strip()
-    if names and names[0] in ("XIAOYING_APPSECRET", "APPSECRET"):
-        personal = st.session_state.get("user_hg_app_secret", "")
-        if personal:
-            return str(personal).strip()
+    """Read Hongguo credentials from owner-configured Streamlit Secrets first.
+    These server-side credentials are shared by the app; users should not enter them in the UI.
+    """
     for name in names:
         try:
             value = st.secrets.get(name, "")
@@ -7159,7 +7125,7 @@ def _hg_secret(*names):
             return str(value).strip()
         value = os.environ.get(name, "")
         if value:
-            return value.strip()
+            return str(value).strip()
     return ""
 
 _HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
@@ -7534,6 +7500,8 @@ with tab_drama:
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
+        if not _HG_APP_ID or not _HG_APP_SECRET:
+            st.warning("មិនទាន់រកឃើញ Hongguo APPID/APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin ពិនិត្យ Secrets របស់កម្មវិធី។ អ្នកប្រើមិនចាំបាច់បញ្ចូល API នៅផ្ទាំងផ្សេងទៀតទេ។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
