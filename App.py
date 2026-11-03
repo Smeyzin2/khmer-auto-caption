@@ -540,6 +540,16 @@ def apply_neon_theme():
 # ---------- Neon cinematic dashboard polish (Angkor-inspired) ----------
 CINEMATIC_DASHBOARD_CSS = """
 <style>
+.drama-hero{position:relative;overflow:hidden;margin:8px 0 16px;padding:22px 20px;border:1px solid rgba(53,214,255,.55);border-radius:20px;background:radial-gradient(circle at 90% 10%,rgba(0,214,255,.2),transparent 35%),linear-gradient(115deg,#101a49,#08142e 72%,#1b1248);box-shadow:0 10px 28px rgba(0,0,0,.22)}
+.drama-hero-kicker{font-size:10px;letter-spacing:2px;font-weight:800;color:#55e7ff!important}
+.drama-hero-title{font-size:clamp(22px,4vw,30px);font-weight:800;color:#fff!important;margin:4px 0}
+.drama-hero-sub{font-size:13px;color:#c7d7ff!important;line-height:1.6}
+.drama-hero-pills{display:flex;gap:7px;flex-wrap:wrap;margin-top:12px}
+.drama-hero-pills span{font-size:11px;color:#eaf8ff!important;border:1px solid rgba(90,220,255,.38);background:rgba(25,65,120,.42);padding:5px 9px;border-radius:999px}
+.drama-card-title{font-weight:800;font-size:14px;line-height:1.45;min-height:40px;margin-top:8px;color:#fff!important}
+.drama-card-meta{font-size:12px;color:#a9c5ef!important;margin:5px 0 8px}
+.drama-poster-fallback{height:210px;border-radius:12px;background:linear-gradient(145deg,#17275c,#101632 55%,#34205c);display:flex;align-items:center;justify-content:center;flex-direction:column;font-size:44px;color:#bcefff}
+.drama-poster-fallback small{font-size:10px;letter-spacing:2px;color:#b9c8ef;margin-top:8px}
 :root{--ink:#F7F8FF;--soft:#D3DEFF;--bg:#05091F;--card:#091638;--line:rgba(44,213,255,.62);--p1:#FF1493;--p2:#00D9FF;--gold:#FFD84D}
 html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{background:radial-gradient(ellipse at 8% 8%,rgba(255,0,153,.22),transparent 28%),radial-gradient(ellipse at 92% 10%,rgba(0,190,255,.22),transparent 30%),linear-gradient(140deg,#020616,#10113D 50%,#06172E)!important;color:#fff!important}
 .block-container{max-width:1800px!important;padding:.25rem .55rem 3.1rem!important}
@@ -8050,35 +8060,26 @@ def _hg_vip_gate():
 with tab_drama:
     _hg_access = _hg_vip_gate()
     if _hg_access:
-        st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
+        st.markdown("### 🍿 ស្វែងរករឿង")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
-        st.caption("🌐 ទាញទិន្នន័យពីគេហទំព័រ Hongguo ដោយផ្ទាល់ · មិនត្រូវការ API Key។")
+        
 
-        # Unified free-drama sources: one compact selector inside the existing drama tab.
-        _FREE_DRAMA_SOURCES = {
-            "DirectDrama · ភាគទាំងអស់ឥតគិតថ្លៃ": "https://directdrama.com/",
-            "DramaFlex · ភាគឥតគិតថ្លៃ": "https://dramaflex.net/en",
-            "Dramiyo · រឿងខ្លីឥតគិតថ្លៃ": "https://dramiyo.com/en",
-            "WebDracin · រឿងខ្លីឥតគិតថ្លៃ": "https://webdracin.com/?lang=en",
-        }
-        with st.expander("🌍 ប្រភពរឿងឥតគិតថ្លៃផ្សេងៗ — បញ្ចូលក្នុងកន្លែងតែមួយ", expanded=False):
-            _free_src_label = st.selectbox(
-                "ជ្រើសរើសប្រភពរឿង",
-                list(_FREE_DRAMA_SOURCES.keys()),
-                key="free_drama_source_selector",
-            )
-            _free_src_url = _FREE_DRAMA_SOURCES[_free_src_label]
-            st.caption("ជ្រើសរើសប្រភពខាងលើ ដើម្បីមើលកាតាឡុករឿងក្នុងផ្ទាំងតែមួយ។ ប្រសិនបើវេបសាយមិនអនុញ្ញាតឱ្យបង្ហាញក្នុង App សូមចុចបើកវេបសាយខាងក្រោម។")
-            try:
-                st.components.v1.iframe(_free_src_url, height=720, scrolling=True)
-            except Exception:
-                st.info("ប្រភពនេះមិនអនុញ្ញាតឱ្យបង្កប់ក្នុង App ទេ។ សូមបើកតាម Link ខាងក្រោម។")
-            st.link_button("↗ បើកប្រភពរឿងដែលបានជ្រើស", _free_src_url, use_container_width=True)
-            st.caption("ចំណាំ៖ App បង្ហាញគេហទំព័រប្រភពតែមួយក្នុងមួយពេល។ ការមើល និងការទាញយកអាស្រ័យលើមុខងារដែលគេហទំព័រនីមួយៗអនុញ្ញាតជាសាធារណៈ។")
+        # Clean unified drama-library header (no external website names or embedded pages).
+        st.markdown(
+            """
+            <div class="drama-hero">
+              <div class="drama-hero-kicker">KHMER DRAMA LIBRARY</div>
+              <div class="drama-hero-title">🎬 បណ្ណាល័យរឿងខ្លី</div>
+              <div class="drama-hero-sub">ស្វែងរកតាមចំណងជើង · ជ្រើសប្រភេទ · មើល Poster និងភាគរឿងនៅកន្លែងតែមួយ</div>
+              <div class="drama-hero-pills"><span>🖼️ Poster រឿង</span><span>📚 ប្រភេទរឿង</span><span>▶️ ជ្រើសរើសភាគ</span></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
-            _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
+            _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង", key="hg_search_text", placeholder="វាយឈ្មោះរឿងដែលអ្នកចង់មើល...")
         with _hg_q2:
             st.write("")
             _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
@@ -8400,17 +8401,23 @@ with tab_drama:
             except Exception as e:
                 st.error(str(e))
         elif _hg_rows:
-            for _hg_i in range(0, len(_hg_rows), 3):
-                _hg_cols = st.columns(3, gap="small")
-                for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
+            for _hg_i in range(0, len(_hg_rows), 4):
+                _hg_cols = st.columns(4, gap="medium")
+                for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+4]):
                     with _hg_col:
-                        if _hg_row.get("cover"):
-                            st.image(_hg_row["cover"], use_container_width=True)
-                        st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
-                        st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
-                        if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
-                            st.session_state["_hg_selected"] = _hg_row
-                            st.rerun()
+                        with st.container(border=True):
+                            _cover = str(_hg_row.get("cover") or "").strip()
+                            if _cover.startswith(("http://", "https://")):
+                                st.image(_cover, use_container_width=True)
+                            else:
+                                st.markdown('<div class="drama-poster-fallback">🎬<small>DRAMA POSTER</small></div>', unsafe_allow_html=True)
+                            _title = str(_hg_row.get("name") or "រឿងថ្មី").strip()
+                            st.markdown(f'<div class="drama-card-title">{_title[:54]}</div>', unsafe_allow_html=True)
+                            _eps_count = _hg_row.get("episode_cnt") or _hg_row.get("listed_cnt") or "—"
+                            st.markdown(f'<div class="drama-card-meta">📺 {_eps_count} ភាគ</div>', unsafe_allow_html=True)
+                            if st.button("▶ មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True, type="primary"):
+                                st.session_state["_hg_selected"] = _hg_row
+                                st.rerun()
             _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
             _hg_page_end = _hg_page_start + len(_hg_rows) - 1
             st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
