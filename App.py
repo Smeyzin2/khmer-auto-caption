@@ -6945,7 +6945,7 @@ def user_key_box():
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        st.caption("🌐 Hongguo ប្រើ XiaoYingAPI រួមរបស់ Admin ពី Streamlit Secrets។ API Key មិនបង្ហាញដល់សមាជិកទេ។")
+        st.caption("🌐 ប្រើទំព័រ Player សាធារណៈរបស់ Hongguo ដោយផ្ទាល់ · មិនប្រើ API Key")
         provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft"], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
@@ -7299,10 +7299,10 @@ def _hg_search(keyword, page=1):
 
 
 def _hg_find_episode_list(obj):
-    """Find episode arrays nested anywhere in Hongguo SSR loader data."""
-    preferred = ("episodes", "episode_list", "episodeList", "episode_data",
-                 "episodeData", "video_list", "videoList", "chapter_list",
-                 "chapterList", "play_list", "playList")
+    """Find Hongguo episode/vid arrays in public SSR data."""
+    preferred = ("vid_list", "vidList", "episodes", "episode_list", "episodeList",
+                 "episode_data", "episodeData", "video_list", "videoList",
+                 "chapter_list", "chapterList", "play_list", "playList")
     if isinstance(obj, dict):
         for key in preferred:
             value = obj.get(key)
@@ -7320,61 +7320,123 @@ def _hg_find_episode_list(obj):
     return []
 
 
+def _hg_player_page(series_id, vid=None):
+    """Read a public Hongguo player page; no app API, key, or signature."""
+    sid = urllib.parse.quote(str(series_id).strip(), safe="")
+    if vid:
+        player_url = f"{_HG_PUBLIC_BASE}/player/{sid}/{urllib.parse.quote(str(vid), safe='')}"
+    else:
+        player_url = f"{_HG_PUBLIC_BASE}/player/{sid}"
+    response = requests.get(
+        player_url,
+        headers={**_HG_PUBLIC_HEADERS, "Referer": _HG_PUBLIC_BASE + "/"},
+        timeout=30,
+    )
+    response.raise_for_status()
+    loader = _hg_router_data(response.text).get("loaderData") or {}
+    if not isinstance(loader, dict):
+        raise RuntimeError("ទំព័រ Player របស់ Hongguo មិនមានទិន្នន័យទេ។")
+
+    candidates = []
+    def walk(value):
+        if isinstance(value, dict):
+            for k, v in value.items():
+                if str(k).lower() in ("main_url", "mainurl", "backup_url", "backupurl") and isinstance(v, str):
+                    candidates.append(v)
+                else:
+                    walk(v)
+        elif isinstance(value, list):
+            for v in value:
+                walk(v)
+    walk(loader)
+    video_url = next((str(u).strip() for u in candidates
+                      if isinstance(u, str) and str(u).strip().startswith(("https://", "http://"))), "")
+    return {"url": video_url, "page_url": player_url, "loader": loader}
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def _hg_detail(series_id):
     loader = _hg_page_data(f"{_HG_PUBLIC_BASE}/detail?series_id={urllib.parse.quote(str(series_id))}")
-    data = loader.get("detail_page") or _hg_find_dict(loader, {"seriesDetail", "episodeList", "episodes"})
+    data = loader.get("detail_page") or _hg_find_dict(loader, {"seriesDetail", "episodeList", "episodes", "vid_list"})
     detail = data.get("seriesDetail") if isinstance(data.get("seriesDetail"), dict) else data
     if not isinstance(detail, dict):
         detail = {}
-    raw_episodes = _hg_find_episode_list(data) or _hg_find_episode_list(loader)
+
+    raw_episodes = (detail.get("vid_list") or detail.get("vidList")
+                    or _hg_find_episode_list(data) or _hg_find_episode_list(loader))
     normalized = []
-    for i, ep in enumerate(raw_episodes):
+    for i, ep in enumerate(raw_episodes if isinstance(raw_episodes, list) else []):
         if isinstance(ep, dict):
-            epno = (ep.get("ep") or ep.get("episode") or ep.get("episode_no")
-                    or ep.get("episodeNo") or ep.get("index") or ep.get("sort") or i+1)
-            url = (ep.get("url") or ep.get("play_url") or ep.get("playUrl")
-                   or ep.get("video_url") or ep.get("videoUrl") or "")
+            epno = (ep.get("episode") or ep.get("ep") or ep.get("episode_no")
+                    or ep.get("episodeNo") or ep.get("index") or ep.get("sort") or i + 1)
+            vid = (ep.get("vid") or ep.get("video_id") or ep.get("videoId")
+                   or ep.get("episode_id") or ep.get("episodeId") or ep.get("id") or "")
             title = ep.get("title") or ep.get("name") or f"ភាគ {i+1}"
-            normalized.append({**ep, "ep": epno, "title": title,
-                               "playable": bool(url), "url": url})
+            explicit_access = ep.get("accessible")
+            normalized.append({**ep, "ep": int(epno) if str(epno).isdigit() else i+1,
+                               "vid": str(vid), "title": title,
+                               "playable": bool(explicit_access) if explicit_access is not None else False,
+                               "url": ""})
         elif isinstance(ep, (str, int)):
-            normalized.append({"ep": i+1, "title": str(ep),
+            normalized.append({"ep": i+1, "vid": str(ep), "title": f"ភាគ {i+1}",
                                "playable": False, "url": ""})
-    total = detail.get("episode_count") or detail.get("episodeCount") or detail.get("episode_cnt") or detail.get("total_episode") or len(normalized)
+
+    total = (detail.get("episode_count") or detail.get("episodeCount")
+             or detail.get("episode_cnt") or detail.get("total_episode")
+             or len(normalized))
     try:
         total = int(total)
     except (TypeError, ValueError):
         total = len(normalized)
-    # If SSR exposes only a confirmed episode count, show the numbered list,
-    # but do not pretend those entries have playable video URLs.
+
+    accessible = detail.get("accessible_episode_cnt")
+    if accessible is None:
+        accessible = detail.get("accessibleEpisodeCnt")
+    try:
+        accessible = max(0, int(accessible)) if accessible is not None else 0
+    except (TypeError, ValueError):
+        accessible = 0
+
+    for i, ep in enumerate(normalized):
+        if not ep.get("playable") and i < accessible:
+            ep["playable"] = True
+
     if not normalized and 0 < total <= 1000:
-        normalized = [{"ep": n, "title": f"ភាគ {n}",
-                       "playable": False, "url": ""} for n in range(1, total+1)]
+        normalized = [{"ep": n, "vid": "", "title": f"ភាគ {n}",
+                       "playable": n <= accessible, "url": ""}
+                      for n in range(1, total + 1)]
+
     return {**detail,
             "name": detail.get("series_name") or detail.get("name") or "រឿង Hongguo",
             "cover": detail.get("series_cover") or detail.get("cover") or "",
             "intro": detail.get("series_intro") or detail.get("intro") or detail.get("description") or "",
             "episode_cnt": total or len(normalized),
+            "accessible_episode_cnt": accessible,
             "listed_cnt": len(normalized), "episodes": normalized}
 
 
 def _hg_get(endpoint, params=None, timeout=45):
-    # Public catalog adapter. Playback URLs are only accepted when explicitly present in public page data.
+    # Catalog and playback use public website pages only; no XiaoYing API credentials.
     params = dict(params or {})
-    if endpoint == "rank": return {"results": _hg_rank(params.get("page",1))}
+    if endpoint == "rank": return {"results": _hg_rank(params.get("page", 1))}
     if endpoint == "categories": return {"categories": _hg_categories()}
-    if endpoint == "list": return {"results": _hg_category_list(params.get("category","real-drama"), params.get("page",1))}
-    if endpoint == "search": return {"results": _hg_search(params.get("keyword",""), params.get("page",1))}
-    if endpoint == "detail": return _hg_detail(params.get("series_id",""))
+    if endpoint == "list": return {"results": _hg_category_list(params.get("category", "real-drama"), params.get("page", 1))}
+    if endpoint == "search": return {"results": _hg_search(params.get("keyword", ""), params.get("page", 1))}
+    if endpoint == "detail": return _hg_detail(params.get("series_id", ""))
     if endpoint == "play":
-        detail = _hg_detail(params.get("series_id",""))
-        epno = int(params.get("ep",1))
-        ep = next((x for x in detail.get("episodes",[]) if int(x.get("ep",0)) == epno), None)
-        url = str((ep or {}).get("url") or "").strip()
-        if url.startswith("https://") or url.startswith("http://"):
-            return {"url":url,"ready":True,"source":"public"}
-        raise RuntimeError("ប្រភព Public Web បង្ហាញព័ត៌មានភាគ ប៉ុន្តែមិនបានផ្ដល់ URL វីដេអូសាធារណៈសម្រាប់ភាគនេះទេ។ សូមមើលតាមគេហទំព័រ Hongguo ដោយផ្ទាល់។")
+        sid = str(params.get("series_id", "")).strip()
+        epno = int(params.get("ep", 1))
+        detail = _hg_detail(sid)
+        ep = next((x for x in detail.get("episodes", []) if int(x.get("ep", 0)) == epno), None)
+        if not ep:
+            raise RuntimeError(f"មិនមានព័ត៌មានភាគ {epno} ក្នុងបញ្ជី Hongguo ទេ។")
+        if not ep.get("playable"):
+            raise RuntimeError(f"ភាគ {epno} ត្រូវបាន Hongguo ចាក់សោ ឬមិនទាន់អនុញ្ញាតឱ្យមើលតាម Web ទេ។")
+        player = _hg_player_page(sid, ep.get("vid") or None)
+        if player.get("url"):
+            return {"url": player["url"], "ready": True, "source": "hongguo_public_player",
+                    "page_url": player["page_url"]}
+        raise RuntimeError(f"Hongguo មិនបានបង្ហាញតំណ MP4 សាធារណៈសម្រាប់ភាគ {epno} ទេ។ អ្នកអាចបើកទំព័រ Player ដោយផ្ទាល់។")
     raise RuntimeError(f"មិនស្គាល់ Hongguo endpoint: {endpoint}")
 
 
@@ -7840,10 +7902,14 @@ with tab_drama:
                     _hg_playable_eps = [e for e in _hg_eps if e.get("playable") is True]
                     _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
                     _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
-                    st.caption(f"រកឃើញ {len(_hg_eps)} ភាគ · មានតំណចាក់ {len(_hg_playable_eps)} ភាគ")
+                    st.caption(f"សរុប {len(_hg_eps)} ភាគ · Web អនុញ្ញាតឱ្យសាកមើល {len(_hg_playable_eps)} ភាគ")
                     _hg_ep_label = st.selectbox("📺 ជ្រើសរើសភាគ", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
                     _hg_epnum = _hg_ep_map[_hg_ep_label]
                     _hg_chosen_ep = next((e for e in _hg_eps if int(e.get('ep', 0)) == _hg_epnum), {})
+                    _hg_vid = str(_hg_chosen_ep.get("vid") or "").strip()
+                    _hg_site_url = (f"{_HG_PUBLIC_BASE}/player/{urllib.parse.quote(str(_hg_selected['series_id']), safe='')}"
+                                    + (f"/{urllib.parse.quote(_hg_vid, safe='')}" if _hg_vid else ""))
+                    st.link_button("🌐 បើកភាគនេះនៅលើ Hongguo", _hg_site_url, use_container_width=True)
                     if not _hg_chosen_ep.get("playable"):
                         st.info("ភាគនេះមានក្នុងបញ្ជី ប៉ុន្តែ Hongguo Public Web មិនបានផ្ដល់តំណវីដេអូសាធារណៈទេ។")
                     if _hg_chosen_ep.get("playable"):
@@ -7854,7 +7920,7 @@ with tab_drama:
                             if _hg_play.get("url"):
                                 st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
                             else:
-                                st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
+                                st.error("មិនអាចទាញតំណវីដេអូពីទំព័រ Player សាធារណៈបានទេ។")
                         _hg_saved = st.session_state.get(_hg_play_key)
                         if _hg_saved:
                             st.video(_hg_saved["url"])
@@ -7905,7 +7971,7 @@ with tab_drama:
                                         })
                                         _video_url = str(_play_data.get("url") or "").strip()
                                         if not _video_url:
-                                            raise RuntimeError("API មិនបានផ្ដល់ URL វីដេអូ")
+                                            raise RuntimeError("ទំព័រ Player មិនបានផ្ដល់ URL វីដេអូសាធារណៈ")
                                         _fetch = _fetch_one(_video_url)
                                         if not _fetch.get("ok") or not _fetch.get("path"):
                                             raise RuntimeError(_fetch.get("err") or "ទាញយកវីដេអូមិនបាន")
@@ -7959,7 +8025,7 @@ with tab_drama:
                     st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
                     _hg_batch_labels = st.multiselect(
                         "ជ្រើសរើសភាគដែលចង់បកប្រែ",
-                        list(_hg_ep_map.keys()),
+                        [f"ភាគ {int(e.get('ep', 0))}" for e in _hg_playable_eps],
                         default=[],
                         key=f"hg_batch_eps_{_hg_selected['series_id']}",
                         help="អាចជ្រើសរើសភាគជាច្រើនបាន។ កម្មវិធីនឹងរៀបចំ Link រួចបញ្ជូនទៅ Khmer Auto Caption តាមលំដាប់។"
@@ -7988,7 +8054,7 @@ with tab_drama:
                                 if _bu:
                                     _batch_urls.append(_bu)
                                 else:
-                                    _batch_errors.append(f"ភាគ {_be}: API មិនបានផ្ដល់ URL")
+                                    _batch_errors.append(f"ភាគ {_be}: ទំព័រ Player មិនបានផ្ដល់ URL")
                             except Exception as _be_err:
                                 _batch_errors.append(f"ភាគ {_be}: {_hg_error_khmer(_be_err)}")
                             _batch_bar.progress(_bi / len(_batch_eps), text=f"កំពុងរៀបចំភាគ {_bi}/{len(_batch_eps)}")
