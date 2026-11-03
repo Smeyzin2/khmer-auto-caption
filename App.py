@@ -7851,13 +7851,59 @@ with tab_drama:
 
 
 # ============================ TikTok Short Drama ============================
-# In-app episode catalog/player. Short-drama URLs are a distinct TikTok format;
-# preserve the original URL and use an embedded viewer when direct media extraction is unavailable.
+# Episode navigator (prev/next), in-app player (when the video can be fetched),
+# and multi-episode ZIP download. TikTok has no public catalog API, so the series
+# is opened from one episode URL and the other episodes are built from series ID + number.
+def _tt_ep_url(series_id, ep):
+    return f"https://www.tiktok.com/shortdrama/episode/{series_id}/{int(ep)}?is_from_webapp=1&sender_device=pc"
+
+
+def _tt_free_media(res):
+    """លុបឯកសារវីដេអូបណ្ដោះអាសន្នរបស់ភាគមុន។"""
+    _old = (res or {}).get("path") or ""
+    if _old and os.path.isfile(_old):
+        shutil.rmtree(os.path.dirname(_old), ignore_errors=True)
+    if res is not None:
+        res["path"] = ""
+        res["fetch_err"] = ""
+
+
+def _tt_go_ep(delta):
+    """Callback ប៊ូតុង ភាគមុន/បន្ទាប់ (ដំណើរការមុន rerun)។"""
+    _res = st.session_state.get("_tiktok_drama_result")
+    if not _res:
+        return
+    _total = int(st.session_state.get("tiktok_drama_total", 60) or 60)
+    _cur = int(st.session_state.get("tiktok_drama_episode_number", _res.get("episode", 1)) or 1)
+    _new = max(1, min(_total, _cur + delta))
+    _tt_free_media(_res)
+    _res["episode"] = _new
+    _res["url"] = _tt_ep_url(_res["series_id"], _new)
+    st.session_state["tiktok_drama_episode_number"] = _new
+    st.session_state["_tiktok_drama_result"] = _res
+    if st.session_state.get("tiktok_drama_auto", True):
+        st.session_state["_tt_want_fetch"] = True
+
+
+def _tt_apply_ep_input():
+    """Callback ពេលវាយលេខភាគដោយផ្ទាល់។"""
+    _res = st.session_state.get("_tiktok_drama_result")
+    if not _res:
+        return
+    _new = int(st.session_state.get("tiktok_drama_episode_number", 1) or 1)
+    _tt_free_media(_res)
+    _res["episode"] = _new
+    _res["url"] = _tt_ep_url(_res["series_id"], _new)
+    st.session_state["_tiktok_drama_result"] = _res
+    if st.session_state.get("tiktok_drama_auto", True):
+        st.session_state["_tt_want_fetch"] = True
+
+
 with tab_tiktok:
     _tt_access = _hg_vip_gate(show_admin_panel=False)
     if _tt_access:
         st.markdown("### 🎵 TikTok Short Drama")
-        st.caption("ស្វែងរករឿងដោយបិទភ្ជាប់ Episode URL។ Poster/ព័ត៌មានរឿងនឹងត្រូវបានទាញពីទំព័រសាធារណៈ ប្រសិនបើ TikTok អនុញ្ញាត។")
+        st.caption("បិទភ្ជាប់ Episode URL មួយ រួចប្រើប៊ូតុង ⏮ ភាគមុន / ភាគបន្ទាប់ ⏭ ដើម្បីប្តូរភាគ ដូច Hongguo។")
 
         _tt_default_url = "https://www.tiktok.com/shortdrama/episode/7699896495729808392/2?is_from_webapp=1&sender_device=pc"
         with st.container(border=True):
@@ -7879,7 +7925,7 @@ with tab_tiktok:
                 st.warning("សូមបញ្ចូល TikTok Short Drama episode URL ដែលមាន series ID និង episode number។")
             else:
                 _tt_series_id, _tt_ep = _tt_match.group(1), int(_tt_match.group(2))
-                _tt_clean_url = f"https://www.tiktok.com/shortdrama/episode/{_tt_series_id}/{_tt_ep}?is_from_webapp=1&sender_device=pc"
+                _tt_clean_url = _tt_ep_url(_tt_series_id, _tt_ep)
                 _tt_meta = {"title": f"TikTok Short Drama · {_tt_series_id}", "poster": "", "description": ""}
                 try:
                     _tt_page = requests.get(
@@ -7897,10 +7943,12 @@ with tab_tiktok:
                                 _tt_meta[_tt_key] = requests.utils.unquote(_tt_m.group(1).replace("&amp;", "&"))
                 except Exception:
                     pass
+                _tt_free_media(st.session_state.get("_tiktok_drama_result"))
+                st.session_state["tiktok_drama_episode_number"] = _tt_ep
                 st.session_state["_tiktok_drama_result"] = {
                     "url": _tt_clean_url, "series_id": _tt_series_id, "episode": _tt_ep,
                     "title": _tt_meta["title"], "poster_url": _tt_meta["poster"],
-                    "description": _tt_meta["description"], "path": "",
+                    "description": _tt_meta["description"], "path": "", "fetch_err": "",
                 }
                 st.rerun()
 
@@ -7919,27 +7967,56 @@ with tab_tiktok:
                     )
                 if _tt_ready.get("description"):
                     st.caption(_tt_ready["description"])
-                _tt_ep_col, _tt_open_col = st.columns([1, 2])
-                with _tt_ep_col:
-                    _tt_new_ep = st.number_input("ភាគ", min_value=1, max_value=9999, value=int(_tt_ready.get("episode", 1)), step=1, key="tiktok_drama_episode_number")
-                with _tt_open_col:
+
+                # ---------- Episode navigator ----------
+                _tt_total = st.number_input(
+                    "ចំនួនភាគសរុប (សម្រាប់កំណត់ដែនប៊ូតុង)", min_value=1, max_value=9999,
+                    value=int(st.session_state.get("tiktok_drama_total", 60)), step=1, key="tiktok_drama_total",
+                )
+                _tt_cur_ep = int(st.session_state.get("tiktok_drama_episode_number", _tt_ready.get("episode", 1)))
+                _nav_prev, _nav_num, _nav_next = st.columns([1, 1, 1], gap="small")
+                with _nav_prev:
                     st.write("")
-                    if st.button("▶️ មើលភាគនេះ", key="tiktok_drama_play", use_container_width=True):
-                        _tt_ready["episode"] = int(_tt_new_ep)
-                        _tt_ready["url"] = f"https://www.tiktok.com/shortdrama/episode/{_tt_ready['series_id']}/{int(_tt_new_ep)}?is_from_webapp=1&sender_device=pc"
-                        st.session_state["_tiktok_drama_result"] = _tt_ready
-                        st.rerun()
+                    st.button("⏮ ភាគមុន", key="tiktok_drama_prev", use_container_width=True,
+                              disabled=(_tt_cur_ep <= 1), on_click=_tt_go_ep, args=(-1,))
+                with _nav_num:
+                    st.number_input("ភាគ", min_value=1, max_value=9999, step=1,
+                                    key="tiktok_drama_episode_number", on_change=_tt_apply_ep_input)
+                with _nav_next:
+                    st.write("")
+                    st.button("ភាគបន្ទាប់ ⏭", key="tiktok_drama_next", use_container_width=True,
+                              disabled=(_tt_cur_ep >= int(_tt_total)), on_click=_tt_go_ep, args=(1,))
+                st.checkbox("ចាក់ស្វ័យប្រវត្តិពេលប្តូរភាគ (ព្យាយាមទាញវីដេអូភាគនោះ)", value=True, key="tiktok_drama_auto")
+                st.caption(f"កំពុងស្ថិតនៅ ភាគ {_tt_cur_ep} / {int(_tt_total)}")
+
+                # ---------- Fetch current episode ----------
+                _tt_do_fetch = bool(st.session_state.pop("_tt_want_fetch", False))
+                if st.button("▶️ ទាញ និងចាក់ភាគនេះ", key="tiktok_drama_play", type="primary", use_container_width=True, disabled=busy):
+                    _tt_do_fetch = True
+                if _tt_do_fetch:
+                    _tt_free_media(_tt_ready)
+                    _tt_ready["episode"] = _tt_cur_ep
+                    _tt_ready["url"] = _tt_ep_url(_tt_ready["series_id"], _tt_cur_ep)
+                    with st.spinner(f"កំពុងទាញភាគ {_tt_cur_ep}..."):
+                        _tt_res = _fetch_one(_tt_ready["url"])
+                    if _tt_res.get("ok") and _tt_res.get("path"):
+                        _tt_ready["path"] = _tt_res["path"]
+                        _tt_ready["fetch_err"] = ""
+                    else:
+                        _tt_ready["fetch_err"] = _tt_res.get("err") or "ទាញយកវីដេអូមិនបាន"
+                    st.session_state["_tiktok_drama_result"] = _tt_ready
 
                 _tt_media_path = _tt_ready.get("path", "")
                 if _tt_media_path and os.path.isfile(_tt_media_path):
                     st.video(_tt_media_path)
                     with open(_tt_media_path, "rb") as _tt_file:
-                        st.download_button("⬇️ ទាញយកភាគនេះ", data=_tt_file.read(), file_name=f"tiktok_drama_ep_{_tt_ready.get('episode',1)}.mp4", mime="video/mp4", key="tiktok_drama_download", use_container_width=True)
+                        dl_button("⬇️ ទាញយកភាគនេះ", _tt_file.read(), f"tiktok_drama_{_tt_ready.get('series_id','')}_ep_{_tt_ready.get('episode',1)}.mp4",
+                                  "video/mp4", key="tiktok_drama_download", use_container_width=True)
                 else:
-                    st.warning(
-                        "TikTok Short Drama មិនអាចចាក់ក្នុង WebView នេះបានទេ។ "
-                        "ត្រូវមាន Media URL ផ្ទាល់ (MP4/HLS) ដែលអ្នកមានសិទ្ធិប្រើ ដើម្បីចាក់ក្នុង Player។"
-                    )
+                    if _tt_ready.get("fetch_err"):
+                        st.warning("ទាញវីដេអូភាគនេះមិនបាន។ ប្រហែល TikTok មិនអនុញ្ញាតទាញពី URL ប្រភេទ shortdrama នេះ។")
+                        with st.expander("មើលមូលហេតុ"):
+                            st.code(_tt_ready["fetch_err"])
                     _tt_direct_media = st.text_input(
                         "Media URL ផ្ទាល់ (MP4/M3U8) — ជាជម្រើស",
                         value=_tt_ready.get("media_url", ""),
@@ -7951,14 +8028,7 @@ with tab_tiktok:
                         st.session_state["_tiktok_drama_result"] = _tt_ready
                         st.video(_tt_direct_media.strip())
                     else:
-                        st.markdown(
-                            "**តំណរឿង:** " + _tt_ready.get("url", ""),
-                            help="នេះជាតំណ TikTok episode ដែលអ្នកបានបញ្ចូល។",
-                        )
-                        st.caption(
-                            "TikTok មិនផ្តល់ MP4 ឬ Poster តាម URL episode នេះក្នុងការទាញយកធម្មតាទេ។ "
-                            "ដើម្បីបង្ហាញ catalog ជាកាត Poster និងបើកភាគដោយផ្ទាល់ ត្រូវការប្រភព metadata/media ដែលអាចចូលប្រើបាន។"
-                        )
+                        st.markdown("**តំណភាគ:** " + _tt_ready.get("url", ""))
 
                 if st.button("✨ បញ្ជូន Link ទៅ Khmer Auto Caption", type="primary", key="tiktok_drama_to_caption", use_container_width=True):
                     st.session_state["mode_pick"] = "🔗 Link"
@@ -7966,11 +8036,74 @@ with tab_tiktok:
                     st.session_state["link_searched"] = [_tt_ready["url"]]
                     st.session_state["_hg_imported_caption_notice"] = True
                     st.rerun()
+
+                # ---------- Multi-episode ZIP ----------
+                st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ (ZIP)")
+                _rg_a, _rg_b = st.columns(2, gap="small")
+                with _rg_a:
+                    _tt_from = st.number_input("ពីភាគ", min_value=1, max_value=int(_tt_total), value=1, step=1, key="tiktok_dl_from")
+                with _rg_b:
+                    _tt_to = st.number_input("ដល់ភាគ", min_value=1, max_value=int(_tt_total), value=min(5, int(_tt_total)), step=1, key="tiktok_dl_to")
+                _tt_dl_max = st.selectbox("ចំនួនអតិបរមាក្នុងមួយលើក", [5, 10, 20, 50, 100], index=1, key="tiktok_dl_limit")
+                _tt_lo, _tt_hi = int(min(_tt_from, _tt_to)), int(max(_tt_from, _tt_to))
+                _tt_eps = list(range(_tt_lo, _tt_hi + 1))[:_tt_dl_max]
+                if st.button(f"📦 ទាញយក {len(_tt_eps)} ភាគជា ZIP", key="tiktok_dl_start",
+                             disabled=(not _tt_eps or busy), use_container_width=True):
+                    _tt_old = st.session_state.get("_tt_dl_ready")
+                    if _tt_old:
+                        shutil.rmtree(_tt_old.get("folder", ""), ignore_errors=True)
+                    _tt_folder = tempfile.mkdtemp(prefix="tiktok_batch_")
+                    _tt_zip_path = os.path.join(_tt_folder, "tiktok_drama_episodes.zip")
+                    _tt_errors, _tt_ok = [], 0
+                    _tt_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
+                    try:
+                        with zipfile.ZipFile(_tt_zip_path, "w", compression=zipfile.ZIP_STORED) as _tt_zip:
+                            for _ti, _tep in enumerate(_tt_eps, start=1):
+                                _ttmp = None
+                                try:
+                                    _tr = _fetch_one(_tt_ep_url(_tt_ready["series_id"], _tep))
+                                    if not _tr.get("ok") or not _tr.get("path"):
+                                        raise RuntimeError(_tr.get("err") or "ទាញយកវីដេអូមិនបាន")
+                                    _ttmp = _tr["path"]
+                                    _tsz = os.path.getsize(_ttmp)
+                                    _tcur = sum(x.file_size for x in _tt_zip.filelist)
+                                    if _tcur + _tsz > MAX_ZIP_MB * 1024 * 1024:
+                                        raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
+                                    _tt_zip.write(_ttmp, f"episode_{_tep:04d}.mp4")
+                                    _tt_ok += 1
+                                except Exception as _te:
+                                    _tt_errors.append(f"ភាគ {_tep}: {str(_te)[:180]}")
+                                finally:
+                                    if _ttmp:
+                                        shutil.rmtree(os.path.dirname(_ttmp), ignore_errors=True)
+                                _tt_bar.progress(_ti / max(1, len(_tt_eps)), text=f"ទាញបាន {_tt_ok}/{len(_tt_eps)} ភាគ · កំពុងដំណើរការ {_ti}/{len(_tt_eps)}")
+                        _tt_bar.empty()
+                        if _tt_ok:
+                            st.session_state["_tt_dl_ready"] = {"path": _tt_zip_path, "folder": _tt_folder, "count": _tt_ok,
+                                                                "name": safe_filename(f"tiktok_drama_{_tt_ready['series_id']}")}
+                            st.success(f"រៀបចំបាន {_tt_ok} ភាគរួចរាល់។")
+                        else:
+                            shutil.rmtree(_tt_folder, ignore_errors=True)
+                            st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
+                        if _tt_errors:
+                            with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_tt_errors)})"):
+                                for _tw in _tt_errors:
+                                    st.warning(_tw)
+                    except Exception as _tt_fatal:
+                        shutil.rmtree(_tt_folder, ignore_errors=True)
+                        st.error(f"រៀបចំ ZIP មិនបាន៖ {_tt_fatal}")
+                _tt_dl_ready = st.session_state.get("_tt_dl_ready")
+                if _tt_dl_ready and os.path.isfile(_tt_dl_ready.get("path", "")):
+                    with open(_tt_dl_ready["path"], "rb") as _tt_zf:
+                        dl_button(f"⬇️ ទាញយក ZIP ({_tt_dl_ready['count']} ភាគ)", _tt_zf, f"{_tt_dl_ready['name']}.zip",
+                                  "application/zip", key="tiktok_dl_file", use_container_width=True)
+
                 if st.button("🗑️ បិទរឿងនេះ", key="tiktok_drama_clear", use_container_width=True):
+                    _tt_free_media(_tt_ready)
                     st.session_state.pop("_tiktok_drama_result", None)
                     st.rerun()
 
-        st.caption("ចំណាំ៖ Poster និងព័ត៌មានរឿងបង្ហាញបាន ប្រសិនបើ TikTok ផ្តល់ metadata សាធារណៈ។ Player ក្នុង App ត្រូវការ Media URL ផ្ទាល់ដែលអាចចាក់បាន; សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
+        st.caption("ចំណាំ៖ TikTok មិនមាន API បញ្ជីភាគទេ ដូច្នេះភាគត្រូវបានបង្កើតពី series ID + លេខភាគ។ ការទាញវីដេអូអាចមិនដំណើរការលើ URL shortdrama ទាំងអស់ — សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
