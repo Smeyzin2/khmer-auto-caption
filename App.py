@@ -7307,6 +7307,37 @@ def _hg_extract_series_id(value):
 # ============================ Hongguo VIP Access ============================
 # All VIP checks and management use the server-only Supabase service key.
 _HG_ADMIN_EMAIL = "smeyai2000@gmail.com"
+_HG_ADMIN_USERNAME = str(get_secret("HONGGUO_ADMIN_USERNAME", "admin")).strip().lower()
+_HG_ADMIN_PASSWORD = str(get_secret("HONGGUO_ADMIN_PASSWORD", "")).strip()
+
+
+def _hg_admin_authenticated():
+    email = str(_user_field("email", "")).strip().lower()
+    return (email == _HG_ADMIN_EMAIL or
+            bool(st.session_state.get("_hg_admin_authenticated", False)))
+
+
+def _hg_admin_login_box():
+    """Admin login fallback for deployments without authenticated owner email."""
+    if _hg_admin_authenticated():
+        return True
+    with st.expander("👑 Admin / គ្រប់គ្រងគណនី និង Website", expanded=False):
+        if not _HG_ADMIN_PASSWORD:
+            st.warning("សូមកំណត់ HONGGUO_ADMIN_PASSWORD ក្នុង Streamlit Secrets ឬ Variables ដើម្បីបើក Admin Login។")
+        else:
+            with st.form("drama_admin_login_form"):
+                user = st.text_input("Admin Username", value="admin", key="drama_admin_user")
+                password = st.text_input("Admin Password", type="password", key="drama_admin_password")
+                submit = st.form_submit_button("ចូល Admin", use_container_width=True)
+            if submit:
+                valid_user = hmac.compare_digest(str(user or "").strip().lower(), _HG_ADMIN_USERNAME)
+                valid_pass = hmac.compare_digest(str(password or ""), _HG_ADMIN_PASSWORD)
+                if valid_user and valid_pass:
+                    st.session_state["_hg_admin_authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Admin Username ឬ Password មិនត្រឹមត្រូវ។")
+    return _hg_admin_authenticated()
 
 def _hg_supabase_config():
     _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
@@ -7520,11 +7551,15 @@ def _hg_vip_gate():
 _STREAMING_VERTICALS_HOME = "https://www.streamingverticals.com/"
 
 @st.cache_data(ttl=900, show_spinner=False)
-def _sv_public_catalog():
-    """Collect public poster/video pairs from Streaming Verticals page metadata."""
+def _sv_public_catalog(source_url=None):
+    """Collect public poster/video pairs from a public website URL."""
+    source_url = str(source_url or _STREAMING_VERTICALS_HOME).strip()
+    parsed_source = urllib.parse.urlparse(source_url)
+    if parsed_source.scheme not in ("http", "https") or not parsed_source.netloc:
+        raise ValueError("Website URL មិនត្រឹមត្រូវទេ។")
     headers = {"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36",
                "Accept": "text/html,application/xhtml+xml,application/json"}
-    response = requests.get(_STREAMING_VERTICALS_HOME, headers=headers, timeout=30)
+    response = requests.get(source_url, headers=headers, timeout=30)
     response.raise_for_status()
     html = response.text
     rows, seen = [], set()
@@ -7584,12 +7619,55 @@ def _sv_public_catalog():
     return rows
 
 with tab_drama:
-    # Clean, poster-first screen: no title, source explanation, search labels or metadata.
+    _is_drama_admin = _hg_admin_login_box()
+    if _is_drama_admin:
+        st.success("👑 Admin Access")
+        with st.expander("⚙️ Admin: បង្កើត និងគ្រប់គ្រងគណនី VIP", expanded=False):
+            _hg_admin_panel()
+        with st.expander("🌐 បន្ថែម Website រឿង", expanded=True):
+            st.caption("បញ្ចូល URL គេហទំព័រសាធារណៈដែលមាន Poster និងវីដេអូ។ មិនអាចទាញយកមាតិកាដែលចាក់សោ/VIP ឬ DRM បានទេ។")
+            _new_source = st.text_input("Website URL", value="", key="sv_new_source_url",
+                                        placeholder="https://example.com/")
+            if st.button("➕ បន្ថែម Website", key="sv_add_source", use_container_width=True):
+                _candidate = str(_new_source or "").strip()
+                _parsed = urllib.parse.urlparse(_candidate)
+                if _parsed.scheme not in ("http", "https") or not _parsed.netloc:
+                    st.error("សូមបញ្ចូល URL ដែលចាប់ផ្ដើមដោយ https:// ឬ http://")
+                else:
+                    _sources = st.session_state.setdefault("_sv_sources", [_STREAMING_VERTICALS_HOME])
+                    if _candidate not in _sources:
+                        _sources.append(_candidate)
+                    st.session_state["_sv_active_source"] = _candidate
+                    _sv_public_catalog.clear()
+                    st.success("បានបន្ថែម Website ក្នុង Session នេះហើយ។")
+                    st.rerun()
+            _sources = st.session_state.setdefault("_sv_sources", [_STREAMING_VERTICALS_HOME])
+            _source_labels = [f"Website {i+1}: {u}" for i, u in enumerate(_sources)]
+            _active_default = str(st.session_state.get("_sv_active_source", _STREAMING_VERTICALS_HOME))
+            _active_index = _sources.index(_active_default) if _active_default in _sources else 0
+            _picked_source_label = st.selectbox("ជ្រើស Website", _source_labels, index=_active_index,
+                                                key="sv_admin_source_select")
+            st.session_state["_sv_active_source"] = _sources[_source_labels.index(_picked_source_label)]
+            if len(_sources) > 1:
+                _remove_idx = st.selectbox("លុប Website", list(range(len(_sources))),
+                                           format_func=lambda i: _sources[i], key="sv_remove_source_idx")
+                if st.button("🗑 លុប Website ដែលបានជ្រើស", key="sv_remove_source", use_container_width=True):
+                    _removed = _sources.pop(_remove_idx)
+                    if st.session_state.get("_sv_active_source") == _removed:
+                        st.session_state["_sv_active_source"] = _sources[0]
+                    _sv_public_catalog.clear()
+                    st.rerun()
+            st.caption("ចំណាំ៖ បញ្ជី Website នេះរក្សាទុកក្នុង Session បច្ចុប្បន្នប៉ុណ្ណោះ។ ដើម្បីឱ្យអ្នកប្រើទាំងអស់ឃើញជាអចិន្ត្រៃយ៍ ត្រូវភ្ជាប់តារាង Database សម្រាប់រក្សាទុក URL។")
+        if st.button("ចាកចេញពី Admin", key="drama_admin_logout"):
+            st.session_state.pop("_hg_admin_authenticated", None)
+            st.rerun()
+
+    _active_source = str(st.session_state.get("_sv_active_source", _STREAMING_VERTICALS_HOME))
     _sv_reload = st.button("↻", key="sv_reload", help="ផ្ទុក Poster ឡើងវិញ")
     if _sv_reload:
         _sv_public_catalog.clear()
     try:
-        _sv_rows = _sv_public_catalog()
+        _sv_rows = _sv_public_catalog(_active_source)
         if _sv_rows:
             for _sv_i in range(0, len(_sv_rows), 3):
                 _sv_cols = st.columns(3, gap="small")
@@ -7603,7 +7681,7 @@ with tab_drama:
                             st.session_state["_sv_selected"] = _sv_item
                             st.rerun()
         else:
-            st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូមចុច ↻ ម្តងទៀត។")
+            st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូម Admin ពិនិត្យ Website URL ឬចុច ↻ ម្ដងទៀត។")
         _sv_selected = st.session_state.get("_sv_selected")
         if _sv_selected:
             if st.button("←", key="sv_back"):
@@ -7617,9 +7695,10 @@ with tab_drama:
                 st.link_button("⬇️", _sv_selected["direct"], use_container_width=True)
             else:
                 st.link_button("▶", _sv_selected["watch"], use_container_width=True)
-    except Exception:
-        st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូមចុច ↻ ម្តងទៀត។")
-
+    except Exception as _sv_error:
+        st.info("មិនអាចផ្ទុក Poster ពី Website នេះបានទេ។")
+        if _is_drama_admin:
+            st.caption(str(_sv_error)[:300])
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
