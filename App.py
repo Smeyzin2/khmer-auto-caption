@@ -7425,8 +7425,33 @@ def _hg_admin_panel():
         st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
 
 
+def _hg_ensure_admin_account():
+    """Create the first admin account from private Streamlit Secrets, if absent."""
+    _admin_user = _HG_ADMIN_USERNAME or "admin"
+    _admin_pass = str(get_secret("HONGGUO_ADMIN_PASSWORD", "")).strip()
+    if not _admin_pass:
+        return
+    if len(_admin_pass) < 10:
+        raise RuntimeError("HONGGUO_ADMIN_PASSWORD ត្រូវមានយ៉ាងតិច ១០ តួអក្សរ។")
+    _existing = _hg_get_vip_user(_admin_user)
+    if _existing:
+        return
+    _hg_sb_request("POST", payload={
+        "username": _admin_user,
+        "password_hash": _hg_password_hash(_admin_pass),
+        "expires_at": "2099-12-31T23:59:59+00:00",
+        "is_active": True,
+        "note": "Owner Admin account (created from private Streamlit Secrets)",
+    })
+
+
 def _hg_vip_gate():
     # កុំហៅ component ច្រើនដងក្នុង run តែមួយ; វាបង្ក duplicate key និងបាត់ token។
+    # បង្កើតគណនី Admin ដំបូងដោយស្វ័យប្រវត្តិពី Streamlit Secrets។
+    try:
+        _hg_ensure_admin_account()
+    except Exception as _admin_setup_error:
+        st.error(f"ការរៀបចំ Admin មិនបាន៖ {_admin_setup_error}")
     _pending_save=st.session_state.pop("_hg_remember_pending_save", None)
     _pending_clear=bool(st.session_state.pop("_hg_remember_pending_clear", False))
     _browser_state=_hg_remember_browser(token_to_save=_pending_save,clear=_pending_clear)
