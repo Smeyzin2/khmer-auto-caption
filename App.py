@@ -7851,95 +7851,105 @@ with tab_drama:
 
 
 # ============================ TikTok Short Drama ============================
-# In-app catalog-style UI. Do not redirect to the TikTok catalog page (which can show Not Found in embedded/mobile browsers).
+# In-app episode catalog/player. Short-drama URLs are a distinct TikTok format;
+# preserve the original URL and use an embedded viewer when direct media extraction is unavailable.
 with tab_tiktok:
     _tt_access = _hg_vip_gate(show_admin_panel=False)
     if _tt_access:
         st.markdown("### 🎵 TikTok Short Drama")
-        st.caption("បញ្ចូល TikTok Short Drama episode link ដើម្បីបង្កើតកាត Poster ក្នុងកម្មវិធី ហើយមើល/ទាញយកវីដេអូ។")
+        st.caption("ស្វែងរករឿងដោយបិទភ្ជាប់ Episode URL។ Poster/ព័ត៌មានរឿងនឹងត្រូវបានទាញពីទំព័រសាធារណៈ ប្រសិនបើ TikTok អនុញ្ញាត។")
 
+        _tt_default_url = "https://www.tiktok.com/shortdrama/episode/7699896495729808392/2?is_from_webapp=1&sender_device=pc"
         with st.container(border=True):
             _tt_query_col, _tt_search_col = st.columns([4, 1], gap="small")
             with _tt_query_col:
                 _tt_query = st.text_input(
-                    "ស្វែងរករឿងតាមឈ្មោះ ឬ Link",
+                    "TikTok Short Drama Episode URL",
                     key="tiktok_drama_query",
-                    placeholder="បិទភ្ជាប់ TikTok Short Drama episode URL…",
+                    value=st.session_state.get("tiktok_drama_query", _tt_default_url),
+                    placeholder="https://www.tiktok.com/shortdrama/episode/.../...",
                 )
             with _tt_search_col:
                 st.write("")
-                _tt_search_click = st.button(
-                    "🔎 ស្វែងរក", key="tiktok_drama_search",
-                    type="primary", use_container_width=True,
-                )
-            st.caption("មិនបើក TikTok ទៅក្រៅទៀតទេ។ សូមបិទភ្ជាប់ Link ភាគរឿងនៅទីនេះ ដើម្បីបង្ហាញ Poster និងវីដេអូក្នុង App។")
+                _tt_search_click = st.button("🔎 បើករឿង", key="tiktok_drama_search", type="primary", use_container_width=True)
 
-        _tt_query_is_link = bool(_tt_query.strip()) and is_social_link(_tt_query.strip())
+        _tt_match = re.search(r"tiktok\.com/shortdrama/episode/(\d+)/(\d+)", (_tt_query or "").strip())
         if _tt_search_click:
-            if not _tt_query.strip():
-                st.warning("សូមបញ្ចូល TikTok episode Link ជាមុនសិន។")
-            elif not _tt_query_is_link:
-                st.info("ការស្វែងរកតាមឈ្មោះមិនទាន់អាចទាញ catalog TikTok ដោយស្វ័យប្រវត្តិបានទេ។ សូមបិទភ្ជាប់ Link ភាគរឿង ដើម្បីរក Poster និងវីដេអូ។")
+            if not _tt_match:
+                st.warning("សូមបញ្ចូល TikTok Short Drama episode URL ដែលមាន series ID និង episode number។")
             else:
-                with st.spinner("កំពុងទាញយកភាគរឿង និងរៀបចំ Poster…"):
-                    _tt_result = _fetch_one(_tt_query.strip())
-                if _tt_result.get("ok") and _tt_result.get("path"):
-                    _tt_path = _tt_result["path"]
-                    _tt_poster = os.path.join(os.path.dirname(_tt_path), "tiktok_drama_poster.jpg")
-                    try:
-                        subprocess.run(
-                            [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-ss", "00:00:01", "-i", _tt_path,
-                             "-frames:v", "1", "-q:v", "3", _tt_poster],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=25, check=True,
-                        )
-                    except Exception:
-                        _tt_poster = ""
-                    st.session_state["_tiktok_drama_result"] = {
-                        "url": _tt_query.strip(), "path": _tt_path,
-                        "poster": _tt_poster, "title": "TikTok Short Drama episode",
-                    }
-                    st.session_state.pop("_tiktok_drama_title_search", None)
-                    st.rerun()
-                else:
-                    st.error("មិនអាចទាញយក Link នេះបានទេ។ TikTok ឬម្ចាស់មាតិកាអាចដាក់កម្រិតលើការចូលប្រើ។")
-                    if _tt_result.get("err"):
-                        st.caption(str(_tt_result["err"])[:350])
+                _tt_series_id, _tt_ep = _tt_match.group(1), int(_tt_match.group(2))
+                _tt_clean_url = f"https://www.tiktok.com/shortdrama/episode/{_tt_series_id}/{_tt_ep}?is_from_webapp=1&sender_device=pc"
+                _tt_meta = {"title": f"TikTok Short Drama · {_tt_series_id}", "poster": "", "description": ""}
+                try:
+                    _tt_page = requests.get(
+                        _tt_clean_url,
+                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"},
+                        timeout=12,
+                    )
+                    if _tt_page.ok:
+                        _tt_html = _tt_page.text[:2_000_000]
+                        for _tt_prop, _tt_key in (("og:title", "title"), ("og:image", "poster"), ("og:description", "description")):
+                            _tt_m = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(_tt_prop) + r'["\'][^>]+content=["\']([^"\']*)', _tt_html, re.I)
+                            if not _tt_m:
+                                _tt_m = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']' + re.escape(_tt_prop) + r'["\']', _tt_html, re.I)
+                            if _tt_m:
+                                _tt_meta[_tt_key] = requests.utils.unquote(_tt_m.group(1).replace("&amp;", "&"))
+                except Exception:
+                    pass
+                st.session_state["_tiktok_drama_result"] = {
+                    "url": _tt_clean_url, "series_id": _tt_series_id, "episode": _tt_ep,
+                    "title": _tt_meta["title"], "poster_url": _tt_meta["poster"],
+                    "description": _tt_meta["description"], "path": "",
+                }
+                st.rerun()
 
         _tt_ready = st.session_state.get("_tiktok_drama_result")
         if _tt_ready:
-            _tt_path = _tt_ready.get("path", "")
-            if _tt_path and os.path.isfile(_tt_path):
-                with st.container(border=True):
-                    st.markdown("#### 🎬 រឿងដែលបានជ្រើសរើស")
-                    _tt_poster = _tt_ready.get("poster", "")
-                    if _tt_poster and os.path.isfile(_tt_poster):
-                        st.image(_tt_poster, use_container_width=True, caption=_tt_ready.get("title", "TikTok Short Drama"))
-                    st.markdown("**ភាគ 1**")
-                    st.video(_tt_path)
-                    with open(_tt_path, "rb") as _tt_file:
-                        _tt_bytes = _tt_file.read()
-                    st.download_button(
-                        "⬇️ ទាញយកភាគនេះ", data=_tt_bytes,
-                        file_name="tiktok_short_drama_episode.mp4", mime="video/mp4",
-                        key="tiktok_drama_download", use_container_width=True,
+            with st.container(border=True):
+                st.markdown("#### 🎬 " + str(_tt_ready.get("title", "TikTok Short Drama")))
+                _tt_poster_url = _tt_ready.get("poster_url", "")
+                if _tt_poster_url.startswith(("https://", "http://")):
+                    st.image(_tt_poster_url, use_container_width=True, caption="Drama Poster")
+                else:
+                    st.markdown(
+                        f"<div style='border:1px solid #087da5;border-radius:14px;padding:18px;text-align:center;background:linear-gradient(135deg,#101b45,#062d45);'>"
+                        f"<div style='font-size:42px'>🎬</div><b>TikTok Short Drama</b><br><small>Series ID: {_tt_ready.get('series_id','')}</small></div>",
+                        unsafe_allow_html=True,
                     )
-                    if st.button(
-                        "✨ បញ្ជូនទៅ Khmer Auto Caption", type="primary",
-                        key="tiktok_drama_to_caption", use_container_width=True,
-                    ):
-                        st.session_state["mode_pick"] = "🔗 Link"
-                        st.session_state["link_text_area"] = _tt_ready["url"]
-                        st.session_state["link_searched"] = [_tt_ready["url"]]
-                        st.session_state["_hg_imported_caption_notice"] = True
+                if _tt_ready.get("description"):
+                    st.caption(_tt_ready["description"])
+                _tt_ep_col, _tt_open_col = st.columns([1, 2])
+                with _tt_ep_col:
+                    _tt_new_ep = st.number_input("ភាគ", min_value=1, max_value=9999, value=int(_tt_ready.get("episode", 1)), step=1, key="tiktok_drama_episode_number")
+                with _tt_open_col:
+                    st.write("")
+                    if st.button("▶️ មើលភាគនេះ", key="tiktok_drama_play", use_container_width=True):
+                        _tt_ready["episode"] = int(_tt_new_ep)
+                        _tt_ready["url"] = f"https://www.tiktok.com/shortdrama/episode/{_tt_ready['series_id']}/{int(_tt_new_ep)}?is_from_webapp=1&sender_device=pc"
+                        st.session_state["_tiktok_drama_result"] = _tt_ready
                         st.rerun()
-                    if st.button("🗑️ បិទរឿងនេះ", key="tiktok_drama_clear", use_container_width=True):
-                        st.session_state.pop("_tiktok_drama_result", None)
-                        st.rerun()
-            else:
-                st.session_state.pop("_tiktok_drama_result", None)
-                st.info("វីដេអូដែលបានរកមុនមិននៅក្នុង session ទៀតទេ។ សូមស្វែងរកម្ដងទៀត។")
 
-        st.caption("ចំណាំ៖ Poster នេះបង្កើតពី frame ដំបូងនៃវីដេអូដែលអ្នកបានបញ្ចូល Link។ Catalog បង្ហាញរឿងជាច្រើន និងស្វែងរកតាមឈ្មោះដោយស្វ័យប្រវត្តិ ត្រូវការប្រភពទិន្នន័យ TikTok ដែលអាចប្រើបាន។ ទាញយកតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
+                _tt_media_path = _tt_ready.get("path", "")
+                if _tt_media_path and os.path.isfile(_tt_media_path):
+                    st.video(_tt_media_path)
+                    with open(_tt_media_path, "rb") as _tt_file:
+                        st.download_button("⬇️ ទាញយកភាគនេះ", data=_tt_file.read(), file_name=f"tiktok_drama_ep_{_tt_ready.get('episode',1)}.mp4", mime="video/mp4", key="tiktok_drama_download", use_container_width=True)
+                else:
+                    st.info("TikTok Short Drama URL ជាទម្រង់ពិសេស។ ការទាញយក MP4 ដោយផ្ទាល់អាចមិនទាន់គាំទ្រដោយ downloader បច្ចុប្បន្ន។ អ្នកអាចសាកមើលក្នុង player ខាងក្រោម; បើ TikTok បិទ iframe ត្រូវការប្រភព media/API អនុញ្ញាត។")
+                    components.iframe(_tt_ready["url"], height=720, scrolling=True)
+
+                if st.button("✨ បញ្ជូន Link ទៅ Khmer Auto Caption", type="primary", key="tiktok_drama_to_caption", use_container_width=True):
+                    st.session_state["mode_pick"] = "🔗 Link"
+                    st.session_state["link_text_area"] = _tt_ready["url"]
+                    st.session_state["link_searched"] = [_tt_ready["url"]]
+                    st.session_state["_hg_imported_caption_notice"] = True
+                    st.rerun()
+                if st.button("🗑️ បិទរឿងនេះ", key="tiktok_drama_clear", use_container_width=True):
+                    st.session_state.pop("_tiktok_drama_result", None)
+                    st.rerun()
+
+        st.caption("ចំណាំ៖ Poster/metadata អាចមិនបង្ហាញ ប្រសិនបើ TikTok មិនផ្តល់ទិន្នន័យសាធារណៈ។ រឿង និងភាគត្រូវបានបើកក្នុង App តាម embedded viewer; ការទាញយកត្រូវគោរពសិទ្ធិអ្នកបង្កើត។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
