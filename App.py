@@ -2555,7 +2555,51 @@ TRANS_ACCURACY_NOTE = (
 TRANS_SYSTEM = (TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL) + TRANS_ACCURACY_NOTE
 
 
-def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
+def _groq_is_too_large(msg):
+    low = str(msg).lower()
+    return "request too large" in low or "reduce your message size" in low or "413" in low or "context_length" in low
+
+
+def _groq_shrink_system(system):
+    """បង្រួម prompt: ប្តូរ prompt ពេញទៅ LITE ហើយកាត់បរិបទរឿង (STORY/SUMMARY) ឱ្យខ្លី។"""
+    sys_ = system or TRANS_SYSTEM
+    sys_ = sys_.replace(TRANS_SYSTEM_FULL, TRANS_SYSTEM_LITE)
+    for tag in (" STORY SO FAR", "VIDEO SUMMARY:"):
+        i = sys_.find(tag)
+        if i > 0 and len(sys_) - i > 1500:
+            sys_ = sys_[:i + 1500]
+            break
+    return sys_
+
+
+def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False, _depth=0):
+    try:
+        return _groq_translate_chunk_core(api_key, texts, budgets, system, to_english, rotate)
+    except Exception as e:
+        if not _groq_is_too_large(e) or _depth >= 3:
+            raise
+        # ជំហាន ១: បង្រួម prompt រួចសាកម្តងទៀត
+        if _depth == 0:
+            small = _groq_shrink_system(system)
+            if small != (system or TRANS_SYSTEM):
+                try:
+                    return _groq_translate_chunk_core(api_key, texts, budgets, small, to_english, rotate)
+                except Exception as e2:
+                    if not _groq_is_too_large(e2):
+                        raise
+                system = small
+        # ជំហាន ២: ចែកបាច់ជាពាក់កណ្តាល
+        if len(texts) < 2:
+            raise
+        mid = len(texts) // 2
+        b1 = budgets[:mid] if budgets else None
+        b2 = budgets[mid:] if budgets else None
+        left = _groq_translate_chunk_impl(api_key, texts[:mid], b1, system, to_english, rotate, _depth + 1)
+        right = _groq_translate_chunk_impl(api_key, texts[mid:], b2, system, to_english, rotate, _depth + 1)
+        return list(left) + list(right)
+
+
+def _groq_translate_chunk_core(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
@@ -2593,6 +2637,8 @@ def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_eng
                 break
             except urllib.error.HTTPError as e:
                 last = f"{model}: {http_detail(e)}"
+                if _groq_is_too_large(last):
+                    break   # ធំពេក → កុំសម្រាកម៉ូដែល កុំរង់ចាំ (ឱ្យ caller បង្រួម/ចែកបាច់)
                 if e.code == 429 and attempt == 0:
                     time.sleep(6)
                     continue
@@ -2905,34 +2951,51 @@ def oai_test(key, base, model):
         return False, "សាកមិនបាន៖ " + str(e)[:220]
 
 
+def _claude_tier(texts, budgets, system, to_english):
+    """ម៉ាស៊ីនសំខាន់ #1: Claude (គ្រប់ Key ដែលមាន)។"""
+    if not claude_enabled():
+        return None
+    for _cn, _cc in _CLAUDE_PROVIDERS:
+        _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
+        if _cl.get("until", 0) > time.time():
+            continue
+        _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
+        if _cr is not None:
+            return _cr
+    return None
+
+
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
-    """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft (ម៉ាស៊ីនបម្រុង)។"""
+    """លំដាប់ថ្មី៖
+       ម៉ាស៊ីនសំខាន់ = Claude + Groq (CLAUDE_FIRST=1 → Claude មុន; =0 → Groq មុន)
+       ម៉ាស៊ីនបម្រុង = OpenRouter / Mistral / NVIDIA / ... / CodeCraft (ប្រើតែពេលសំខាន់ទាំងពីរបរាជ័យ)"""
     groq_err = None
-    if claude_enabled() and CLAUDE_FIRST:
-        for _cn, _cc in _CLAUDE_PROVIDERS:
-            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
-            if _cl.get("until", 0) > time.time():
-                continue
-            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
-            if _cr is not None:
-                return _cr
-    if api_key:
+
+    def _groq():
+        nonlocal groq_err
+        if not api_key:
+            return None
         try:
             return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
         except Exception as e:
             groq_err = e
-    if oai_enabled():
-        _r = oai_try(texts, budgets, system, to_english)
+            _LAST_AI_ERR["Groq"] = str(e)[:260]
+            return None
+
+    primaries = [lambda: _claude_tier(texts, budgets, system, to_english), _groq]
+    if not CLAUDE_FIRST:
+        primaries.reverse()
+    for _p in primaries:
+        _r = _p()
         if _r is not None:
             return _r
-    if claude_enabled() and not CLAUDE_FIRST:
-        for _cn, _cc in _CLAUDE_PROVIDERS:
-            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
-            if _cl.get("until", 0) > time.time():
-                continue
-            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
-            if _cr is not None:
-                return _cr
+
+    # ---- ម៉ាស៊ីនបម្រុង (មិនរាប់ Claude ម្តងទៀត) ----
+    if extra_provider_enabled() or xk_enabled():
+        _r = oai_try(texts, budgets, system, to_english, skip_claude=True)
+        if _r is not None:
+            return _r
+
     parts = [f"Groq: {str(groq_err)[:150]}"] if groq_err else []
     if _LAST_AI_ERR:
         parts.append("; ".join(f"{k}: {v}"[:110] for k, v in list(_LAST_AI_ERR.items())[:4]))
@@ -2997,7 +3060,7 @@ def provider_status():
     return " · ".join(out)
 
 
-def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
+def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_claude=False):
     """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft
     (មានកំណត់ពេលសរុប ១២០ វិនាទីក្នុងមួយបាច់)។"""
     if getattr(_API_LOCAL, "isolated", False):
@@ -3021,7 +3084,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
             if r is not None:
                 return r
         return None
-    if CLAUDE_FIRST:
+    if CLAUDE_FIRST and not skip_claude:
         r = _claude_pass()
         if r is not None:
             return r
@@ -3047,7 +3110,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
         r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="CodeCraft")
         if r is not None:
             return r
-    if not CLAUDE_FIRST:
+    if not CLAUDE_FIRST and not skip_claude:
         return _claude_pass()
     return None
 
@@ -3084,7 +3147,8 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
     if groq_key:
         _candidates.append(("Groq + providers", lambda: groq_translate_chunk(groq_key, rows, budgets, system=system)))
     if oai_enabled():
-        _candidates.append(("Claude/CodeCraft/OpenRouter", lambda: oai_try(rows, budgets, system)))
+        # បើគ្មាន Groq key → Claude ជាសំខាន់ (oai_try រួមទាំង Claude); បើមាន Groq key → groq_translate_chunk ធ្វើរួចហើយ
+        _candidates.append(("Claude/បម្រុង", lambda: oai_try(rows, budgets, system, skip_claude=bool(groq_key))))
     for _name, _call in _candidates:
         try:
             _result = _call()
@@ -5565,7 +5629,7 @@ def suggest_titles(lines, groq_key):
 
 
 def engine_name(engine):
-    return "Groq + CodeCraft"
+    return "Claude + Groq (បម្រុង៖ OpenRouter/CodeCraft)"
 
 
 def run_worker(job, item, settings, fonts_data):
