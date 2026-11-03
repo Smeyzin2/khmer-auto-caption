@@ -7936,8 +7936,29 @@ with tab_tiktok:
                     with open(_tt_media_path, "rb") as _tt_file:
                         st.download_button("⬇️ ទាញយកភាគនេះ", data=_tt_file.read(), file_name=f"tiktok_drama_ep_{_tt_ready.get('episode',1)}.mp4", mime="video/mp4", key="tiktok_drama_download", use_container_width=True)
                 else:
-                    st.info("TikTok Short Drama URL ជាទម្រង់ពិសេស។ ការទាញយក MP4 ដោយផ្ទាល់អាចមិនទាន់គាំទ្រដោយ downloader បច្ចុប្បន្ន។ អ្នកអាចសាកមើលក្នុង player ខាងក្រោម; បើ TikTok បិទ iframe ត្រូវការប្រភព media/API អនុញ្ញាត។")
-                    components.iframe(_tt_ready["url"], height=720, scrolling=True)
+                    st.warning(
+                        "TikTok Short Drama មិនអាចចាក់ក្នុង WebView នេះបានទេ។ "
+                        "ត្រូវមាន Media URL ផ្ទាល់ (MP4/HLS) ដែលអ្នកមានសិទ្ធិប្រើ ដើម្បីចាក់ក្នុង Player។"
+                    )
+                    _tt_direct_media = st.text_input(
+                        "Media URL ផ្ទាល់ (MP4/M3U8) — ជាជម្រើស",
+                        value=_tt_ready.get("media_url", ""),
+                        placeholder="https://.../video.mp4",
+                        key="tiktok_drama_direct_media_url",
+                    )
+                    if _tt_direct_media.strip().lower().startswith(("https://", "http://")):
+                        _tt_ready["media_url"] = _tt_direct_media.strip()
+                        st.session_state["_tiktok_drama_result"] = _tt_ready
+                        st.video(_tt_direct_media.strip())
+                    else:
+                        st.markdown(
+                            "**តំណរឿង:** " + _tt_ready.get("url", ""),
+                            help="នេះជាតំណ TikTok episode ដែលអ្នកបានបញ្ចូល។",
+                        )
+                        st.caption(
+                            "TikTok មិនផ្តល់ MP4 ឬ Poster តាម URL episode នេះក្នុងការទាញយកធម្មតាទេ។ "
+                            "ដើម្បីបង្ហាញ catalog ជាកាត Poster និងបើកភាគដោយផ្ទាល់ ត្រូវការប្រភព metadata/media ដែលអាចចូលប្រើបាន។"
+                        )
 
                 if st.button("✨ បញ្ជូន Link ទៅ Khmer Auto Caption", type="primary", key="tiktok_drama_to_caption", use_container_width=True):
                     st.session_state["mode_pick"] = "🔗 Link"
@@ -7949,7 +7970,7 @@ with tab_tiktok:
                     st.session_state.pop("_tiktok_drama_result", None)
                     st.rerun()
 
-        st.caption("ចំណាំ៖ Poster/metadata អាចមិនបង្ហាញ ប្រសិនបើ TikTok មិនផ្តល់ទិន្នន័យសាធារណៈ។ រឿង និងភាគត្រូវបានបើកក្នុង App តាម embedded viewer; ការទាញយកត្រូវគោរពសិទ្ធិអ្នកបង្កើត។")
+        st.caption("ចំណាំ៖ Poster និងព័ត៌មានរឿងបង្ហាញបាន ប្រសិនបើ TikTok ផ្តល់ metadata សាធារណៈ។ Player ក្នុង App ត្រូវការ Media URL ផ្ទាល់ដែលអាចចាក់បាន; សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
