@@ -7663,26 +7663,36 @@ with tab_drama:
             st.rerun()
 
     _td_url = "https://www.tiktok.com/shortdrama"
-    try:
-        # Embed the actual TikTok Short Drama page. This lets TikTok provide its own
-        # current poster cards, genres, episode navigation and player in the app view.
-        st.components.v1.iframe(_td_url, height=760, scrolling=True)
-        st.caption("ប្រភព៖ TikTok Short Drama · Poster និងប្រភេទរឿងត្រូវបានផ្ទុកពីវេបសាយដើម។")
-    except Exception as _td_embed_error:
-        st.warning("TikTok មិនអនុញ្ញាតឱ្យបង្ហាញវេបសាយក្នុង App នៅលើការតភ្ជាប់នេះទេ។")
-        st.link_button("បើក TikTok Short Drama", _td_url, use_container_width=True)
+    # TikTok's /shortdrama landing page sends X-Frame-Options/CSP restrictions
+    # that make it fail inside Streamlit's embedded browser. Do not render a broken
+    # WebView. Provide an explicit external launch and accept a copied episode URL.
+    st.warning(
+        "TikTok បិទការបង្ហាញទំព័រ /shortdrama នៅក្នុង WebView របស់ App "
+        "(net::ERR_BLOCKED_BY_RESPONSE)។ ដូច្នេះ Poster និងបញ្ជីភាគមិនអាចទាញចេញពី iframe នេះបានទេ។ "
+        "បើកទំព័រដើមខាងក្រោម រួចចម្លងតំណភាគមក App។"
+    )
+    st.link_button("📱 បើក TikTok Short Drama", _td_url, use_container_width=True)
 
-    with st.expander("📥 ទាញយករឿង ឬបញ្ចូលទៅមុខងារបកប្រែ"):
-        st.caption("បើមានតំណភាគដែលអាចប្រើបាន សូមបិទភ្ជាប់ទីនេះ។ អ្នកអាចយកតំណទៅផ្ទាំង «🏠 វីដេអូ → 🔗 Link» ដើម្បីដំណើរការបន្ថែម។")
+    with st.expander("📥 ភ្ជាប់ភាគក្នុង App / ផ្ទេរទៅ Download ឬបកប្រែ", expanded=True):
+        st.caption(
+            "នៅ TikTok ចុច Share → Copy link ហើយបិទភ្ជាប់។ "
+            "តំណភាគនឹងត្រូវប្រើជាមួយមុខងារ Link នៅផ្ទាំងវីដេអូ។ "
+            "TikTok មិនផ្តល់សិទ្ធិឱ្យ App ខាងក្រៅបង្ហាញ catalog និងទាញយកគ្រប់ភាគដោយស្វ័យប្រវត្តិទេ។"
+        )
         _td_episode_url = st.text_input(
             "តំណភាគ TikTok Short Drama",
-            placeholder="https://www.tiktok.com/shortdrama/episode/...",
+            placeholder="បិទភ្ជាប់ TikTok share link នៅទីនេះ",
             key="tiktok_shortdrama_episode_url",
         )
         if _td_episode_url.strip():
             st.link_button("▶️ បើកភាគនេះ", _td_episode_url.strip(), use_container_width=True)
             st.code(_td_episode_url.strip(), language=None)
-            st.caption("ការទាញយកភាគអាស្រ័យលើការអនុញ្ញាតរបស់ TikTok និងប្រភពវីដេអូ។ មិនអាចធានាថាគ្រប់ភាគអាចទាញយកបានទេ។")
+            if st.button("📋 ប្រើតំណនេះនៅផ្ទាំងវីដេអូ", key="td_send_to_video_tab", use_container_width=True):
+                st.session_state["mode_pick"] = "🔗 Link"
+                st.session_state["link_text_area"] = _td_episode_url.strip()
+                st.session_state["_hg_imported_caption_notice"] = True
+                st.success("បានផ្ទេរតំណទៅប្រអប់ Link ក្នុងផ្ទាំង 🏠 វីដេអូ។")
+            st.caption("ការទាញយកត្រូវអាស្រ័យលើការចូលប្រើវីដេអូ និងសិទ្ធិរបស់ TikTok។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
