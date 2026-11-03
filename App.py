@@ -31,7 +31,7 @@ import imageio_ffmpeg
 import edge_tts
 
 st.set_page_config(
-    page_title="Khmer Auto Caption + Free Dramas",
+    page_title="TikTok Short Drama | Khmer Auto Caption",
     page_icon="🎬",
     layout="wide",
 )
@@ -7125,7 +7125,7 @@ tight_sync = False
 # ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
 
 tab_drama, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["🎬 រឿងពេញៗ", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+    ["📱 TikTok Short Drama", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
 )
 
 # ============================ Hongguo Drama → Khmer Auto Caption ============================
@@ -7508,7 +7508,7 @@ def _hg_vip_gate():
     _email = str(_user_field("email", "")).strip().lower()
     _is_admin = _email == _HG_ADMIN_EMAIL
     if _is_admin:
-        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
+        st.success("👑 Admin Access — អាចប្រើ Short Drama និងគ្រប់គ្រង VIP បាន")
         with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
             _hg_admin_panel()
         return True
@@ -7529,12 +7529,12 @@ def _hg_vip_gate():
             st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {_err}")
             return False
 
-    st.markdown("### 🔒 Hongguo VIP")
-    st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
+    st.markdown("### 🔒 Short Drama VIP")
+    st.info("មុខងារ Short Drama ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
     with st.form("hg_vip_login_form"):
         _u = st.text_input("Username", key="hg_vip_login_username")
         _p = st.text_input("Password", type="password", key="hg_vip_login_password")
-        _go = st.form_submit_button("ចូលប្រើ Hongguo VIP", use_container_width=True)
+        _go = st.form_submit_button("ចូលប្រើ Short Drama VIP", use_container_width=True)
     if _go:
         try:
             _row = _hg_get_vip_user(_u)
@@ -7642,116 +7642,39 @@ def _sv_public_catalog(source_url=None):
     return rows
 
 with tab_drama:
+    st.markdown("## 📱 TikTok Short Drama")
+    st.caption("ស្វែងរករឿងភាគខ្លីលើ TikTok រួចចម្លងតំណវីដេអូមកកាន់ផ្ទាំង «វីដេអូ» ដើម្បីទាញយក ឬបកប្រែ។")
+
+    # Keep the existing secure Admin/VIP account workflow intact.
     _is_drama_admin = _hg_admin_login_box()
     if _is_drama_admin:
         st.success("👑 Admin Access")
         with st.expander("⚙️ Admin: បង្កើត និងគ្រប់គ្រងគណនី VIP", expanded=False):
             _hg_admin_panel()
-        with st.expander("🌐 គ្រប់គ្រង Website រឿង", expanded=True):
-            st.caption("បញ្ចូលឈ្មោះ Website និង URL។ អ្នកប្រើនឹងឃើញតែឈ្មោះ មិនបង្ហាញ URL ទេ។")
-            _new_source_name = st.text_input("ឈ្មោះ Website", value="", key="sv_new_source_name",
-                                             placeholder="ឧ. Streaming Verticals")
-            _new_source = st.text_input("URL (សម្រាប់ Admin ប៉ុណ្ណោះ)", value="", key="sv_new_source_url",
-                                        placeholder="https://example.com/")
-            if st.button("➕ បន្ថែម Website", key="sv_add_source", use_container_width=True):
-                _candidate = str(_new_source or "").strip()
-                _name = str(_new_source_name or "").strip()
-                _parsed = urllib.parse.urlparse(_candidate)
-                if _parsed.scheme not in ("http", "https") or not _parsed.netloc:
-                    st.error("សូមបញ្ចូល URL ដែលចាប់ផ្ដើមដោយ https:// ឬ http://")
-                elif not _name:
-                    st.error("សូមបញ្ចូលឈ្មោះ Website ជាមុន។")
-                else:
-                    _sources = st.session_state.setdefault("_sv_sources", [{"name": "Streaming Verticals", "url": _STREAMING_VERTICALS_HOME}])
-                    _sources = [x if isinstance(x, dict) else {"name": urllib.parse.urlparse(str(x)).netloc.replace("www.", "") or "Website", "url": str(x)} for x in _sources]
-                    st.session_state["_sv_sources"] = _sources
-                    if not any(x.get("url") == _candidate for x in _sources):
-                        _sources.append({"name": _name, "url": _candidate})
-                    st.session_state["_sv_active_source"] = _candidate
-                    _sv_public_catalog.clear()
-                    st.success("បានបន្ថែម Website រួចរាល់។")
-                    st.rerun()
-            _sources = st.session_state.setdefault("_sv_sources", [{"name": "Streaming Verticals", "url": _STREAMING_VERTICALS_HOME}])
-            # Upgrade older session format (list of URL strings) to named sources.
-            _sources = [x if isinstance(x, dict) else {"name": urllib.parse.urlparse(str(x)).netloc.replace("www.", "") or "Website", "url": str(x)} for x in _sources]
-            st.session_state["_sv_sources"] = _sources
-            _source_names = [str(x.get("name") or "Website") for x in _sources]
-            _active_default = str(st.session_state.get("_sv_active_source", _STREAMING_VERTICALS_HOME))
-            _active_index = next((i for i,x in enumerate(_sources) if x.get("url") == _active_default), 0)
-            _picked_name = st.selectbox("ជ្រើស Website", _source_names, index=_active_index,
-                                        key="sv_admin_source_select")
-            st.session_state["_sv_active_source"] = _sources[_source_names.index(_picked_name)]["url"]
-            if len(_sources) > 1:
-                _remove_idx = st.selectbox("លុប Website", list(range(len(_sources))),
-                                           format_func=lambda i: _sources[i].get("name", "Website"), key="sv_remove_source_idx")
-                if st.button("🗑 លុប Website ដែលបានជ្រើស", key="sv_remove_source", use_container_width=True):
-                    _removed = _sources.pop(_remove_idx)
-                    if st.session_state.get("_sv_active_source") == _removed.get("url"):
-                        st.session_state["_sv_active_source"] = _sources[0]["url"]
-                    _sv_public_catalog.clear()
-                    st.rerun()
-            st.caption("URL ត្រូវបានលាក់ពីអ្នកប្រើធម្មតា។ បញ្ជីនេះនៅក្នុង Session បច្ចុប្បន្នប៉ុណ្ណោះ រហូតដល់ភ្ជាប់ Database។")
         if st.button("ចាកចេញពី Admin", key="drama_admin_logout"):
             st.session_state.pop("_hg_admin_authenticated", None)
             st.rerun()
 
-    _active_source = str(st.session_state.get("_sv_active_source", _STREAMING_VERTICALS_HOME))
-    _sv_reload = st.button("↻", key="sv_reload", help="ផ្ទុក Poster ឡើងវិញ")
-    if _sv_reload:
-        _sv_public_catalog.clear()
-    try:
-        _sv_rows = _sv_public_catalog(_active_source)
-        # Render the selected drama player first, so a poster tap opens playback
-        # immediately at the top rather than below the full poster grid.
-        _sv_selected = st.session_state.get("_sv_selected")
-        if _sv_selected:
-            if st.button("← ត្រឡប់ទៅ Poster", key="sv_back", use_container_width=True):
-                st.session_state.pop("_sv_selected", None)
-                st.rerun()
-            _play_item = dict(_sv_selected)
-            if not _play_item.get("embed") and not _play_item.get("direct") and _play_item.get("page"):
-                try:
-                    _detail_html = requests.get(_play_item["page"], headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/128 Safari/537.36"}, timeout=25).text
-                    _vid_match = re.search(r'(?:youtube(?:-nocookie)?\.com/(?:embed/|shorts/|live/|watch\?(?:[^#]*&)?v=)|youtu\.be/)([A-Za-z0-9_-]{11})', _detail_html, re.I)
-                    if not _vid_match:
-                        _vid_match = re.search(r'"videoId"\s*:\s*"([A-Za-z0-9_-]{11})"', _detail_html)
-                    _mp4_match = re.search(r'https?[^"\'\s<>]+\.mp4(?:\?[^"\'\s<>]*)?', _detail_html, re.I)
-                    if _vid_match:
-                        _play_item["embed"] = "https://www.youtube-nocookie.com/embed/" + _vid_match.group(1)
-                        _play_item["watch"] = "https://www.youtube.com/watch?v=" + _vid_match.group(1)
-                    elif _mp4_match:
-                        _play_item["direct"] = _mp4_match.group(0).replace("&amp;", "&")
-                except Exception:
-                    pass
-            if _play_item.get("embed"):
-                # In-app player only: don't send users out to YouTube.
-                components.iframe(_play_item["embed"] + "?autoplay=1", height=520, scrolling=False)
-                st.caption("វីដេអូនេះចាក់តាម Player របស់ YouTube នៅក្នុង App។ ប្រភពនេះមិនផ្តល់តំណ Download ដោយផ្ទាល់ទេ។")
-            elif _play_item.get("direct"):
-                st.video(_play_item["direct"])
-                st.download_button("⬇️ ទាញយកវីដេអូ", data=requests.get(_play_item["direct"], timeout=45).content,
-                                   file_name="drama.mp4", mime="video/mp4", use_container_width=True)
-            else:
-                st.warning("មិនទាន់រកឃើញវីដេអូសាធារណៈដែលអាចចាក់ក្នុង App បានទេ។ ប្រភពនេះអាចផ្តល់តែ Poster/ទំព័រព័ត៌មាន។")
+    _tiktok_search_term = st.text_input(
+        "🔍 ស្វែងរករឿងខ្លី",
+        placeholder="ឧ. Chinese short drama Khmer, រឿងសងសឹក, CEO short drama",
+        key="tiktok_short_drama_search",
+    )
+    if _tiktok_search_term.strip():
+        _tiktok_search_url = "https://www.tiktok.com/search?q=" + urllib.parse.quote(_tiktok_search_term.strip())
+        st.link_button("🔎 បើកលទ្ធផលស្វែងរក TikTok", _tiktok_search_url, use_container_width=True)
+    else:
+        st.link_button("📱 បើក TikTok ស្វែងរក Short Drama", "https://www.tiktok.com/search?q=short%20drama", use_container_width=True)
 
-        if _sv_rows:
-            for _sv_i in range(0, len(_sv_rows), 3):
-                _sv_cols = st.columns(3, gap="small")
-                for _sv_col, _sv_item in zip(_sv_cols, _sv_rows[_sv_i:_sv_i+3]):
-                    with _sv_col:
-                        if _sv_item.get("cover"):
-                            st.image(_sv_item["cover"], use_container_width=True)
-                        else:
-                            st.markdown("<div style='aspect-ratio:2/3;border-radius:12px;background:linear-gradient(145deg,#18254c,#07152f);display:flex;align-items:center;justify-content:center;color:#fff;font-size:34px'>🎬</div>", unsafe_allow_html=True)
-                        if st.button("▶", key=f"sv_pick_{_sv_item['id']}", use_container_width=True):
-                            st.session_state["_sv_selected"] = _sv_item
-                            st.rerun()
-        else:
-            st.info("Poster មិនទាន់អាចផ្ទុកបានទេ។ សូម Admin ពិនិត្យ Website URL ឬចុច ↻ ម្ដងទៀត។")
-    except Exception as _sv_error:
-        st.info("មិនអាចផ្ទុក Poster ពី Website នេះបានទេ។")
-        if _is_drama_admin:
-            st.caption(str(_sv_error)[:300])
+    with st.container(border=True):
+        st.markdown("**របៀបមើល និងទាញយក**")
+        st.markdown(
+            "1. វាយពាក្យស្វែងរកខាងលើ ហើយបើកលទ្ធផល TikTok។\n\n"
+            "2. នៅលើ TikTok ចុច **Share → Copy link** លើវីដេអូរឿងដែលចង់បាន។\n\n"
+            "3. ត្រឡប់មកផ្ទាំង **🏠 វីដេអូ → 🔗 Link** ហើយបិទភ្ជាប់តំណ។\n\n"
+            "4. ចុច **ស្វែងរក** ដើម្បីទាញយកវីដេអូដែលអាចចូលប្រើបាន។"
+        )
+        st.caption("ចំណាំ៖ TikTok មិនផ្តល់លទ្ធផលស្វែងរកទាំងអស់ឱ្យបង្ហាញផ្ទាល់ក្នុង App ដោយគ្មាន API/ការចូលគណនីទេ។ ប៊ូតុងខាងលើបើកការស្វែងរកនៅលើ TikTok ផ្ទាល់។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
@@ -7772,12 +7695,12 @@ with tab_vid:
             else:
                 st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
                 link_text = st.text_area(
-                    "តំណវីដេអូ (TikTok ឬភាគ Hongguo ដែលបានជ្រើស)",
+                    "តំណវីដេអូ TikTok ឬ Short Drama",
                     key="link_text_area",
                     placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
                     height=68)
                 if st.session_state.pop("_hg_imported_caption_notice", False):
-                    st.success("បានទទួលភាគ Hongguo ហើយ។ កម្មវិធីនឹងស្វែងរក និងចាប់ផ្ដើមបកប្រែដោយស្វ័យប្រវត្តិ បើតំណវីដេអូអាចទាញយកបាន។")
+                    st.success("បានទទួលតំណ Short Drama ហើយ។ កម្មវិធីនឹងស្វែងរក និងដំណើរការវីដេអូ បើតំណអាចទាញយកបាន។")
                 _all_links = extract_links(link_text)
                 _link_lines = _all_links[:link_limit]
                 if _all_links:
