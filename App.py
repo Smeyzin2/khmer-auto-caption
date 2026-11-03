@@ -7076,6 +7076,8 @@ def _hg_admin_panel():
 
 
 def _hg_vip_gate(show_admin_panel=True):
+    if _is_logged_in():
+        _render_account_bar()
     if _is_admin_session():
         st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
         # Render the Admin controls only in the primary Hongguo tab.
@@ -7088,7 +7090,7 @@ def _hg_vip_gate(show_admin_panel=True):
         _exp = str(st.session_state.get("_auth_expires", ""))
         st.caption(f"🔐 VIP: {st.session_state.get('_auth_user', '')}" + (f" · ផុតកំណត់ {_exp}" if _exp else ""))
         return True
-    st.warning("សូមចូលគណនីជាមុនសិន។")
+    _hg_login_form()
     return False
 
 
@@ -7295,7 +7297,7 @@ def _auth_check(username, password):
         return None, "", "សូមបញ្ចូល Username និង Password។"
     adm_u, adm_p = _admin_creds()
     if (adm_u and adm_p
-            and hmac.compare_digest(u.encode("utf-8"), adm_u.encode("utf-8"))
+            and hmac.compare_digest(u.lower().encode("utf-8"), adm_u.lower().encode("utf-8"))
             and hmac.compare_digest(p.encode("utf-8"), adm_p.encode("utf-8"))):
         return "admin", adm_u, ""
     try:
@@ -7345,15 +7347,13 @@ def _render_account_bar():
             st.button("ចាកចេញ", key="kv_logout_btn", on_click=_auth_sign_out)
 
 
-def require_login():
-    """បិទមិនឱ្យប្រើកម្មវិធី ទាល់តែចូលដោយគណនីដែល Admin បង្កើត។"""
+def auth_bootstrap():
+    """មិនបិទកម្មវិធីទេ — គ្រាន់តែស្តារការចូលដែលបានចងចាំ និងពិនិត្យគណនីផុតកំណត់។"""
     _ls_res = _auth_ls()
     if _is_logged_in():
-        if _auth_revalidate():
-            _render_account_bar()
-            return
-        _auth_sign_out()
-        st.warning("គណនីរបស់អ្នកបានផុតកំណត់ ឬត្រូវបានបិទ។ សូមទាក់ទង Admin។")
+        if not _auth_revalidate():
+            _auth_sign_out()
+            st.warning("គណនីរបស់អ្នកបានផុតកំណត់ ឬត្រូវបានបិទ។ សូមទាក់ទង Admin។")
     elif (_ls_res and not st.session_state.get("_auth_logged_out")
           and not st.session_state.get("_auth_restore_tried")):
         st.session_state["_auth_restore_tried"] = True
@@ -7361,21 +7361,20 @@ def require_login():
         if _auth_restore(_raw):
             st.rerun()
 
+
+def _hg_login_form():
+    """ទម្រង់ចូល Admin/VIP — បង្ហាញតែក្នុងផ្ទាំង Hongguo (កម្មវិធីផ្សេងទៀតប្រើបានដោយមិនបាច់ចូល)។"""
     _adm_u, _adm_p = _admin_creds()
     _sb_url, _sb_key = _hg_supabase_config()
     if not (_adm_u and _adm_p) and not (_sb_url and _sb_key):
-        _login_screen("⚙️", "កម្មវិធីកំពុងរៀបចំ",
-                      "អ្នកគ្រប់គ្រងមិនទាន់កំណត់គណនី Admin ទេ។ សូមត្រឡប់មកវិញពេលក្រោយ។")
+        st.warning("មុខងារ VIP មិនទាន់ត្រូវបានកំណត់ដោយ Admin ទេ។")
         with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
-            st.markdown("ដាក់ Secrets ដូចខាងក្រោម រួច Reboot កម្មវិធី៖")
             st.code(_AUTH_SETUP_HELP, language="toml")
-        st.stop()
-
+        return
     box = _login_screen(
-        "🎬", "ចូលប្រើ Khmer Video AI",
+        "🔒", "Hongguo VIP",
         "បញ្ចូល Username និង Password ដែល Admin ផ្តល់ឱ្យ",
-        ["🎙️ បកប្រែវីដេអូជាសំឡេង និង Subtitle ខ្មែរ",
-         "🔒 គណនីត្រូវបានបង្កើតដោយ Admin ប៉ុណ្ណោះ"],
+        ["🔒 គណនីត្រូវបានបង្កើតដោយ Admin ប៉ុណ្ណោះ"],
     )
     with box:
         with st.form("kv_login_form"):
@@ -7387,19 +7386,17 @@ def require_login():
             if _role:
                 _auth_sign_in(_role, _name, _info if _role == "vip" else "")
                 st.rerun()
-            time.sleep(1)  # ពន្យឺតបន្តិច កាត់បន្ថយការទាយពាក្យសម្ងាត់
+            time.sleep(1)
             st.error(_info)
         st.markdown('<div class="kv-f">មិនទាន់មានគណនី? សូមទាក់ទង Admin ដើម្បីទទួលគណនី</div>',
                     unsafe_allow_html=True)
-    st.stop()
-
 
 
 GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
-require_login()
+auth_bootstrap()
 # Mobile-first interface: landscape/fullscreen rotation control intentionally removed.
 ls_sync()
 
