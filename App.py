@@ -3499,7 +3499,7 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
                 return idxs, None
         try:
             egroups = [short[k:k + LLM_GROUP] for k in range(0, len(short), LLM_GROUP)]
-            with ThreadPoolExecutor(max_workers=6) as _ep:
+            with ThreadPoolExecutor(max_workers=10) as _ep:
                 for idxs, res in _ep.map(_exp, egroups):
                     if res:
                         for i, r in zip(idxs, res):
@@ -7720,7 +7720,7 @@ _HG_ACTOR_PLAY = _hg_secret(
 _HG_ACTOR_FEED = "bovi~hongguo-scraper"
 
 
-def _hg_apify_actor(actor_id, actor_input, timeout=60):
+def _hg_apify_actor(actor_id, actor_input, timeout=180):
     if not _HG_APIFY_TOKEN:
         raise RuntimeError("មិនទាន់កំណត់ APIFY_API_TOKEN ក្នុង Streamlit Secrets ទេ។")
     url = f"{_HG_APIFY_BASE}/{actor_id}/run-sync-get-dataset-items"
@@ -7791,26 +7791,24 @@ def _hg_normalize_row(item):
     if isinstance(cover, list):
         cover = next((x for x in cover if isinstance(x, str) and x.startswith(("http://", "https://"))), "")
     if not cover:
-        def _deep_img(o, depth=0):
+        def _deep_imgs(o, acc, depth=0):
             if depth > 4:
-                return ""
+                return
             if isinstance(o, str):
-                lo = o.lower().split("?")[0]
-                if o.startswith(("http://", "https://")) and lo.endswith((".jpg", ".jpeg", ".png", ".webp", ".image", ".heic", ".avif")):
-                    return o
-                return ""
-            if isinstance(o, dict):
+                if o.startswith(("http://", "https://")):
+                    lo = o.lower().split("?")[0]
+                    if lo.endswith((".jpg", ".jpeg", ".png", ".webp", ".image", ".heic", ".avif", ".awebp")):
+                        acc.append(o)
+            elif isinstance(o, dict):
                 for v in o.values():
-                    r = _deep_img(v, depth + 1)
-                    if r:
-                        return r
-            if isinstance(o, list):
+                    _deep_imgs(v, acc, depth + 1)
+            elif isinstance(o, list):
                 for v in o[:8]:
-                    r = _deep_img(v, depth + 1)
-                    if r:
-                        return r
-            return ""
-        cover = _deep_img(nested)
+                    _deep_imgs(v, acc, depth + 1)
+        _imgs = []
+        _deep_imgs(nested, _imgs)
+        _good = [u for u in _imgs if u.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp"))]
+        cover = (_good or _imgs or [""])[0]
 
     title = (nested.get("title") or nested.get("name") or nested.get("bookName")
              or nested.get("seriesName") or nested.get("dramaName") or "រឿង Hongguo")
@@ -7828,7 +7826,7 @@ def _hg_normalize_row(item):
     }
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _hg_rank(page=1):
     """Fetch Hongguo hot-ranking records through the Apify listing Actor."""
     page = max(1, int(page))
@@ -7836,7 +7834,7 @@ def _hg_rank(page=1):
         _HG_ACTOR_FEED,
         {"listings": ["rank/hot-drama"], "maxResults": min(100, page * 20),
          "includeDetails": False},
-        timeout=60,
+        timeout=180,
     )
     rows = [_hg_normalize_row(x) for x in items]
     rows = [x for x in rows if x.get("series_id")]
@@ -8048,10 +8046,29 @@ def _hg_detail(series_id):
     }
 
 
+def _hg_show_cover(url):
+    """បង្ហាញ poster ដោយប្រើ <img> (no-referrer) និងប្ដូរទ្រង់ទ្រាយ heic/avif → jpeg ដើម្បីឱ្យ browser បង្ហាញបាន។"""
+    u = str(url or "").strip()
+    if not u:
+        return
+    base, _, q = u.partition("?")
+    for ext in (".heic", ".avif", ".awebp"):
+        if base.lower().endswith(ext):
+            base = base[:-len(ext)] + ".jpeg"
+    u2 = base + (("?" + q) if q else "")
+    safe = u2.replace('"', "%22").replace("<", "%3C").replace(">", "%3E")
+    st.markdown(
+        f'<img src="{safe}" referrerpolicy="no-referrer" loading="lazy" '
+        f'style="width:100%;border-radius:10px;display:block;aspect-ratio:3/4;object-fit:cover;background:#1a2050;" '
+        f'onerror="this.style.visibility=\'hidden\'">',
+        unsafe_allow_html=True,
+    )
+
+
 def _hg_enrich_rows(rows):
     """បំពេញ poster/ឈ្មោះ/ចំនួនភាគ ដែលខ្វះ ពី detail actor (ស្របគ្នា)។"""
     def _need(r):
-        return (not r.get("cover")) or r.get("name") == "រឿង Hongguo" or not r.get("episode_cnt")
+        return (not r.get("cover")) or r.get("name") == "រឿង Hongguo"
 
     def _fix(r):
         if not _need(r):
@@ -8075,11 +8092,11 @@ def _hg_enrich_rows(rows):
 
     if not rows:
         return rows
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=10) as ex:
         return list(ex.map(_fix, rows))
 
 
-@st.cache_data(ttl=240, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _hg_category_list(category, page=1):
     """Fetch a supported category listing via Apify and paginate its returned rows."""
     page = max(1, int(page))
@@ -8087,8 +8104,8 @@ def _hg_category_list(category, page=1):
     if not category:
         return []
     if category.startswith("kw:"):
-        # Delegate page selection to the cached search adapter.
-        return _hg_search(category[3:], page)
+        _kw_rows = _hg_search(category[3:])[(page - 1) * 20:page * 20]
+        return _kw_rows
     items = _hg_apify_actor(
         _HG_ACTOR_FEED,
         {"listings": [category], "maxResults": min(100, page * 20),
@@ -8100,60 +8117,11 @@ def _hg_category_list(category, page=1):
     return rows[(page - 1) * 20:page * 20]
 
 
-@st.cache_data(ttl=900, show_spinner=False)
-def _hg_search(keyword, page=1):
-    """Cached keyword search; avoid expensive per-result detail enrichment."""
-    page = max(1, int(page))
-    items = _hg_apify_actor(
-        _HG_ACTOR_SEARCH,
-        {"queries": [str(keyword)], "maxPages": min(5, page)},
-        timeout=60,
-    )
-    rows = [_hg_normalize_row(x) for x in items]
-    rows = [x for x in rows if x.get("series_id")]
-    # Actors can return all gathered pages or only the requested page; handle both.
-    if len(rows) >= page * 20:
-        return rows[(page - 1) * 20:page * 20]
-    if page > 1 and len(rows) <= 20:
-        return rows
-    return rows[:20]
-
-
 @st.cache_data(ttl=3600, show_spinner=False)
-def _hg_poster_bytes(url):
-    """Cache poster data and proxy image requests to avoid remote hotlink failures."""
-    url = str(url or "").strip()
-    if not url.startswith(("https://", "http://")):
-        return b""
-    try:
-        response = requests.get(
-            url,
-            timeout=(3.5, 8),
-            headers={
-                "User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/125 Safari/537.36",
-                "Referer": "https://hongguoduanju.com/",
-            },
-        )
-        response.raise_for_status()
-        ctype = (response.headers.get("Content-Type") or "").lower()
-        if "image" not in ctype:
-            return b""
-        if len(response.content) > 8 * 1024 * 1024:
-            return b""
-        return response.content
-    except Exception:
-        return b""
-
-
-def _hg_render_poster(url, **kwargs):
-    image_data = _hg_poster_bytes(url)
-    if image_data:
-        st.image(image_data, **kwargs)
-    elif url:
-        # Last-resort browser fetch; some providers allow direct image access.
-        st.image(url, **kwargs)
-    else:
-        st.caption("🖼️ Poster មិនមាន")
+def _hg_search(keyword, page=1):
+    items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
+    rows = [_hg_normalize_row(x) for x in items]
+    return [x for x in rows if x.get("series_id")]
 
 
 def _hg_get(endpoint, params=None, timeout=45):
@@ -8361,7 +8329,7 @@ def _hg_guest_preview():
         for col, row in zip(cols, rows[i:i + 3]):
             with col:
                 if row.get("cover"):
-                    _hg_render_poster(row["cover"], use_container_width=True)
+                    _hg_show_cover(row["cover"])
                 st.markdown("**" + str(row.get("name") or "រឿង") + "**")
                 st.caption(f"ចំនួនភាគ៖ {row.get('episode_cnt') or row.get('listed_cnt') or '—'}")
                 if st.button("មើលរឿង", key=f"hgg_select_{row['series_id']}", use_container_width=True):
@@ -8427,7 +8395,6 @@ with tab_drama:
                         _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
                         else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
                     )
-                    st.session_state["_hg_catalog_initialized"] = True
             except Exception as e:
                 st.error(_hg_error_khmer(e))
         if _hg_search_click and _hg_keyword.strip():
@@ -8450,20 +8417,18 @@ with tab_drama:
                     st.rerun()
                 else:
                     with st.spinner("កំពុងស្វែងរករឿង..."):
-                        st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip(), 1)
-                    st.session_state["_hg_catalog_initialized"] = True
+                        st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
                     st.session_state.pop("_hg_selected", None)
                     if not st.session_state["_hg_rows"]:
                         st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
             except Exception as e:
                 st.error(str(e))
-        elif _hg_home_click or ("_hg_catalog_initialized" not in st.session_state and _HG_APIFY_TOKEN):
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APIFY_TOKEN):
             try:
                 st.session_state["_hg_page"] = 1
                 st.session_state["_hg_catalog_mode"] = "hot"
                 with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
                     st.session_state["_hg_rows"] = _hg_rank(1)
-                st.session_state["_hg_catalog_initialized"] = True
             except Exception as e:
                 st.error(str(e))
         _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
@@ -8475,7 +8440,7 @@ with tab_drama:
             st.subheader(_hg_selected.get("name") or "រឿង")
             _hg_cover = _hg_selected.get("cover")
             if _hg_cover:
-                _hg_render_poster(_hg_cover, use_container_width=True)
+                _hg_show_cover(_hg_cover)
             try:
                 with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
                     _hg_d = _hg_detail(_hg_selected["series_id"])
@@ -8655,7 +8620,7 @@ with tab_drama:
                 for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
                     with _hg_col:
                         if _hg_row.get("cover"):
-                            _hg_render_poster(_hg_row["cover"], use_container_width=True)
+                            _hg_show_cover(_hg_row["cover"])
                         st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
                         st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
                         if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
