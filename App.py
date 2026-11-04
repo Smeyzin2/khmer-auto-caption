@@ -7572,7 +7572,7 @@ _HG_ACTOR_DETAIL = "spider_studio~hongguo-series-detail"
 # Allow an owner to configure a maintained replacement in Streamlit Secrets without editing UI code.
 _HG_ACTOR_PLAY = _hg_secret(
     "HONGGUO_PLAY_ACTOR",
-    "dramadatalab~hongguo-direct-video",
+    "spider_studio~hongguo-video-download-kvs",
 )
 _HG_ACTOR_FEED = "bovi~hongguo-scraper"
 
@@ -7595,6 +7595,11 @@ def _hg_apify_actor(actor_id, actor_input, timeout=180):
             detail += (
                 "\\nចំណាំ៖ HTTP 400 មានន័យថា Actor បានបដិសេធ Input ឬ Run បរាជ័យ។ "
                 "សូមពិនិត្យ Run log របស់ Actor ក្នុង Apify Console ដើម្បីឃើញមូលហេតុពិត។"
+            )
+        elif response.status_code == 404 and actor_id == _HG_ACTOR_PLAY:
+            detail += (
+                "\\nActor ចាក់វីដេអូមិនមានទៀតទេ។ សូមលុប HONGGUO_PLAY_ACTOR ចេញពី "
+                "Streamlit Secrets (ឬកំណត់ទៅ spider_studio~hongguo-video-download-kvs)។"
             )
         elif response.status_code == 521 and actor_id == _HG_ACTOR_PLAY:
             detail += (
@@ -7902,14 +7907,14 @@ def _hg_get(endpoint, params=None, timeout=45):
                 "សូមពិនិត្យ Actor detail ដែលបានភ្ជាប់ក្នុង Apify។"
             )
 
-        quality = str(params.get("q") or 1080) + "p"
+        # spider_studio~hongguo-video-download-kvs: input videoIds, output signed MP4 videoUrl
         items = _hg_apify_actor(
             _HG_ACTOR_PLAY,
-            {"videoId": str(video_id), "quality": quality},
-            timeout=180
+            {"videoIds": [str(video_id)]},
+            timeout=300
         )
         result = next((x for x in items if isinstance(x, dict)), {}) if items else {}
-        if result.get("status") == "error" or result.get("errorMessage") or result.get("error"):
+        if result.get("success") is False or result.get("status") == "error" or result.get("errorMessage") or result.get("error"):
             raise RuntimeError(str(
                 result.get("errorMessage") or result.get("error")
                 or result.get("errorCode") or "Apify មិនអាចដោះស្រាយ Video URL បាន។"
