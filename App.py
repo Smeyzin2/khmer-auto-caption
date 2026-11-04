@@ -7281,7 +7281,7 @@ def _hg_admin_panel():
         st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
 
 
-def _hg_vip_gate(show_admin_panel=True):
+def _hg_vip_gate(show_admin_panel=True, show_login=True):
     if _is_logged_in():
         _render_account_bar()
     if _is_admin_session():
@@ -7296,7 +7296,8 @@ def _hg_vip_gate(show_admin_panel=True):
         _exp = str(st.session_state.get("_auth_expires", ""))
         st.caption(f"🔐 VIP: {st.session_state.get('_auth_user', '')}" + (f" · ផុតកំណត់ {_exp}" if _exp else ""))
         return True
-    _hg_login_form()
+    if show_login:
+        _hg_login_form()
     return False
 
 
@@ -8164,8 +8165,12 @@ def _hg_guest_preview():
         notice.warning(_HG_CONTACT_MSG)
 
 with tab_drama:
-    _hg_access = _hg_vip_gate()
+    _hg_access = _hg_vip_gate(show_login=False)
     if not _hg_access:
+        st.link_button("👑 ចង់ប្រើ VIP? ទាក់ទងបើកគណនី — Telegram @Smeytk", "https://t.me/Smeytk",
+                       type="primary", use_container_width=True)
+        with st.expander("🔑 មានគណនី VIP ហើយ? ចូលនៅទីនេះ", expanded=False):
+            _hg_login_form()
         _hg_guest_preview()
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
