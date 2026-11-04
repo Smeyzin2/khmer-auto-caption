@@ -2555,51 +2555,7 @@ TRANS_ACCURACY_NOTE = (
 TRANS_SYSTEM = (TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL) + TRANS_ACCURACY_NOTE
 
 
-def _groq_is_too_large(msg):
-    low = str(msg).lower()
-    return "request too large" in low or "reduce your message size" in low or "413" in low or "context_length" in low
-
-
-def _groq_shrink_system(system):
-    """បង្រួម prompt: ប្តូរ prompt ពេញទៅ LITE ហើយកាត់បរិបទរឿង (STORY/SUMMARY) ឱ្យខ្លី។"""
-    sys_ = system or TRANS_SYSTEM
-    sys_ = sys_.replace(TRANS_SYSTEM_FULL, TRANS_SYSTEM_LITE)
-    for tag in (" STORY SO FAR", "VIDEO SUMMARY:"):
-        i = sys_.find(tag)
-        if i > 0 and len(sys_) - i > 1500:
-            sys_ = sys_[:i + 1500]
-            break
-    return sys_
-
-
-def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False, _depth=0):
-    try:
-        return _groq_translate_chunk_core(api_key, texts, budgets, system, to_english, rotate)
-    except Exception as e:
-        if not _groq_is_too_large(e) or _depth >= 3:
-            raise
-        # ជំហាន ១: បង្រួម prompt រួចសាកម្តងទៀត
-        if _depth == 0:
-            small = _groq_shrink_system(system)
-            if small != (system or TRANS_SYSTEM):
-                try:
-                    return _groq_translate_chunk_core(api_key, texts, budgets, small, to_english, rotate)
-                except Exception as e2:
-                    if not _groq_is_too_large(e2):
-                        raise
-                system = small
-        # ជំហាន ២: ចែកបាច់ជាពាក់កណ្តាល
-        if len(texts) < 2:
-            raise
-        mid = len(texts) // 2
-        b1 = budgets[:mid] if budgets else None
-        b2 = budgets[mid:] if budgets else None
-        left = _groq_translate_chunk_impl(api_key, texts[:mid], b1, system, to_english, rotate, _depth + 1)
-        right = _groq_translate_chunk_impl(api_key, texts[mid:], b2, system, to_english, rotate, _depth + 1)
-        return list(left) + list(right)
-
-
-def _groq_translate_chunk_core(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
+def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
@@ -2637,8 +2593,6 @@ def _groq_translate_chunk_core(api_key, texts, budgets=None, system=None, to_eng
                 break
             except urllib.error.HTTPError as e:
                 last = f"{model}: {http_detail(e)}"
-                if _groq_is_too_large(last):
-                    break   # ធំពេក → កុំសម្រាកម៉ូដែល កុំរង់ចាំ (ឱ្យ caller បង្រួម/ចែកបាច់)
                 if e.code == 429 and attempt == 0:
                     time.sleep(6)
                     continue
@@ -2951,51 +2905,34 @@ def oai_test(key, base, model):
         return False, "សាកមិនបាន៖ " + str(e)[:220]
 
 
-def _claude_tier(texts, budgets, system, to_english):
-    """ម៉ាស៊ីនសំខាន់ #1: Claude (គ្រប់ Key ដែលមាន)។"""
-    if not claude_enabled():
-        return None
-    for _cn, _cc in _CLAUDE_PROVIDERS:
-        _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
-        if _cl.get("until", 0) > time.time():
-            continue
-        _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
-        if _cr is not None:
-            return _cr
-    return None
-
-
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
-    """លំដាប់ថ្មី៖
-       ម៉ាស៊ីនសំខាន់ = Claude + Groq (CLAUDE_FIRST=1 → Claude មុន; =0 → Groq មុន)
-       ម៉ាស៊ីនបម្រុង = OpenRouter / Mistral / NVIDIA / ... / CodeCraft (ប្រើតែពេលសំខាន់ទាំងពីរបរាជ័យ)"""
+    """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft (ម៉ាស៊ីនបម្រុង)។"""
     groq_err = None
-
-    def _groq():
-        nonlocal groq_err
-        if not api_key:
-            return None
+    if claude_enabled() and CLAUDE_FIRST:
+        for _cn, _cc in _CLAUDE_PROVIDERS:
+            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
+            if _cl.get("until", 0) > time.time():
+                continue
+            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
+            if _cr is not None:
+                return _cr
+    if api_key:
         try:
             return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
         except Exception as e:
             groq_err = e
-            _LAST_AI_ERR["Groq"] = str(e)[:260]
-            return None
-
-    primaries = [lambda: _claude_tier(texts, budgets, system, to_english), _groq]
-    if not CLAUDE_FIRST:
-        primaries.reverse()
-    for _p in primaries:
-        _r = _p()
+    if oai_enabled():
+        _r = oai_try(texts, budgets, system, to_english)
         if _r is not None:
             return _r
-
-    # ---- ម៉ាស៊ីនបម្រុង (មិនរាប់ Claude ម្តងទៀត) ----
-    if extra_provider_enabled() or xk_enabled():
-        _r = oai_try(texts, budgets, system, to_english, skip_claude=True)
-        if _r is not None:
-            return _r
-
+    if claude_enabled() and not CLAUDE_FIRST:
+        for _cn, _cc in _CLAUDE_PROVIDERS:
+            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
+            if _cl.get("until", 0) > time.time():
+                continue
+            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
+            if _cr is not None:
+                return _cr
     parts = [f"Groq: {str(groq_err)[:150]}"] if groq_err else []
     if _LAST_AI_ERR:
         parts.append("; ".join(f"{k}: {v}"[:110] for k, v in list(_LAST_AI_ERR.items())[:4]))
@@ -3060,7 +2997,7 @@ def provider_status():
     return " · ".join(out)
 
 
-def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_claude=False):
+def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
     """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft
     (មានកំណត់ពេលសរុប ១២០ វិនាទីក្នុងមួយបាច់)។"""
     if getattr(_API_LOCAL, "isolated", False):
@@ -3084,7 +3021,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_
             if r is not None:
                 return r
         return None
-    if CLAUDE_FIRST and not skip_claude:
+    if CLAUDE_FIRST:
         r = _claude_pass()
         if r is not None:
             return r
@@ -3110,7 +3047,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_
         r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="CodeCraft")
         if r is not None:
             return r
-    if not CLAUDE_FIRST and not skip_claude:
+    if not CLAUDE_FIRST:
         return _claude_pass()
     return None
 
@@ -3147,8 +3084,7 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
     if groq_key:
         _candidates.append(("Groq + providers", lambda: groq_translate_chunk(groq_key, rows, budgets, system=system)))
     if oai_enabled():
-        # បើគ្មាន Groq key → Claude ជាសំខាន់ (oai_try រួមទាំង Claude); បើមាន Groq key → groq_translate_chunk ធ្វើរួចហើយ
-        _candidates.append(("Claude/បម្រុង", lambda: oai_try(rows, budgets, system, skip_claude=bool(groq_key))))
+        _candidates.append(("Claude/CodeCraft/OpenRouter", lambda: oai_try(rows, budgets, system)))
     for _name, _call in _candidates:
         try:
             _result = _call()
@@ -5629,7 +5565,7 @@ def suggest_titles(lines, groq_key):
 
 
 def engine_name(engine):
-    return "Claude + Groq (បម្រុង៖ OpenRouter/CodeCraft)"
+    return "Groq + CodeCraft"
 
 
 def run_worker(job, item, settings, fonts_data):
@@ -6971,8 +6907,382 @@ def user_key_box():
             st.rerun()
 
 
+# =====================================================================
+#  ចូលប្រើតាមគណនី Google (Gmail) — ត្រូវចូលមុនទើបប្រើកម្មវិធីបាន
+#  ► បិទបាន៖ ដាក់ REQUIRE_LOGIN = "0" ក្នុង Secrets
+#  ► កំណត់អ្នកអនុញ្ញាត (មិនចាំបាច់)៖ ALLOWED_EMAILS = "a@gmail.com, b@gmail.com"
+# =====================================================================
+REQUIRE_LOGIN = str(get_secret("REQUIRE_LOGIN", "1")).strip().lower() not in ("0", "false", "no", "off")
+
+_AUTH_SETUP_HELP = """# .streamlit/secrets.toml (ឬ Streamlit Cloud → Settings → Secrets)
+[auth]
+redirect_uri = "https://ឈ្មោះកម្មវិធីរបស់អ្នក.streamlit.app/oauth2callback"
+cookie_secret = "ដាក់អក្សរចៃដន្យវែងៗ ៣២ តួឡើង"
+
+[auth.google]
+client_id = "xxxx.apps.googleusercontent.com"
+client_secret = "xxxx"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+"""
+
+
+def _auth_configured():
+    try:
+        _a = st.secrets["auth"]
+        return bool(_a.get("cookie_secret")) and bool(_a.get("redirect_uri")) and "google" in _a
+    except Exception:
+        return False
+
+
+def _user_field(key, default=""):
+    try:
+        v = st.user.get(key)
+        return default if v is None else v
+    except Exception:
+        try:
+            v = getattr(st.user, key)
+            return default if v is None else v
+        except Exception:
+            return default
+
+
+def _allowed_email_set():
+    raw = get_secret("ALLOWED_EMAILS", "")
+    if isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = re.split(r"[,\n;\s]+", str(raw or ""))
+    return {str(x).strip().lower() for x in items if str(x).strip()}
+
+
+_GOOGLE_G_URI = "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E"
+
+_LOGIN_CSS = """<style>
+.st-key-kv_login{max-width:460px;margin:3vh auto 0;padding:30px 24px 22px;border-radius:26px;
+background:linear-gradient(165deg,rgba(26,36,92,.97),rgba(11,16,48,.97));
+border:1px solid rgba(130,150,255,.38);box-shadow:0 20px 60px rgba(0,0,0,.5);}
+.st-key-kv_login .kv-ic{width:68px;height:68px;margin:0 auto 16px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:34px;
+background:linear-gradient(135deg,#FF2DAA,#7B5CFF 60%,#19B7FF);box-shadow:0 10px 28px rgba(123,92,255,.45);}
+.st-key-kv_login .kv-t{margin:0 0 6px;text-align:center;font-size:24px;font-weight:800;color:#FFFFFF!important;line-height:1.5;}
+.st-key-kv_login .kv-s{margin:0 0 16px;text-align:center;font-size:15px;line-height:1.7;color:#B9C4EE!important;}
+.st-key-kv_login .kv-l{margin:0 0 20px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);}
+.st-key-kv_login .kv-l div{font-size:14px;line-height:1.95;color:#DCE3FF!important;}
+.st-key-kv_login .kv-f{margin-top:14px;text-align:center;font-size:12.5px;line-height:1.6;color:#8E9BCB!important;}
+.st-key-kv_login_btn button,.st-key-kv_logout_unverified button,.st-key-kv_logout_denied button{
+width:100%;min-height:54px;border-radius:14px!important;border:none!important;background:#FFFFFF!important;
+box-shadow:0 8px 22px rgba(0,0,0,.35);transition:transform .12s ease,box-shadow .12s ease;}
+.st-key-kv_login_btn button:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.45);}
+.st-key-kv_login_btn button p,.st-key-kv_logout_unverified button p,.st-key-kv_logout_denied button p{color:#1F2A44!important;font-weight:700;font-size:16px;}
+.st-key-kv_login_btn button p::before{content:"";display:inline-block;width:22px;height:22px;margin-right:12px;vertical-align:-5px;
+background:url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E") center/contain no-repeat;}
+</style>"""
+
+_ACCOUNT_CSS = """<style>
+.st-key-kv_account{margin:2px 0 10px;padding:8px 12px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);}
+.st-key-kv_account [data-testid="stHorizontalBlock"]{flex-direction:row!important;flex-wrap:nowrap!important;align-items:center;gap:8px!important;}
+.st-key-kv_account [data-testid="stColumn"],.st-key-kv_account [data-testid="column"]{min-width:0!important;}
+.st-key-kv_account [data-testid="stColumn"]:last-child,.st-key-kv_account [data-testid="column"]:last-child{flex:0 0 auto!important;width:auto!important;}
+.st-key-kv_account .kv-u{display:flex;align-items:center;gap:10px;min-width:0;}
+.st-key-kv_account .kv-u img,.st-key-kv_account .kv-u .kv-av{width:36px;height:36px;border-radius:50%;flex:0 0 36px;object-fit:cover;}
+.st-key-kv_account .kv-av{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#FF2DAA,#7B5CFF);color:#fff;font-weight:800;}
+.st-key-kv_account .kv-n{font-weight:700;font-size:14px;color:#FFFFFF!important;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.st-key-kv_account .kv-m{font-size:12px;color:#B9C4EE!important;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.st-key-kv_account .kv-t2{min-width:0;}
+.st-key-kv_account button{min-height:38px;padding:0 14px;border-radius:12px;}
+</style>"""
+
+
+def _login_screen(icon, title, sub, items=None):
+    """បង្ហាញកាតចូលប្រើតាម theme ងងឹត ហើយត្រឡប់ container ដើម្បីដាក់ប៊ូតុងក្នុងកាត។"""
+    st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
+    box = st.container(key="kv_login")
+    with box:
+        html = f'<div class="kv-ic">{icon}</div><div class="kv-t">{title}</div><div class="kv-s">{sub}</div>'
+        if items:
+            html += '<div class="kv-l">' + "".join(f"<div>{x}</div>" for x in items) + "</div>"
+        st.markdown(html, unsafe_allow_html=True)
+    return box
+
+
+def require_login():
+    """បិទមិនឱ្យប្រើកម្មវិធី ទាល់តែចូលតាមគណនី Google។ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិពេលចូលលើកដំបូង។"""
+    if not REQUIRE_LOGIN:
+        return
+    if not (hasattr(st, "login") and hasattr(st, "user")):
+        st.error("Streamlit ចាស់ពេក — សូមដាក់ `streamlit>=1.42.0` និង `Authlib>=1.3.2` ក្នុង requirements.txt។")
+        st.stop()
+    if not _auth_configured():
+        _login_screen("⚙️", "កម្មវិធីកំពុងរៀបចំ", "អ្នកគ្រប់គ្រងមិនទាន់កំណត់ Google Login ទេ។ សូមត្រឡប់មកវិញពេលក្រោយ។")
+        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
+            st.markdown(
+                "1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** (Web application)។\n"
+                "2. ដាក់ **Authorized redirect URI** ជា `https://ឈ្មោះកម្មវិធី.streamlit.app/oauth2callback` "
+                "(ក្នុងម៉ាស៊ីនខ្លួនឯង៖ `http://localhost:8501/oauth2callback`)។\n"
+                "3. ដាក់ Secrets ដូចខាងក្រោម ហើយដាក់ `Authlib>=1.3.2` ក្នុង requirements.txt។"
+            )
+            st.code(_AUTH_SETUP_HELP, language="toml")
+        st.stop()
+
+    if not _user_field("is_logged_in", False):
+        box = _login_screen(
+            "🎬", "ចូលប្រើ Khmer Video AI",
+            "ចូលតាមគណនី Google របស់អ្នក ដើម្បីចាប់ផ្តើមបកប្រែវីដេអូ",
+            ["🎙️ បកប្រែវីដេអូជាសំឡេង និង Subtitle ខ្មែរ",
+             "⚡ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិ",
+             "🔒 យើងមិនឃើញពាក្យសម្ងាត់ Google របស់អ្នកទេ"],
+        )
+        with box:
+            st.button("ចូលតាម Google", key="kv_login_btn", use_container_width=True,
+                      on_click=st.login, args=("google",))
+            st.markdown('<div class="kv-f">ត្រូវការគណនី Gmail ឬ Google ដើម្បីប្រើកម្មវិធី</div>', unsafe_allow_html=True)
+        st.stop()
+
+    _email = str(_user_field("email", "")).strip().lower()
+    if not _email or _user_field("email_verified", True) is False:
+        box = _login_screen("⚠️", "អ៊ីមែលមិនទាន់បញ្ជាក់", "គណនី Google នេះមិនទាន់បញ្ជាក់អ៊ីមែលទេ។ សូមប្រើគណនីផ្សេង។")
+        with box:
+            st.button("ចាកចេញ", key="kv_logout_unverified", on_click=st.logout, use_container_width=True)
+        st.stop()
+    _allowed = _allowed_email_set()
+    if _allowed and _email not in _allowed:
+        from html import escape as _esc
+        box = _login_screen("⛔", "គ្មានសិទ្ធិប្រើ", f"គណនី <b>{_esc(_email)}</b> មិនមានក្នុងបញ្ជីអនុញ្ញាតទេ។")
+        with box:
+            st.button("ចាកចេញ", key="kv_logout_denied", on_click=st.logout, use_container_width=True)
+        st.stop()
+
+    from html import escape as _esc
+    _name = str(_user_field("name", "") or _email)
+    _pic = str(_user_field("picture", "") or "")
+    st.markdown(_ACCOUNT_CSS, unsafe_allow_html=True)
+    with st.container(key="kv_account"):
+        _a, _b = st.columns([6, 2])
+        with _a:
+            _av = (f'<img src="{_esc(_pic)}" referrerpolicy="no-referrer">' if _pic.startswith("https://")
+                   else f'<div class="kv-av">{_esc(_name[:1].upper())}</div>')
+            st.markdown(
+                f'<div class="kv-u">{_av}<div class="kv-t2"><div class="kv-n">{_esc(_name)}</div>'
+                f'<div class="kv-m">{_esc(_email)}</div></div></div>',
+                unsafe_allow_html=True,
+            )
+        with _b:
+            st.button("ចាកចេញ", key="kv_logout_btn", on_click=st.logout)
+
+
+GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
+GROQ_KEY = collect_api_keys("GROQ_API_KEY")
+
+render_header()
+require_login()
+# Mobile-first interface: landscape/fullscreen rotation control intentionally removed.
+ls_sync()
+
+if not GROQ_KEY and not oai_enabled() and not has_user_keys():
+    # Keep the missing-key notice compact so it does not push the dashboard below the fold.
+    st.caption("⚠️ មិនទាន់មាន API Key — បញ្ចូលនៅផ្ទាំង «🌐 បកប្រែ» ដើម្បីចាប់ផ្ដើមប្រើ AI។")
+
+ENGINE_FREE = "⭐ Groq សម្គាល់សំឡេង + AI API បកប្រែ (Fallback ស្វ័យប្រវត្តិ)"
+
+current_job = st.session_state.get("job")
+busy = bool(current_job and current_job.running())
+
+voice_label = list(TTS_VOICES.keys())[0]
+# មុខងារដែលបើកដោយស្វ័យប្រវត្តិជានិច្ច (គ្មានប៊ូតុងបិទបើក)
+sub_on = True
+dub_on = True
+emotion_on = True
+keep_bg = True
+auto_gender = True
+srt_on = False
+narrate_on = False
+review_on = False
+voice_match = False
+emotion = False
+clone_on = False
+timbre = False
+timbre_file = None
+dub_offset = 0.0
+tight_sync = False
+
+# ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
+
+tab_drama, tab_tiktok, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🍎 Hongguo", "🎵 TikTok Short Drama", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+)
+
+# ============================ Hongguo Drama → Khmer Auto Caption ============================
+# API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
+def _hg_secret(*names):
+    """Read Hongguo credentials from owner-configured Streamlit Secrets first.
+    These server-side credentials are shared by the app; users should not enter them in the UI.
+    """
+    for name in names:
+        try:
+            value = st.secrets.get(name, "")
+        except Exception:
+            value = ""
+        if value:
+            return str(value).strip()
+        value = os.environ.get(name, "")
+        if value:
+            return str(value).strip()
+    return ""
+
+_HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
+_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "APPSECRET")
+_HG_API_BASE = "https://www.xiaoyingapi.com"
+_HG_API_PREFIX = "/api/dramas/hongguo"
+
+def _hg_get(endpoint, params=None, timeout=45):
+    if not _HG_APP_ID or not _HG_APP_SECRET:
+        raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
+    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}"  # XiaoYingAPI route: no trailing slash
+    signed = dict(params or {})
+    signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
+    pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
+    query = "&".join(f"{k}={v}" for k, v in pairs)
+    raw = "GET\n" + path + "\n" + query
+    signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
+    response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
+                            headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
+    if response.status_code == 404:
+        raise RuntimeError(
+            f"XiaoYingAPI HTTP 404: មិនរកឃើញ API path {path} ទេ។ "
+            "សូមពិនិត្យ endpoint ឬ API version។"
+        )
+    if not response.ok:
+        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {response.text[:300]}")
+    data = response.json()
+    if not isinstance(data, dict) or data.get("code") != 10000:
+        raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
+    return data.get("data") or {}
+
+@st.cache_data(ttl=240, show_spinner=False)
+def _hg_rank(page=1):
+    d = _hg_get("rank", {"type": "hot-drama", "page": int(page)})
+    return d.get("results", []) if isinstance(d, dict) else []
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _hg_categories():
+    """ទាញ category tree ពិតពី XiaoYingAPI (ប្រើ slug មិនប្រើឈ្មោះចិនជាតម្លៃ API)។"""
+    d = _hg_get("categories", {})
+    if isinstance(d, list):
+        return d
+    if isinstance(d, dict):
+        return d.get("categories") or d.get("results") or d.get("list") or []
+    return []
+
+
+@st.cache_data(ttl=180, show_spinner=False)
+def _hg_detail(series_id):
+    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី Hongguo API។"""
+    d = _hg_get("detail", {"series_id": str(series_id)})
+    if not isinstance(d, dict):
+        return {}
+    # API versions may wrap detail data one level deeper.
+    if isinstance(d.get("detail"), dict):
+        d = d["detail"]
+    elif isinstance(d.get("result"), dict):
+        d = d["result"]
+    episodes = d.get("episodes") or d.get("episode_list") or d.get("list") or []
+    normalized = []
+    for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
+        if not isinstance(ep, dict):
+            continue
+        ep_no = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or (i + 1)
+        try:
+            ep_no = int(ep_no)
+        except (TypeError, ValueError):
+            ep_no = i + 1
+        playable = ep.get("playable")
+        if playable is None:
+            playable = bool(ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("token"))
+        normalized.append({**ep, "ep": ep_no, "playable": bool(playable)})
+    d["episodes"] = normalized
+    return d
+
+
+# ឈ្មោះប្រភេទចិន -> ភាសាខ្មែរ (តម្លៃ slug សម្រាប់ API មិនត្រូវបានប្ដូរ)
+_HG_CATEGORY_KH = {'真人剧': 'រឿងសម្ដែងពិត', '爱情': 'ស្នេហា', '年代': 'រឿងសម័យកាល', '逆袭': 'តស៊ូត្រឡប់មកជោគជ័យ', '传奇': 'រឿងវីរភាព', '成长': 'ការរីកចម្រើន', '家庭': 'គ្រួសារ', '都市': 'ជីវិតទីក្រុង', '古装': 'សម័យបុរាណ', '现代': 'សម័យទំនើប', '悬疑': 'អាថ៌កំបាំង', '喜剧': 'កំប្លែង', '动作': 'ក្បាច់គុន និងសកម្មភាព', '战争': 'សង្គ្រាម', '历史': 'ប្រវត្តិសាស្ត្រ', '奇幻': 'រវើរវាយ', '玄幻': 'រឿងអច្ឆរិយៈ', '仙侠': 'ទេពអប្សរ និងអ្នក仙', '武侠': 'ក្បាច់គុន', '青春': 'យុវវ័យ', '校园': 'សាលារៀន', '职场': 'ជីវិតការងារ', '甜宠': 'ស្នេហាផ្អែមល្ហែម', '虐恋': 'ស្នេហាសោកសៅ', '复仇': 'ការសងសឹក', '豪门': 'គ្រួសារអ្នកមាន', '总裁': 'ប្រធានក្រុមហ៊ុន', '穿越': 'ឆ្លងពេលវេលា', '重生': 'កើតជាថ្មី', '乡村': 'ជីវិតជនបទ', '农村': 'ជីវិតជនបទ', '亲情': 'សេចក្ដីស្រឡាញ់ក្នុងគ្រួសារ', '友情': 'មិត្តភាព', '现实': 'ជីវិតពិត', '励志': 'លើកទឹកចិត្ត', '惊悚': 'រន្ធត់', '恐怖': 'ភ័យរន្ធត់', '犯罪': 'ឧក្រិដ្ឋកម្ម', '探案': 'ស៊ើបអង្កេត', '科幻': 'វិទ្យាសាស្ត្រប្រឌិត', '萌宝': 'កូនតូចគួរឱ្យស្រឡាញ់', '神医': 'គ្រូពេទ្យអស្ចារ្យ', '战神': 'អ្នកចម្បាំងខ្លាំង', '赘婿': 'កូនប្រសារប្រុស', '女强': 'នារីខ្លាំង', '男频': 'សម្រាប់ទស្សនិកជនប្រុស', '女频': 'សម្រាប់ទស្សនិកជនស្រី', '短剧': 'រឿងភាគខ្លី', '漫剧': 'រឿងគំនូរជីវចល', '漫画': 'រឿងគំនូរជីវចល', '动画': 'គំនូរជីវចល', '全部': 'ទាំងអស់'}
+
+
+def _hg_category_label(name):
+    raw = str(name or "").strip()
+    return _HG_CATEGORY_KH.get(raw, raw)
+
+
+def _hg_flat_categories(tree):
+    """បម្លែង category tree ទៅជាជម្រើស UI ដែលរក្សា slug ត្រឹមត្រូវ។"""
+    out = {}
+    for parent in tree or []:
+        if not isinstance(parent, dict):
+            continue
+        pslug = str(parent.get("slug") or parent.get("category") or parent.get("category_id") or parent.get("id") or "").strip()
+        pname = str(parent.get("name") or parent.get("title") or parent.get("category_name") or pslug).strip()
+        if pslug and pname:
+            out[_hg_category_label(pname)] = pslug
+        children = parent.get("children") or []
+        if isinstance(children, list):
+            for child in children:
+                if not isinstance(child, dict):
+                    continue
+                cslug = str(child.get("slug") or child.get("category") or child.get("category_id") or child.get("id") or "").strip()
+                cname = str(child.get("name") or child.get("title") or child.get("category_name") or cslug).strip()
+                if cslug and cname:
+                    # បង្ហាញតែឈ្មោះប្រភេទរងជាខ្មែរ ដើម្បីកុំឱ្យអក្សរវែងពេកក្នុង Dropdown លើទូរស័ព្ទ។
+                    # បើឈ្មោះដូចគ្នា ទើបបន្ថែមឈ្មោះមេជាអក្សរខ្លីសម្រាប់បំបែក។
+                    child_label = _hg_category_label(cname)
+                    if child_label in out:
+                        child_label = f"{child_label} · {_hg_category_label(pname)}"
+                    out[child_label] = cslug
+    return out
+
+
+def _hg_error_khmer(error):
+    """បកស្រាយ error សំខាន់ៗជាខ្មែរ ដើម្បីអ្នកប្រើដឹងវិធីដោះស្រាយ។"""
+    msg = str(error or "")
+    if "20003" in msg or "参数值非法" in msg or "category" in msg and "合法分类" in msg:
+        return "ប្រភេទរឿងដែល API ទទួលបានមិនត្រឹមត្រូវ។ កម្មវិធីត្រូវប្រើ Category slug ពីបញ្ជីប្រភេទ Hongguo មិនមែនឈ្មោះចិនទេ។ សូមចុច «ផ្ទុកប្រភេទឡើងវិញ» ហើយជ្រើសប្រភេទម្ដងទៀត។"
+    if "20002" in msg or "参数缺失" in msg:
+        return "API ខ្វះប៉ារ៉ាម៉ែត្រចាំបាច់។ សូមជ្រើសប្រភេទរឿងម្ដងទៀត។"
+    return msg
+
+@st.cache_data(ttl=240, show_spinner=False)
+def _hg_category_list(category, page=1):
+    d = _hg_get("list", {"category": str(category), "page": int(page)})
+    return d.get("results", []) if isinstance(d, dict) else []
+
+@st.cache_data(ttl=240, show_spinner=False)
+def _hg_search(keyword, page=1):
+    d = _hg_get("search", {"keyword": keyword, "page": int(page)})
+    return d.get("results", []) if isinstance(d, dict) else []
+
+
+def _hg_extract_series_id(value):
+    """ទទួលយក URL លម្អិត Hongguo ឬ series_id ដោយផ្ទាល់។"""
+    value = str(value or "").strip()
+    if not value:
+        return ""
+    # URL format: https://hongguoduanju.com/detail?series_id=123
+    try:
+        parsed = urllib.parse.urlparse(value)
+        query = urllib.parse.parse_qs(parsed.query)
+        ids = query.get("series_id") or query.get("seriesId") or []
+        if ids and str(ids[0]).strip().isdigit():
+            return str(ids[0]).strip()
+        match = re.search(r"/detail/(\d+)", parsed.path)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    # User may paste only the numeric series_id.
+    if value.isdigit():
+        return value
+    return ""
+
 # ============================ Hongguo VIP Access ============================
 # All VIP checks and management use the server-only Supabase service key.
+_HG_ADMIN_EMAIL = "smeyai2000@gmail.com"
 
 def _hg_supabase_config():
     _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
@@ -7140,9 +7450,9 @@ def _hg_admin_panel():
 
 
 def _hg_vip_gate(show_admin_panel=True):
-    if _is_logged_in():
-        _render_account_bar()
-    if _is_admin_session():
+    _email = str(_user_field("email", "")).strip().lower()
+    _is_admin = _email == _HG_ADMIN_EMAIL
+    if _is_admin:
         st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
         # Render the Admin controls only in the primary Hongguo tab.
         # Calling this gate from another tab must not create duplicate Streamlit widget keys.
@@ -7150,569 +7460,40 @@ def _hg_vip_gate(show_admin_panel=True):
             with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
                 _hg_admin_panel()
         return True
-    if st.session_state.get("_auth_role") == "vip":
-        _exp = str(st.session_state.get("_auth_expires", ""))
-        st.caption(f"🔐 VIP: {st.session_state.get('_auth_user', '')}" + (f" · ផុតកំណត់ {_exp}" if _exp else ""))
-        return True
-    _hg_login_form()
-    return False
 
-
-def _hg_has_access():
-    """ពិនិត្យសិទ្ធិ Admin/VIP ដោយមិនបង្កើត widget (សុវត្ថិភាពសម្រាប់ហៅក្នុងច្រើនផ្ទាំង)។"""
-    return _is_logged_in()
-
-
-
-# =====================================================================
-#  ចូលប្រើដោយ Username / Password — គណនីបង្កើតដោយ Admin ប៉ុណ្ណោះ (មិនប្រើ Gmail/Google ទៀតទេ)
-#  ► Admin ចូលដោយ ADMIN_USERNAME / ADMIN_PASSWORD ដែលដាក់ក្នុង Secrets
-#  ► អ្នកប្រើផ្សេងទៀត ចូលដោយគណនីដែល Admin បង្កើតក្នុង «គ្រប់គ្រងគណនី VIP»
-# =====================================================================
-from html import escape as _esc
-
-_AUTH_SETUP_HELP = """# Streamlit Cloud → Settings → Secrets
-# (ដាក់នៅខាងលើបំផុត មុនបន្ទាត់ [section] ណាមួយ)
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "ដាក់ពាក្យសម្ងាត់វែងៗ យ៉ាងតិច ១២ តួ"
-SUPABASE_URL = "https://xxxx.supabase.co"
-SUPABASE_SERVICE_ROLE_KEY = "xxxx"
-"""
-
-_LOGIN_CSS = """<style>
-.st-key-kv_login{max-width:460px;margin:3vh auto 0;padding:30px 24px 22px;border-radius:26px;
-background:linear-gradient(165deg,rgba(26,36,92,.97),rgba(11,16,48,.97));
-border:1px solid rgba(130,150,255,.38);box-shadow:0 20px 60px rgba(0,0,0,.5);}
-.st-key-kv_login .kv-ic{width:68px;height:68px;margin:0 auto 16px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:34px;
-background:linear-gradient(135deg,#FF2DAA,#7B5CFF 60%,#19B7FF);box-shadow:0 10px 28px rgba(123,92,255,.45);}
-.st-key-kv_login .kv-t{margin:0 0 6px;text-align:center;font-size:24px;font-weight:800;color:#FFFFFF!important;line-height:1.5;}
-.st-key-kv_login .kv-s{margin:0 0 16px;text-align:center;font-size:15px;line-height:1.7;color:#B9C4EE!important;}
-.st-key-kv_login .kv-l{margin:0 0 20px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);}
-.st-key-kv_login .kv-l div{font-size:14px;line-height:1.95;color:#DCE3FF!important;}
-.st-key-kv_login .kv-f{margin-top:14px;text-align:center;font-size:12.5px;line-height:1.6;color:#8E9BCB!important;}
-.st-key-kv_login [data-testid="stForm"]{border:none!important;padding:0!important;}
-.st-key-kv_login button{width:100%;min-height:52px;border-radius:14px!important;font-weight:700;font-size:16px;}
-</style>"""
-
-_ACCOUNT_CSS = """<style>
-.st-key-kv_account{margin:2px 0 10px;padding:8px 12px;border-radius:16px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.14);}
-.st-key-kv_account [data-testid="stHorizontalBlock"]{flex-direction:row!important;flex-wrap:nowrap!important;align-items:center;gap:8px!important;}
-.st-key-kv_account [data-testid="stColumn"],.st-key-kv_account [data-testid="column"]{min-width:0!important;}
-.st-key-kv_account [data-testid="stColumn"]:last-child,.st-key-kv_account [data-testid="column"]:last-child{flex:0 0 auto!important;width:auto!important;}
-.st-key-kv_account .kv-u{display:flex;align-items:center;gap:10px;min-width:0;}
-.st-key-kv_account .kv-u img,.st-key-kv_account .kv-u .kv-av{width:36px;height:36px;border-radius:50%;flex:0 0 36px;object-fit:cover;}
-.st-key-kv_account .kv-av{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#FF2DAA,#7B5CFF);color:#fff;font-weight:800;}
-.st-key-kv_account .kv-n{font-weight:700;font-size:14px;color:#FFFFFF!important;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.st-key-kv_account .kv-m{font-size:12px;color:#B9C4EE!important;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-.st-key-kv_account .kv-t2{min-width:0;}
-.st-key-kv_account button{min-height:38px;padding:0 14px;border-radius:12px;}
-</style>"""
-
-
-def _login_screen(icon, title, sub, items=None):
-    """បង្ហាញកាតចូលប្រើតាម theme ងងឹត ហើយត្រឡប់ container ដើម្បីដាក់ form ក្នុងកាត។"""
-    st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
-    box = st.container(key="kv_login")
-    with box:
-        html = f'<div class="kv-ic">{icon}</div><div class="kv-t">{title}</div><div class="kv-s">{sub}</div>'
-        if items:
-            html += '<div class="kv-l">' + "".join(f"<div>{x}</div>" for x in items) + "</div>"
-        st.markdown(html, unsafe_allow_html=True)
-    return box
-
-
-def _admin_creds():
-    """Username/Password របស់ Admin ពី Secrets (មិនដាក់ក្នុង code)។"""
-    return (str(get_secret("ADMIN_USERNAME", "") or "").strip(),
-            str(get_secret("ADMIN_PASSWORD", "") or ""))
-
-
-def _is_admin_session():
-    return st.session_state.get("_auth_role") == "admin"
-
-
-def _is_logged_in():
-    return st.session_state.get("_auth_role") in ("admin", "vip")
-
-
-_LOGIN_LS_HTML = """<!doctype html><html><body><script>
-(function () {
-  var KEY = "kvai_login_v1", lastNonce = null, sent = false;
-  function send(type, data) {
-    window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
-  }
-  function readStore() { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
-  window.addEventListener("message", function (ev) {
-    var d = ev.data;
-    if (!d || d.type !== "streamlit:render") return;
-    var a = d.args || {};
-    if (a.nonce !== undefined && a.nonce !== lastNonce) {
-      lastNonce = a.nonce;
-      if (a.save !== null && a.save !== undefined) {
-        try {
-          if (a.save === "") localStorage.removeItem(KEY); else localStorage.setItem(KEY, a.save);
-        } catch (e) {}
-      }
-    }
-    if (!sent) {
-      sent = true;
-      send("streamlit:setComponentValue", {value: {data: readStore()}, dataType: "json"});
-    }
-  });
-  send("streamlit:componentReady", {apiVersion: 1});
-  send("streamlit:setFrameHeight", {height: 0});
-})();
-</script></body></html>"""
-
-
-@st.cache_resource(show_spinner=False)
-def _login_component():
-    folder = os.path.join(tempfile.gettempdir(), "kvai_login_component")
-    os.makedirs(folder, exist_ok=True)
-    with open(os.path.join(folder, "index.html"), "w", encoding="utf-8") as f:
-        f.write(_LOGIN_LS_HTML)
-    return components.declare_component("kvai_login_storage", path=folder)
-
-
-def _auth_ls():
-    """សរសេរ/អាន token ចូលក្នុង localStorage របស់ Browser (ដើម្បីមិនបាច់ចូលម្តងទៀត)។"""
-    try:
-        return _login_component()(save=st.session_state.get("_auth_ls_payload"),
-                                  nonce=st.session_state.get("_auth_ls_nonce", 0),
-                                  default=None, key="kv_login_ls")
-    except Exception:
-        return None
-
-
-def _auth_secret():
-    _adm_p = _admin_creds()[1]
-    _, _sb_key = _hg_supabase_config()
-    base = str(get_secret("LOGIN_SECRET", "") or "") or (_adm_p + "|" + _sb_key)
-    if not base.strip("|"):
-        return b""
-    return hashlib.sha256(("kvai-login|" + base).encode("utf-8")).digest()
-
-
-def _auth_make_token(role, username):
-    sec = _auth_secret()
-    if not sec:
-        return ""
-    body = base64.urlsafe_b64encode(json.dumps(
-        {"r": role, "u": username, "e": int(time.time()) + 365 * 86400}).encode("utf-8")).decode().rstrip("=")
-    return body + "." + hmac.new(sec, body.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def _auth_read_token(token):
-    try:
-        body, sig = str(token).split(".", 1)
-        sec = _auth_secret()
-        if not sec or not hmac.compare_digest(sig, hmac.new(sec, body.encode("utf-8"), hashlib.sha256).hexdigest()):
-            return None
-        d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
-        return d if int(d.get("e", 0)) > time.time() else None
-    except Exception:
-        return None
-
-
-def _auth_restore(token):
-    """ចូលវិញដោយស្វ័យប្រវត្តិពី token ដែលបានរក្សាទុក។"""
-    d = _auth_read_token(token) if token else None
-    if not d:
-        return False
-    if d.get("r") == "admin":
-        _adm_u = _admin_creds()[0]
-        if _adm_u and d.get("u") == _adm_u:
-            _auth_sign_in("admin", _adm_u)
-            return True
-    elif d.get("r") == "vip":
+    _vip_name = str(st.session_state.get("_hg_vip_username", "")).strip()
+    if _vip_name:
         try:
-            row = _hg_get_vip_user(d.get("u", ""))
-        except Exception:
+            _vip_row = _hg_get_vip_user(_vip_name)
+            if _hg_vip_is_valid(_vip_row):
+                st.caption(f"🔐 VIP: {_vip_name} · ផុតកំណត់ {_vip_row.get('expires_at','')[:10]}")
+                if st.button("ចាកចេញពី VIP", key="hg_vip_logout"):
+                    st.session_state.pop("_hg_vip_username", None)
+                    st.rerun()
+                return True
+            st.session_state.pop("_hg_vip_username", None)
+            st.warning("គណនី VIP នេះបានផុតកំណត់ ឬត្រូវបានបិទ។")
+        except Exception as _err:
+            st.error(f"មិនអាចផ្ទៀងផ្ទាត់ VIP បាន៖ {_err}")
             return False
-        if _hg_vip_is_valid(row):
-            _auth_sign_in("vip", row["username"], str(row.get("expires_at", ""))[:10])
-            return True
-    return False
 
-
-def _auth_sign_in(role, username, expires=""):
-    st.session_state["_auth_role"] = role
-    st.session_state["_auth_user"] = username
-    st.session_state["_auth_expires"] = expires
-    st.session_state["_auth_checked_at"] = time.time()
-    st.session_state.pop("_auth_logged_out", None)
-    st.session_state["_auth_ls_payload"] = _auth_make_token(role, username)
-    st.session_state["_auth_ls_nonce"] = st.session_state.get("_auth_ls_nonce", 0) + 1
-
-
-def _auth_sign_out():
-    for _k in ("_auth_role", "_auth_user", "_auth_expires", "_auth_checked_at"):
-        st.session_state.pop(_k, None)
-    st.session_state["_auth_logged_out"] = True
-    st.session_state["_auth_ls_payload"] = ""   # លុប token ក្នុង Browser
-    st.session_state["_auth_ls_nonce"] = st.session_state.get("_auth_ls_nonce", 0) + 1
-
-
-def _auth_check(username, password):
-    """ត្រឡប់ (role, username, expires) បើត្រូវ ឬ (None, "", សារកំហុស) បើខុស។"""
-    u = str(username or "").strip()
-    p = str(password or "")
-    if not u or not p:
-        return None, "", "សូមបញ្ចូល Username និង Password។"
-    adm_u, adm_p = _admin_creds()
-    if (adm_u and adm_p
-            and hmac.compare_digest(u.lower().encode("utf-8"), adm_u.lower().encode("utf-8"))
-            and hmac.compare_digest(p.encode("utf-8"), adm_p.encode("utf-8"))):
-        return "admin", adm_u, ""
-    try:
-        row = _hg_get_vip_user(u)
-    except Exception:
-        return None, "", "មិនអាចផ្ទៀងផ្ទាត់គណនីបាន។ សូមព្យាយាមម្តងទៀត ឬទាក់ទង Admin។"
-    if _hg_vip_is_valid(row) and _hg_password_verify(p, row.get("password_hash", "")):
-        return "vip", row["username"], str(row.get("expires_at", ""))[:10]
-    return None, "", "Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។"
-
-
-def _auth_revalidate():
-    """គណនី VIP៖ ពិនិត្យម្តងទៀតរៀងរាល់ ៥ នាទី (ក្រែងផុតកំណត់ ឬ Admin បិទគណនី)។"""
-    if st.session_state.get("_auth_role") != "vip":
-        return True
-    if time.time() - float(st.session_state.get("_auth_checked_at", 0) or 0) < 300:
-        return True
-    try:
-        row = _hg_get_vip_user(st.session_state.get("_auth_user", ""))
-    except Exception:
-        return True  # បណ្តាញមានបញ្ហាបណ្តោះអាសន្ន — កុំទាញអ្នកប្រើចេញ
-    if _hg_vip_is_valid(row):
-        st.session_state["_auth_checked_at"] = time.time()
-        st.session_state["_auth_expires"] = str(row.get("expires_at", ""))[:10]
-        return True
-    return False
-
-
-def _render_account_bar():
-    _name = str(st.session_state.get("_auth_user", ""))
-    _exp = str(st.session_state.get("_auth_expires", ""))
-    if _is_admin_session():
-        _meta = "👑 Admin"
-    else:
-        _meta = f"VIP · ផុតកំណត់ {_exp}" if _exp else "VIP"
-    st.markdown(_ACCOUNT_CSS, unsafe_allow_html=True)
-    with st.container(key="kv_account"):
-        _a, _b = st.columns([6, 2])
-        with _a:
-            st.markdown(
-                f'<div class="kv-u"><div class="kv-av">{_esc(_name[:1].upper())}</div>'
-                f'<div class="kv-t2"><div class="kv-n">{_esc(_name)}</div>'
-                f'<div class="kv-m">{_esc(_meta)}</div></div></div>',
-                unsafe_allow_html=True,
-            )
-        with _b:
-            st.button("ចាកចេញ", key="kv_logout_btn", on_click=_auth_sign_out)
-
-
-def auth_bootstrap():
-    """មិនបិទកម្មវិធីទេ — គ្រាន់តែស្តារការចូលដែលបានចងចាំ និងពិនិត្យគណនីផុតកំណត់។"""
-    _ls_res = _auth_ls()
-    if _is_logged_in():
-        if not _auth_revalidate():
-            _auth_sign_out()
-            st.warning("គណនីរបស់អ្នកបានផុតកំណត់ ឬត្រូវបានបិទ។ សូមទាក់ទង Admin។")
-    elif (_ls_res and not st.session_state.get("_auth_logged_out")
-          and not st.session_state.get("_auth_restore_tried")):
-        st.session_state["_auth_restore_tried"] = True
-        _raw = (_ls_res.get("data") if isinstance(_ls_res, dict) else "") or ""
-        if _auth_restore(_raw):
-            st.rerun()
-
-
-def _hg_login_form():
-    """ទម្រង់ចូល Admin/VIP — បង្ហាញតែក្នុងផ្ទាំង Hongguo (កម្មវិធីផ្សេងទៀតប្រើបានដោយមិនបាច់ចូល)។"""
-    _adm_u, _adm_p = _admin_creds()
-    _sb_url, _sb_key = _hg_supabase_config()
-    if not (_adm_u and _adm_p) and not (_sb_url and _sb_key):
-        st.warning("មុខងារ VIP មិនទាន់ត្រូវបានកំណត់ដោយ Admin ទេ។")
-        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
-            st.code(_AUTH_SETUP_HELP, language="toml")
-        return
-    box = _login_screen(
-        "🔒", "Hongguo VIP",
-        "បញ្ចូល Username និង Password ដែល Admin ផ្តល់ឱ្យ",
-        ["🔒 គណនីត្រូវបានបង្កើតដោយ Admin ប៉ុណ្ណោះ"],
-    )
-    with box:
-        with st.form("kv_login_form"):
-            _u = st.text_input("Username", key="kv_login_user")
-            _p = st.text_input("Password", type="password", key="kv_login_pass")
-            _go = st.form_submit_button("ចូលប្រើ", type="primary", use_container_width=True)
-        if _go:
-            _role, _name, _info = _auth_check(_u, _p)
-            if _role:
-                _auth_sign_in(_role, _name, _info if _role == "vip" else "")
+    st.markdown("### 🔒 Hongguo VIP")
+    st.info("មុខងារ Hongguo ទាំងអស់សម្រាប់សមាជិក VIP ប៉ុណ្ណោះ។ សូមបញ្ចូល Username និង Password ដែល Admin ផ្ដល់ឱ្យ។")
+    with st.form("hg_vip_login_form"):
+        _u = st.text_input("Username", key="hg_vip_login_username")
+        _p = st.text_input("Password", type="password", key="hg_vip_login_password")
+        _go = st.form_submit_button("ចូលប្រើ Hongguo VIP", use_container_width=True)
+    if _go:
+        try:
+            _row = _hg_get_vip_user(_u)
+            if _hg_vip_is_valid(_row) and _hg_password_verify(_p, _row.get("password_hash", "")):
+                st.session_state["_hg_vip_username"] = _row["username"]
                 st.rerun()
-            time.sleep(1)
-            st.error(_info)
-        st.markdown('<div class="kv-f">មិនទាន់មានគណនី? សូមទាក់ទង Admin ដើម្បីទទួលគណនី</div>',
-                    unsafe_allow_html=True)
+            st.error("Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។")
+        except Exception as _err:
+            st.error(f"មិនអាចចូល VIP បាន៖ {_err}")
+    return False
 
-
-GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
-GROQ_KEY = collect_api_keys("GROQ_API_KEY")
-
-render_header()
-auth_bootstrap()
-# Mobile-first interface: landscape/fullscreen rotation control intentionally removed.
-ls_sync()
-
-if not GROQ_KEY and not oai_enabled() and not has_user_keys():
-    # Keep the missing-key notice compact so it does not push the dashboard below the fold.
-    st.caption("⚠️ មិនទាន់មាន API Key — បញ្ចូលនៅផ្ទាំង «🌐 បកប្រែ» ដើម្បីចាប់ផ្ដើមប្រើ AI។")
-
-ENGINE_FREE = "⭐ Groq សម្គាល់សំឡេង + AI API បកប្រែ (Fallback ស្វ័យប្រវត្តិ)"
-
-current_job = st.session_state.get("job")
-busy = bool(current_job and current_job.running())
-
-voice_label = list(TTS_VOICES.keys())[0]
-# មុខងារដែលបើកដោយស្វ័យប្រវត្តិជានិច្ច (គ្មានប៊ូតុងបិទបើក)
-sub_on = True
-dub_on = True
-emotion_on = True
-keep_bg = True
-auto_gender = True
-srt_on = False
-narrate_on = False
-review_on = False
-voice_match = False
-emotion = False
-clone_on = False
-timbre = False
-timbre_file = None
-dub_offset = 0.0
-tight_sync = False
-
-# ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
-
-tab_drama, tab_tiktok, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["🍎 Hongguo", "🎵 TikTok Short Drama", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
-)
-
-# ============================ Hongguo Drama → Khmer Auto Caption ============================
-# API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
-def _hg_norm(key):
-    return re.sub(r"[^A-Z0-9]", "", str(key).upper())
-
-
-def _hg_walk_secrets():
-    """យក (key, value) ទាំងអស់ពី st.secrets រួមទាំង [section] ខាងក្នុង។"""
-    out = []
-
-    def _walk(obj, depth=0):
-        if depth > 4:
-            return
-        try:
-            items = list(obj.items())
-        except Exception:
-            return
-        for k, v in items:
-            if hasattr(v, "items"):
-                _walk(v, depth + 1)
-            else:
-                out.append((str(k), v))
-
-    try:
-        _walk(st.secrets)
-    except Exception:
-        pass
-    return out
-
-
-_HG_ID_KEYS = {"XIAOYINGAPPID", "APPID", "HONGGUOAPPID", "XIAOYINGAPIAPPID", "XIAOYINGID"}
-_HG_SECRET_KEYS = {"XIAOYINGAPPSECRET", "APPSECRET", "HONGGUOAPPSECRET", "XIAOYINGAPIAPPSECRET", "XIAOYINGSECRET"}
-
-
-def _hg_secret(*names):
-    """អាន Hongguo credentials ពី Streamlit Secrets / Environment។
-    មិនប្រកាន់ អក្សរធំតូច, _ ឬ - ហើយរកក្នុង [section] ដែរ។
-    """
-    wanted = _HG_ID_KEYS if any(_hg_norm(n) in _HG_ID_KEYS for n in names) else _HG_SECRET_KEYS
-    # 1) ឈ្មោះដែលបានកំណត់ច្បាស់លាស់ (top-level)
-    for name in names:
-        try:
-            value = st.secrets.get(name, "")
-        except Exception:
-            value = ""
-        if value and not hasattr(value, "items"):
-            return str(value).strip().strip('"\'').strip()
-        value = os.environ.get(name, "")
-        if value:
-            return str(value).strip().strip('"\'').strip()
-    # 2) ឈ្មោះស្រដៀងគ្នា ឬនៅក្នុង [section]
-    for k, v in _hg_walk_secrets():
-        if _hg_norm(k) in wanted and v:
-            return str(v).strip().strip('"\'').strip()
-    for k, v in os.environ.items():
-        if _hg_norm(k) in wanted and v:
-            return str(v).strip().strip('"\'').strip()
-    return ""
-
-
-def _hg_secret_key_names():
-    """ឈ្មោះ key ក្នុង Secrets (មិនមានតម្លៃ) សម្រាប់ជួយ Admin រកបញ្ហា។"""
-    return sorted({k for k, _ in _hg_walk_secrets()})
-
-
-_HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
-_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "APPSECRET")
-_HG_API_BASE = "https://www.xiaoyingapi.com"
-_HG_API_PREFIX = "/api/dramas/hongguo"
-
-def _hg_get(endpoint, params=None, timeout=45):
-    if not _HG_APP_ID or not _HG_APP_SECRET:
-        raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
-    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}"  # XiaoYingAPI route: no trailing slash
-    signed = dict(params or {})
-    signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
-    pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
-    query = "&".join(f"{k}={v}" for k, v in pairs)
-    raw = "GET\n" + path + "\n" + query
-    signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
-    response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
-                            headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
-    if response.status_code == 404:
-        raise RuntimeError(
-            f"XiaoYingAPI HTTP 404: មិនរកឃើញ API path {path} ទេ។ "
-            "សូមពិនិត្យ endpoint ឬ API version។"
-        )
-    if not response.ok:
-        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {response.text[:300]}")
-    data = response.json()
-    if not isinstance(data, dict) or data.get("code") != 10000:
-        raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
-    return data.get("data") or {}
-
-@st.cache_data(ttl=240, show_spinner=False)
-def _hg_rank(page=1):
-    d = _hg_get("rank", {"type": "hot-drama", "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
-
-@st.cache_data(ttl=600, show_spinner=False)
-def _hg_categories():
-    """ទាញ category tree ពិតពី XiaoYingAPI (ប្រើ slug មិនប្រើឈ្មោះចិនជាតម្លៃ API)។"""
-    d = _hg_get("categories", {})
-    if isinstance(d, list):
-        return d
-    if isinstance(d, dict):
-        return d.get("categories") or d.get("results") or d.get("list") or []
-    return []
-
-
-@st.cache_data(ttl=180, show_spinner=False)
-def _hg_detail(series_id):
-    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី Hongguo API។"""
-    d = _hg_get("detail", {"series_id": str(series_id)})
-    if not isinstance(d, dict):
-        return {}
-    # API versions may wrap detail data one level deeper.
-    if isinstance(d.get("detail"), dict):
-        d = d["detail"]
-    elif isinstance(d.get("result"), dict):
-        d = d["result"]
-    episodes = d.get("episodes") or d.get("episode_list") or d.get("list") or []
-    normalized = []
-    for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
-        if not isinstance(ep, dict):
-            continue
-        ep_no = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or (i + 1)
-        try:
-            ep_no = int(ep_no)
-        except (TypeError, ValueError):
-            ep_no = i + 1
-        playable = ep.get("playable")
-        if playable is None:
-            playable = bool(ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("token"))
-        normalized.append({**ep, "ep": ep_no, "playable": bool(playable)})
-    d["episodes"] = normalized
-    return d
-
-
-# ឈ្មោះប្រភេទចិន -> ភាសាខ្មែរ (តម្លៃ slug សម្រាប់ API មិនត្រូវបានប្ដូរ)
-_HG_CATEGORY_KH = {'真人剧': 'រឿងសម្ដែងពិត', '爱情': 'ស្នេហា', '年代': 'រឿងសម័យកាល', '逆袭': 'តស៊ូត្រឡប់មកជោគជ័យ', '传奇': 'រឿងវីរភាព', '成长': 'ការរីកចម្រើន', '家庭': 'គ្រួសារ', '都市': 'ជីវិតទីក្រុង', '古装': 'សម័យបុរាណ', '现代': 'សម័យទំនើប', '悬疑': 'អាថ៌កំបាំង', '喜剧': 'កំប្លែង', '动作': 'ក្បាច់គុន និងសកម្មភាព', '战争': 'សង្គ្រាម', '历史': 'ប្រវត្តិសាស្ត្រ', '奇幻': 'រវើរវាយ', '玄幻': 'រឿងអច្ឆរិយៈ', '仙侠': 'ទេពអប្សរ និងអ្នក仙', '武侠': 'ក្បាច់គុន', '青春': 'យុវវ័យ', '校园': 'សាលារៀន', '职场': 'ជីវិតការងារ', '甜宠': 'ស្នេហាផ្អែមល្ហែម', '虐恋': 'ស្នេហាសោកសៅ', '复仇': 'ការសងសឹក', '豪门': 'គ្រួសារអ្នកមាន', '总裁': 'ប្រធានក្រុមហ៊ុន', '穿越': 'ឆ្លងពេលវេលា', '重生': 'កើតជាថ្មី', '乡村': 'ជីវិតជនបទ', '农村': 'ជីវិតជនបទ', '亲情': 'សេចក្ដីស្រឡាញ់ក្នុងគ្រួសារ', '友情': 'មិត្តភាព', '现实': 'ជីវិតពិត', '励志': 'លើកទឹកចិត្ត', '惊悚': 'រន្ធត់', '恐怖': 'ភ័យរន្ធត់', '犯罪': 'ឧក្រិដ្ឋកម្ម', '探案': 'ស៊ើបអង្កេត', '科幻': 'វិទ្យាសាស្ត្រប្រឌិត', '萌宝': 'កូនតូចគួរឱ្យស្រឡាញ់', '神医': 'គ្រូពេទ្យអស្ចារ្យ', '战神': 'អ្នកចម្បាំងខ្លាំង', '赘婿': 'កូនប្រសារប្រុស', '女强': 'នារីខ្លាំង', '男频': 'សម្រាប់ទស្សនិកជនប្រុស', '女频': 'សម្រាប់ទស្សនិកជនស្រី', '短剧': 'រឿងភាគខ្លី', '漫剧': 'រឿងគំនូរជីវចល', '漫画': 'រឿងគំនូរជីវចល', '动画': 'គំនូរជីវចល', '全部': 'ទាំងអស់'}
-
-
-def _hg_category_label(name):
-    raw = str(name or "").strip()
-    return _HG_CATEGORY_KH.get(raw, raw)
-
-
-def _hg_flat_categories(tree):
-    """បម្លែង category tree ទៅជាជម្រើស UI ដែលរក្សា slug ត្រឹមត្រូវ។"""
-    out = {}
-    for parent in tree or []:
-        if not isinstance(parent, dict):
-            continue
-        pslug = str(parent.get("slug") or parent.get("category") or parent.get("category_id") or parent.get("id") or "").strip()
-        pname = str(parent.get("name") or parent.get("title") or parent.get("category_name") or pslug).strip()
-        if pslug and pname:
-            out[_hg_category_label(pname)] = pslug
-        children = parent.get("children") or []
-        if isinstance(children, list):
-            for child in children:
-                if not isinstance(child, dict):
-                    continue
-                cslug = str(child.get("slug") or child.get("category") or child.get("category_id") or child.get("id") or "").strip()
-                cname = str(child.get("name") or child.get("title") or child.get("category_name") or cslug).strip()
-                if cslug and cname:
-                    # បង្ហាញតែឈ្មោះប្រភេទរងជាខ្មែរ ដើម្បីកុំឱ្យអក្សរវែងពេកក្នុង Dropdown លើទូរស័ព្ទ។
-                    # បើឈ្មោះដូចគ្នា ទើបបន្ថែមឈ្មោះមេជាអក្សរខ្លីសម្រាប់បំបែក។
-                    child_label = _hg_category_label(cname)
-                    if child_label in out:
-                        child_label = f"{child_label} · {_hg_category_label(pname)}"
-                    out[child_label] = cslug
-    return out
-
-
-def _hg_error_khmer(error):
-    """បកស្រាយ error សំខាន់ៗជាខ្មែរ ដើម្បីអ្នកប្រើដឹងវិធីដោះស្រាយ។"""
-    msg = str(error or "")
-    if "20003" in msg or "参数值非法" in msg or "category" in msg and "合法分类" in msg:
-        return "ប្រភេទរឿងដែល API ទទួលបានមិនត្រឹមត្រូវ។ កម្មវិធីត្រូវប្រើ Category slug ពីបញ្ជីប្រភេទ Hongguo មិនមែនឈ្មោះចិនទេ។ សូមចុច «ផ្ទុកប្រភេទឡើងវិញ» ហើយជ្រើសប្រភេទម្ដងទៀត។"
-    if "20002" in msg or "参数缺失" in msg:
-        return "API ខ្វះប៉ារ៉ាម៉ែត្រចាំបាច់។ សូមជ្រើសប្រភេទរឿងម្ដងទៀត។"
-    return msg
-
-@st.cache_data(ttl=240, show_spinner=False)
-def _hg_category_list(category, page=1):
-    d = _hg_get("list", {"category": str(category), "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
-
-@st.cache_data(ttl=240, show_spinner=False)
-def _hg_search(keyword, page=1):
-    d = _hg_get("search", {"keyword": keyword, "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
-
-
-def _hg_extract_series_id(value):
-    """ទទួលយក URL លម្អិត Hongguo ឬ series_id ដោយផ្ទាល់។"""
-    value = str(value or "").strip()
-    if not value:
-        return ""
-    # URL format: https://hongguoduanju.com/detail?series_id=123
-    try:
-        parsed = urllib.parse.urlparse(value)
-        query = urllib.parse.parse_qs(parsed.query)
-        ids = query.get("series_id") or query.get("seriesId") or []
-        if ids and str(ids[0]).strip().isdigit():
-            return str(ids[0]).strip()
-        match = re.search(r"/detail/(\d+)", parsed.path)
-        if match:
-            return match.group(1)
-    except Exception:
-        pass
-    # User may paste only the numeric series_id.
-    if value.isdigit():
-        return value
-    return ""
 
 with tab_drama:
     _hg_access = _hg_vip_gate()
@@ -7721,12 +7502,6 @@ with tab_drama:
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
         if not _HG_APP_ID or not _HG_APP_SECRET:
             st.warning("មិនទាន់រកឃើញ Hongguo APPID/APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin ពិនិត្យ Secrets របស់កម្មវិធី។ អ្នកប្រើមិនចាំបាច់បញ្ចូល API នៅផ្ទាំងផ្សេងទៀតទេ។")
-            if _is_admin_session():
-                with st.expander("🔧 Admin: មើលមូលហេតុ (មិនបង្ហាញតម្លៃ Secret)"):
-                    st.write("APPID រកឃើញ:", "✅" if _HG_APP_ID else "❌", " · APPSECRET រកឃើញ:", "✅" if _HG_APP_SECRET else "❌")
-                    _names = _hg_secret_key_names()
-                    st.write("ឈ្មោះ key ដែលកម្មវិធីឃើញក្នុង Secrets:", ", ".join(_names) if _names else "(គ្មានសោះ)")
-                    st.caption("ឈ្មោះដែលទទួល៖ XIAOYING_APPID / APPID / HONGGUO_APPID និង XIAOYING_APPSECRET / APPSECRET / HONGGUO_APPSECRET។ ត្រូវដាក់នៅផ្នែកខាងលើបំផុតនៃ Secrets មុនបន្ទាត់ [section] ណាមួយ។")
         _hg_q1, _hg_q2 = st.columns([3, 1])
         with _hg_q1:
             _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
@@ -8042,85 +7817,13 @@ with tab_drama:
 
 
 # ============================ TikTok Short Drama ============================
-# Episode navigator (prev/next), in-app player (when the video can be fetched),
-# and multi-episode ZIP download. TikTok has no public catalog API, so the series
-# is opened from one episode URL and the other episodes are built from series ID + number.
-def _tt_ep_url(series_id, ep):
-    return f"https://www.tiktok.com/shortdrama/episode/{series_id}/{int(ep)}?is_from_webapp=1&sender_device=pc"
-
-
-def _tt_resolve(url):
-    """បំប្លែងតំណខ្លី (vt/vm.tiktok.com, tiktok.com/t/) ទៅជា URL ពេញ ដើម្បីរក series ID និងលេខភាគ។"""
-    url = (url or "").strip()
-    if re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", url):
-        return url
-    if not re.match(r"https?://", url):
-        return url
-    try:
-        _r = requests.get(
-            url, allow_redirects=True, timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"},
-        )
-        _cands = [h.headers.get("Location", "") for h in _r.history] + [h.url for h in _r.history] + [_r.url]
-        for _c in _cands:
-            if re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", _c or ""):
-                return _c
-        _m = re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", _r.text[:2_000_000])
-        if _m:
-            return "https://www." + _m.group(0)
-        return _r.url
-    except Exception:
-        return url
-
-
-def _tt_free_media(res):
-    """លុបឯកសារវីដេអូបណ្ដោះអាសន្នរបស់ភាគមុន។"""
-    _old = (res or {}).get("path") or ""
-    if _old and os.path.isfile(_old):
-        shutil.rmtree(os.path.dirname(_old), ignore_errors=True)
-    if res is not None:
-        res["path"] = ""
-        res["fetch_err"] = ""
-
-
-def _tt_go_ep(delta):
-    """Callback ប៊ូតុង ភាគមុន/បន្ទាប់ (ដំណើរការមុន rerun)។"""
-    _res = st.session_state.get("_tiktok_drama_result")
-    if not _res:
-        return
-    _total = int(st.session_state.get("tiktok_drama_total", 60) or 60)
-    _cur = int(st.session_state.get("tiktok_drama_episode_number", _res.get("episode", 1)) or 1)
-    _new = max(1, min(_total, _cur + delta))
-    _tt_free_media(_res)
-    _res["episode"] = _new
-    _res["url"] = _tt_ep_url(_res["series_id"], _new)
-    st.session_state["tiktok_drama_episode_number"] = _new
-    st.session_state["_tiktok_drama_result"] = _res
-    if st.session_state.get("tiktok_drama_auto", True):
-        st.session_state["_tt_want_fetch"] = True
-
-
-def _tt_apply_ep_input():
-    """Callback ពេលវាយលេខភាគដោយផ្ទាល់។"""
-    _res = st.session_state.get("_tiktok_drama_result")
-    if not _res:
-        return
-    _new = int(st.session_state.get("tiktok_drama_episode_number", 1) or 1)
-    _tt_free_media(_res)
-    _res["episode"] = _new
-    _res["url"] = _tt_ep_url(_res["series_id"], _new)
-    st.session_state["_tiktok_drama_result"] = _res
-    if st.session_state.get("tiktok_drama_auto", True):
-        st.session_state["_tt_want_fetch"] = True
-
-
+# In-app episode catalog/player. Short-drama URLs are a distinct TikTok format;
+# preserve the original URL and use an embedded viewer when direct media extraction is unavailable.
 with tab_tiktok:
-    _tt_access = _hg_has_access()
-    if not _tt_access:
-        st.info("🔒 ផ្ទាំងនេះសម្រាប់សមាជិក VIP។ សូមចូលគណនី VIP នៅផ្ទាំង 🍎 Hongguo មុន រួចត្រឡប់មកទីនេះ។")
+    _tt_access = _hg_vip_gate(show_admin_panel=False)
     if _tt_access:
         st.markdown("### 🎵 TikTok Short Drama")
-        st.caption("បិទភ្ជាប់ Episode URL មួយ រួចប្រើប៊ូតុង ⏮ ភាគមុន / ភាគបន្ទាប់ ⏭ ដើម្បីប្តូរភាគ ដូច Hongguo។")
+        st.caption("ស្វែងរករឿងដោយបិទភ្ជាប់ Episode URL។ Poster/ព័ត៌មានរឿងនឹងត្រូវបានទាញពីទំព័រសាធារណៈ ប្រសិនបើ TikTok អនុញ្ញាត។")
 
         _tt_default_url = "https://www.tiktok.com/shortdrama/episode/7699896495729808392/2?is_from_webapp=1&sender_device=pc"
         with st.container(border=True):
@@ -8136,18 +7839,13 @@ with tab_tiktok:
                 st.write("")
                 _tt_search_click = st.button("🔎 បើករឿង", key="tiktok_drama_search", type="primary", use_container_width=True)
 
-        _tt_match = None
+        _tt_match = re.search(r"tiktok\.com/shortdrama/episode/(\d+)/(\d+)", (_tt_query or "").strip())
         if _tt_search_click:
-            with st.spinner("កំពុងពិនិត្យតំណ..."):
-                _tt_resolved = _tt_resolve(_tt_query)
-            _tt_match = re.search(r"tiktok\.com/shortdrama/episode/(\d+)/(\d+)", _tt_resolved or "")
             if not _tt_match:
-                st.warning("រកមិនឃើញ series ID និងលេខភាគក្នុងតំណនេះទេ។ សូមបើកភាគក្នុង TikTok រួចចម្លង URL ពេញ (tiktok.com/shortdrama/episode/…/…)។")
-                if _tt_resolved and _tt_resolved != (_tt_query or "").strip():
-                    st.caption("តំណដែលបានបើក៖ " + _tt_resolved[:300])
+                st.warning("សូមបញ្ចូល TikTok Short Drama episode URL ដែលមាន series ID និង episode number។")
             else:
                 _tt_series_id, _tt_ep = _tt_match.group(1), int(_tt_match.group(2))
-                _tt_clean_url = _tt_ep_url(_tt_series_id, _tt_ep)
+                _tt_clean_url = f"https://www.tiktok.com/shortdrama/episode/{_tt_series_id}/{_tt_ep}?is_from_webapp=1&sender_device=pc"
                 _tt_meta = {"title": f"TikTok Short Drama · {_tt_series_id}", "poster": "", "description": ""}
                 try:
                     _tt_page = requests.get(
@@ -8165,12 +7863,10 @@ with tab_tiktok:
                                 _tt_meta[_tt_key] = requests.utils.unquote(_tt_m.group(1).replace("&amp;", "&"))
                 except Exception:
                     pass
-                _tt_free_media(st.session_state.get("_tiktok_drama_result"))
-                st.session_state["tiktok_drama_episode_number"] = _tt_ep
                 st.session_state["_tiktok_drama_result"] = {
                     "url": _tt_clean_url, "series_id": _tt_series_id, "episode": _tt_ep,
                     "title": _tt_meta["title"], "poster_url": _tt_meta["poster"],
-                    "description": _tt_meta["description"], "path": "", "fetch_err": "",
+                    "description": _tt_meta["description"], "path": "",
                 }
                 st.rerun()
 
@@ -8189,56 +7885,27 @@ with tab_tiktok:
                     )
                 if _tt_ready.get("description"):
                     st.caption(_tt_ready["description"])
-
-                # ---------- Episode navigator ----------
-                _tt_total = st.number_input(
-                    "ចំនួនភាគសរុប (សម្រាប់កំណត់ដែនប៊ូតុង)", min_value=1, max_value=9999,
-                    value=int(st.session_state.get("tiktok_drama_total", 60)), step=1, key="tiktok_drama_total",
-                )
-                _tt_cur_ep = int(st.session_state.get("tiktok_drama_episode_number", _tt_ready.get("episode", 1)))
-                _nav_prev, _nav_num, _nav_next = st.columns([1, 1, 1], gap="small")
-                with _nav_prev:
+                _tt_ep_col, _tt_open_col = st.columns([1, 2])
+                with _tt_ep_col:
+                    _tt_new_ep = st.number_input("ភាគ", min_value=1, max_value=9999, value=int(_tt_ready.get("episode", 1)), step=1, key="tiktok_drama_episode_number")
+                with _tt_open_col:
                     st.write("")
-                    st.button("⏮ ភាគមុន", key="tiktok_drama_prev", use_container_width=True,
-                              disabled=(_tt_cur_ep <= 1), on_click=_tt_go_ep, args=(-1,))
-                with _nav_num:
-                    st.number_input("ភាគ", min_value=1, max_value=9999, step=1,
-                                    key="tiktok_drama_episode_number", on_change=_tt_apply_ep_input)
-                with _nav_next:
-                    st.write("")
-                    st.button("ភាគបន្ទាប់ ⏭", key="tiktok_drama_next", use_container_width=True,
-                              disabled=(_tt_cur_ep >= int(_tt_total)), on_click=_tt_go_ep, args=(1,))
-                st.checkbox("ចាក់ស្វ័យប្រវត្តិពេលប្តូរភាគ (ព្យាយាមទាញវីដេអូភាគនោះ)", value=True, key="tiktok_drama_auto")
-                st.caption(f"កំពុងស្ថិតនៅ ភាគ {_tt_cur_ep} / {int(_tt_total)}")
-
-                # ---------- Fetch current episode ----------
-                _tt_do_fetch = bool(st.session_state.pop("_tt_want_fetch", False))
-                if st.button("▶️ ទាញ និងចាក់ភាគនេះ", key="tiktok_drama_play", type="primary", use_container_width=True, disabled=busy):
-                    _tt_do_fetch = True
-                if _tt_do_fetch:
-                    _tt_free_media(_tt_ready)
-                    _tt_ready["episode"] = _tt_cur_ep
-                    _tt_ready["url"] = _tt_ep_url(_tt_ready["series_id"], _tt_cur_ep)
-                    with st.spinner(f"កំពុងទាញភាគ {_tt_cur_ep}..."):
-                        _tt_res = _fetch_one(_tt_ready["url"])
-                    if _tt_res.get("ok") and _tt_res.get("path"):
-                        _tt_ready["path"] = _tt_res["path"]
-                        _tt_ready["fetch_err"] = ""
-                    else:
-                        _tt_ready["fetch_err"] = _tt_res.get("err") or "ទាញយកវីដេអូមិនបាន"
-                    st.session_state["_tiktok_drama_result"] = _tt_ready
+                    if st.button("▶️ មើលភាគនេះ", key="tiktok_drama_play", use_container_width=True):
+                        _tt_ready["episode"] = int(_tt_new_ep)
+                        _tt_ready["url"] = f"https://www.tiktok.com/shortdrama/episode/{_tt_ready['series_id']}/{int(_tt_new_ep)}?is_from_webapp=1&sender_device=pc"
+                        st.session_state["_tiktok_drama_result"] = _tt_ready
+                        st.rerun()
 
                 _tt_media_path = _tt_ready.get("path", "")
                 if _tt_media_path and os.path.isfile(_tt_media_path):
                     st.video(_tt_media_path)
                     with open(_tt_media_path, "rb") as _tt_file:
-                        dl_button("⬇️ ទាញយកភាគនេះ", _tt_file.read(), f"tiktok_drama_{_tt_ready.get('series_id','')}_ep_{_tt_ready.get('episode',1)}.mp4",
-                                  "video/mp4", key="tiktok_drama_download", use_container_width=True)
+                        st.download_button("⬇️ ទាញយកភាគនេះ", data=_tt_file.read(), file_name=f"tiktok_drama_ep_{_tt_ready.get('episode',1)}.mp4", mime="video/mp4", key="tiktok_drama_download", use_container_width=True)
                 else:
-                    if _tt_ready.get("fetch_err"):
-                        st.warning("ទាញវីដេអូភាគនេះមិនបាន។ ប្រហែល TikTok មិនអនុញ្ញាតទាញពី URL ប្រភេទ shortdrama នេះ។")
-                        with st.expander("មើលមូលហេតុ"):
-                            st.code(_tt_ready["fetch_err"])
+                    st.warning(
+                        "TikTok Short Drama មិនអាចចាក់ក្នុង WebView នេះបានទេ។ "
+                        "ត្រូវមាន Media URL ផ្ទាល់ (MP4/HLS) ដែលអ្នកមានសិទ្ធិប្រើ ដើម្បីចាក់ក្នុង Player។"
+                    )
                     _tt_direct_media = st.text_input(
                         "Media URL ផ្ទាល់ (MP4/M3U8) — ជាជម្រើស",
                         value=_tt_ready.get("media_url", ""),
@@ -8250,7 +7917,14 @@ with tab_tiktok:
                         st.session_state["_tiktok_drama_result"] = _tt_ready
                         st.video(_tt_direct_media.strip())
                     else:
-                        st.markdown("**តំណភាគ:** " + _tt_ready.get("url", ""))
+                        st.markdown(
+                            "**តំណរឿង:** " + _tt_ready.get("url", ""),
+                            help="នេះជាតំណ TikTok episode ដែលអ្នកបានបញ្ចូល។",
+                        )
+                        st.caption(
+                            "TikTok មិនផ្តល់ MP4 ឬ Poster តាម URL episode នេះក្នុងការទាញយកធម្មតាទេ។ "
+                            "ដើម្បីបង្ហាញ catalog ជាកាត Poster និងបើកភាគដោយផ្ទាល់ ត្រូវការប្រភព metadata/media ដែលអាចចូលប្រើបាន។"
+                        )
 
                 if st.button("✨ បញ្ជូន Link ទៅ Khmer Auto Caption", type="primary", key="tiktok_drama_to_caption", use_container_width=True):
                     st.session_state["mode_pick"] = "🔗 Link"
@@ -8258,74 +7932,11 @@ with tab_tiktok:
                     st.session_state["link_searched"] = [_tt_ready["url"]]
                     st.session_state["_hg_imported_caption_notice"] = True
                     st.rerun()
-
-                # ---------- Multi-episode ZIP ----------
-                st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ (ZIP)")
-                _rg_a, _rg_b = st.columns(2, gap="small")
-                with _rg_a:
-                    _tt_from = st.number_input("ពីភាគ", min_value=1, max_value=int(_tt_total), value=1, step=1, key="tiktok_dl_from")
-                with _rg_b:
-                    _tt_to = st.number_input("ដល់ភាគ", min_value=1, max_value=int(_tt_total), value=min(5, int(_tt_total)), step=1, key="tiktok_dl_to")
-                _tt_dl_max = st.selectbox("ចំនួនអតិបរមាក្នុងមួយលើក", [5, 10, 20, 50, 100], index=1, key="tiktok_dl_limit")
-                _tt_lo, _tt_hi = int(min(_tt_from, _tt_to)), int(max(_tt_from, _tt_to))
-                _tt_eps = list(range(_tt_lo, _tt_hi + 1))[:_tt_dl_max]
-                if st.button(f"📦 ទាញយក {len(_tt_eps)} ភាគជា ZIP", key="tiktok_dl_start",
-                             disabled=(not _tt_eps or busy), use_container_width=True):
-                    _tt_old = st.session_state.get("_tt_dl_ready")
-                    if _tt_old:
-                        shutil.rmtree(_tt_old.get("folder", ""), ignore_errors=True)
-                    _tt_folder = tempfile.mkdtemp(prefix="tiktok_batch_")
-                    _tt_zip_path = os.path.join(_tt_folder, "tiktok_drama_episodes.zip")
-                    _tt_errors, _tt_ok = [], 0
-                    _tt_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
-                    try:
-                        with zipfile.ZipFile(_tt_zip_path, "w", compression=zipfile.ZIP_STORED) as _tt_zip:
-                            for _ti, _tep in enumerate(_tt_eps, start=1):
-                                _ttmp = None
-                                try:
-                                    _tr = _fetch_one(_tt_ep_url(_tt_ready["series_id"], _tep))
-                                    if not _tr.get("ok") or not _tr.get("path"):
-                                        raise RuntimeError(_tr.get("err") or "ទាញយកវីដេអូមិនបាន")
-                                    _ttmp = _tr["path"]
-                                    _tsz = os.path.getsize(_ttmp)
-                                    _tcur = sum(x.file_size for x in _tt_zip.filelist)
-                                    if _tcur + _tsz > MAX_ZIP_MB * 1024 * 1024:
-                                        raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
-                                    _tt_zip.write(_ttmp, f"episode_{_tep:04d}.mp4")
-                                    _tt_ok += 1
-                                except Exception as _te:
-                                    _tt_errors.append(f"ភាគ {_tep}: {str(_te)[:180]}")
-                                finally:
-                                    if _ttmp:
-                                        shutil.rmtree(os.path.dirname(_ttmp), ignore_errors=True)
-                                _tt_bar.progress(_ti / max(1, len(_tt_eps)), text=f"ទាញបាន {_tt_ok}/{len(_tt_eps)} ភាគ · កំពុងដំណើរការ {_ti}/{len(_tt_eps)}")
-                        _tt_bar.empty()
-                        if _tt_ok:
-                            st.session_state["_tt_dl_ready"] = {"path": _tt_zip_path, "folder": _tt_folder, "count": _tt_ok,
-                                                                "name": safe_filename(f"tiktok_drama_{_tt_ready['series_id']}")}
-                            st.success(f"រៀបចំបាន {_tt_ok} ភាគរួចរាល់។")
-                        else:
-                            shutil.rmtree(_tt_folder, ignore_errors=True)
-                            st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
-                        if _tt_errors:
-                            with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_tt_errors)})"):
-                                for _tw in _tt_errors:
-                                    st.warning(_tw)
-                    except Exception as _tt_fatal:
-                        shutil.rmtree(_tt_folder, ignore_errors=True)
-                        st.error(f"រៀបចំ ZIP មិនបាន៖ {_tt_fatal}")
-                _tt_dl_ready = st.session_state.get("_tt_dl_ready")
-                if _tt_dl_ready and os.path.isfile(_tt_dl_ready.get("path", "")):
-                    with open(_tt_dl_ready["path"], "rb") as _tt_zf:
-                        dl_button(f"⬇️ ទាញយក ZIP ({_tt_dl_ready['count']} ភាគ)", _tt_zf, f"{_tt_dl_ready['name']}.zip",
-                                  "application/zip", key="tiktok_dl_file", use_container_width=True)
-
                 if st.button("🗑️ បិទរឿងនេះ", key="tiktok_drama_clear", use_container_width=True):
-                    _tt_free_media(_tt_ready)
                     st.session_state.pop("_tiktok_drama_result", None)
                     st.rerun()
 
-        st.caption("ចំណាំ៖ TikTok មិនមាន API បញ្ជីភាគទេ ដូច្នេះភាគត្រូវបានបង្កើតពី series ID + លេខភាគ។ ការទាញវីដេអូអាចមិនដំណើរការលើ URL shortdrama ទាំងអស់ — សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
+        st.caption("ចំណាំ៖ Poster និងព័ត៌មានរឿងបង្ហាញបាន ប្រសិនបើ TikTok ផ្តល់ metadata សាធារណៈ។ Player ក្នុង App ត្រូវការ Media URL ផ្ទាល់ដែលអាចចាក់បាន; សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
@@ -9727,36 +9338,3 @@ TITLE_CODE_FIX_CSS = r"""
 </style>
 """
 st.markdown(TITLE_CODE_FIX_CSS, unsafe_allow_html=True)
-
-
-# =====================================================================
-# FIX (Nov 2026): 1) hide "trouble loading App.kvai_local_storage" warning
-#                 2) make the Hongguo search row fit the phone screen
-# The local-storage components only remember keys/login in the browser.
-# If the network is slow they may time out; the app still works, so the
-# warning box is hidden instead of shown to the user.
-# =====================================================================
-KVAI_FIX_CSS = r"""
-<style>
-.st-key-kv_ls, .st-key-kv_login_ls,
-[data-testid="stElementContainer"]:has(iframe[title*="kvai_local_storage"]),
-[data-testid="stElementContainer"]:has(iframe[title*="kvai_login_storage"]) {
-  position:absolute !important; width:1px !important; height:1px !important;
-  overflow:hidden !important; opacity:0 !important; pointer-events:none !important;
-  margin:0 !important; padding:0 !important; border:0 !important;
-}
-@media (max-width: 759px) {
-  /* Swipe layout only for the 3 main panels (Upload / Preview / AI).
-     Every other row (e.g. Hongguo search box + buttons) fills the screen width. */
-  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title):not(:has(> [data-testid="stColumn"]:nth-child(3))) {
-    overflow-x:visible !important;
-  }
-  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title):not(:has(> [data-testid="stColumn"]:nth-child(3))) > [data-testid="stColumn"] {
-    flex:1 1 0 !important; min-width:0 !important; width:0 !important; max-width:none !important;
-  }
-  .block-container, [data-testid="stMainBlockContainer"] { max-width:100vw !important; overflow-x:hidden !important; }
-  [data-testid="stTextInput"], [data-testid="stSelectbox"], [data-testid="stButton"] { max-width:100% !important; }
-}
-</style>
-"""
-st.markdown(KVAI_FIX_CSS, unsafe_allow_html=True)
