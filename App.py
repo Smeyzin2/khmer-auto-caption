@@ -6133,6 +6133,32 @@ def drop_link_cache(keep=()):
                 shutil.rmtree(os.path.dirname(ent["path"]), ignore_errors=True)
 
 
+def browser_dl_link(label, path, file_name, mime, key):
+    """ប៊ូតុងទាញយកដែលបើកក្នុង Browser (តំណ /media របស់ Streamlit)។ ត្រឡប់ False បើមិនអាចបង្កើតតំណបាន។"""
+    try:
+        from streamlit.runtime import get_instance
+        mgr = get_instance().media_file_mgr
+        coord = f"khmer_browser_dl_{key}"
+        try:
+            url = mgr.add(path, mime, coord, file_name=file_name, is_for_static_download=True)
+        except TypeError:
+            url = mgr.add(path, mime, coord, file_name=file_name)
+        if not url:
+            return False
+        import html as _html
+        st.markdown(
+            f'<a href="{_html.escape(str(url), quote=True)}" target="_blank" rel="noopener" '
+            'style="display:block;text-align:center;padding:0.65rem 1rem;border-radius:0.6rem;'
+            'font-weight:600;text-decoration:none;color:#fff;margin:0.25rem 0;'
+            'background:linear-gradient(90deg,#ff1493,#8a2be2,#00bfff);">'
+            f'{_html.escape(label)}</a>',
+            unsafe_allow_html=True,
+        )
+        return True
+    except Exception:
+        return False
+
+
 def dl_button(label, data, file_name, mime, key, **kwargs):
     if ST_VER >= (1, 43):
         return st.download_button(label, data=data, file_name=file_name, mime=mime, key=key, on_click="ignore", **kwargs)
@@ -6387,9 +6413,10 @@ def download_area(job):
                 st.markdown(f"**🎬 {it['name']}**")
                 _vp0 = it.get("video_path")
                 if _vp0 and os.path.isfile(_vp0):
-                    with open(_vp0, "rb") as _vf0:
-                        dl_button("⬇️ ទាញយកវីដេអូ", _vf0, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4",
-                                  key=f"dl_{job.id}_{i}", use_container_width=True)
+                    if not browser_dl_link("🌐 ទាញយកក្នុង Browser", _vp0, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4", f"dl_{job.id}_{i}"):
+                        with open(_vp0, "rb") as _vf0:
+                            dl_button("⬇️ ទាញយកវីដេអូ", _vf0, f"{safe_filename(it['name'])}_khmer.mp4", "video/mp4",
+                                      key=f"dl_{job.id}_{i}", use_container_width=True)
                 for text in it["captions"]:
                     st.write(text)
                 continue
@@ -6404,9 +6431,10 @@ def download_area(job):
                     fname = fname.replace("_khmer.mp4", "_khmer_mobile.mp4")
                     size_mb = os.path.getsize(vp) / (1024 * 1024)
                 st.markdown(f"**✅ {os.path.splitext(it['name'])[0]}.mp4** · {size_mb:.0f}MB")
-                with open(vp, "rb") as vf:
-                    dl_button("⬇️ ទាញយកវីដេអូ", vf, fname, "video/mp4",
-                              key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
+                if not browser_dl_link("🌐 ទាញយកក្នុង Browser", vp, fname, "video/mp4", f"dl_{job.id}_{i}"):
+                    with open(vp, "rb") as vf:
+                        dl_button("⬇️ ទាញយកវីដេអូ", vf, fname, "video/mp4",
+                                  key=f"dl_{job.id}_{i}", type="primary", use_container_width=True)
                 if not share_button(vp, fname):
                     if hasattr(st, "link_button"):
                         st.link_button("🎵 បង្ហោះទៅ TikTok", "https://www.tiktok.com/tiktokstudio/upload",
@@ -6437,8 +6465,9 @@ def download_area(job):
         dl_button("📝 ទាញយកអក្សរបកប្រែទាំងអស់ (.txt)", _all_txt.encode("utf-8"), "khmer_text.txt", "text/plain",
                   key=f"txt_{job.id}", use_container_width=True)
     if job.zip and os.path.isfile(job.zip):
-        with open(job.zip, "rb") as zf:
-            dl_button("📦 ទាញយកទាំងអស់ (ZIP)", zf, "khmer_videos.zip", "application/zip", key=f"zip_{job.id}", use_container_width=True)
+        if not browser_dl_link("🌐 📦 ទាញយកទាំងអស់ (ZIP) ក្នុង Browser", job.zip, "khmer_videos.zip", "application/zip", f"zip_{job.id}"):
+            with open(job.zip, "rb") as zf:
+                dl_button("📦 ទាញយកទាំងអស់ (ZIP)", zf, "khmer_videos.zip", "application/zip", key=f"zip_{job.id}", use_container_width=True)
 
 
 def scroll_to_downloads():
