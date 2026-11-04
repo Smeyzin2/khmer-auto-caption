@@ -7826,7 +7826,7 @@ def _hg_normalize_row(item):
     }
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=21600, show_spinner=False)
 def _hg_rank(page=1):
     """Fetch Hongguo hot-ranking records through the Apify listing Actor."""
     page = max(1, int(page))
@@ -8047,22 +8047,14 @@ def _hg_detail(series_id):
 
 
 def _hg_show_cover(url):
-    """បង្ហាញ poster ដោយប្រើ <img> (no-referrer) និងប្ដូរទ្រង់ទ្រាយ heic/avif → jpeg ដើម្បីឱ្យ browser បង្ហាញបាន។"""
+    """បង្ហាញ poster ដោយប្រើ st.image (ដូចដើម)។"""
     u = str(url or "").strip()
     if not u:
         return
-    base, _, q = u.partition("?")
-    for ext in (".heic", ".avif", ".awebp"):
-        if base.lower().endswith(ext):
-            base = base[:-len(ext)] + ".jpeg"
-    u2 = base + (("?" + q) if q else "")
-    safe = u2.replace('"', "%22").replace("<", "%3C").replace(">", "%3E")
-    st.markdown(
-        f'<img src="{safe}" referrerpolicy="no-referrer" loading="lazy" '
-        f'style="width:100%;border-radius:10px;display:block;aspect-ratio:3/4;object-fit:cover;background:#1a2050;" '
-        f'onerror="this.style.visibility=\'hidden\'">',
-        unsafe_allow_html=True,
-    )
+    try:
+        st.image(u, use_container_width=True)
+    except Exception:
+        pass
 
 
 def _hg_enrich_rows(rows):
@@ -8096,7 +8088,7 @@ def _hg_enrich_rows(rows):
         return list(ex.map(_fix, rows))
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=21600, show_spinner=False)
 def _hg_category_list(category, page=1):
     """Fetch a supported category listing via Apify and paginate its returned rows."""
     page = max(1, int(page))
@@ -8117,7 +8109,7 @@ def _hg_category_list(category, page=1):
     return rows[(page - 1) * 20:page * 20]
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
+@st.cache_data(ttl=21600, show_spinner=False)
 def _hg_search(keyword, page=1):
     items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
     rows = [_hg_normalize_row(x) for x in items]
@@ -8287,11 +8279,10 @@ def _hg_guest_preview():
         do_search = st.button("🔎 ស្វែងរក", key="hgg_search_btn", use_container_width=True)
 
     cat_map = {}
-    if _HG_APIFY_TOKEN:
-        try:
-            cat_map = _hg_flat_categories(_HG_CAT_FN())
-        except Exception:
-            cat_map = {}
+    try:
+        cat_map = _hg_flat_categories(_HG_CAT_FN())
+    except Exception:
+        cat_map = {}
     c1, c2 = st.columns([3, 1])
     with c1:
         cat_choice = st.selectbox("📚 ប្រភេទរឿង", ["🔥 កំពុងពេញនិយម"] + list(cat_map.keys()), key="hgg_category_choice")
@@ -8300,22 +8291,11 @@ def _hg_guest_preview():
         do_cat = st.button("បង្ហាញរឿង", key="hgg_category_load", use_container_width=True)
     do_home = st.button("🔥 រឿងកំពុងពេញនិយម", key="hgg_home_btn", use_container_width=True)
 
-    try:
-        if do_search and kw.strip():
-            if _hg_extract_series_id(kw):
-                _hg_no_vip_dialog()          # បើករឿងតាម Link = មុខងារ VIP
-            elif _guard():
-                with st.spinner("កំពុងស្វែងរករឿង..."):
-                    ss["_hgg_rows"] = _hg_guest_search(kw.strip())
-                if not ss["_hgg_rows"]:
-                    st.info("រកមិនឃើញរឿងទេ។")
-        elif do_cat and cat_choice != "🔥 កំពុងពេញនិយម" and _guard():
-            with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
-                ss["_hgg_rows"] = _hg_guest_cat_list(cat_map[cat_choice])
-        elif do_home or do_cat:
-            ss["_hgg_rows"] = None
-    except Exception as e:
-        st.error(_hg_error_khmer(e))
+    # អ្នកមិនមែន VIP៖ មិនហៅ Apify ដើម្បីស្វែងរក/ប្រភេទទេ (សន្សំ credit) — បង្ហាញតែរឿងពេញនិយម (cache ៦ ម៉ោង)
+    if do_search and kw.strip():
+        _hg_no_vip_dialog()
+    elif do_cat and cat_choice != "🔥 កំពុងពេញនិយម":
+        _hg_no_vip_dialog()
 
     rows = ss.get("_hgg_rows")
     if rows is None and _HG_APIFY_TOKEN:
