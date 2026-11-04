@@ -8111,47 +8111,109 @@ def _hg_extract_series_id(value):
 
 
 _HG_CONTACT_MSG = "🔒 សូមទាក់ទងម្ចាស់កម្មវិធី ដើម្បីបើកគណនី VIP មុនប្រើមុខងារនេះ។\n\n📨 Telegram: [@Smeytk](https://t.me/Smeytk)"
+def _hg_error_khmer(err):
+    """សារកំហុស Hongguo ជាខ្មែរ (មុននេះមិនទាន់បានកំណត់ ធ្វើឱ្យ NameError ពេលមានកំហុស)។"""
+    return f"មានបញ្ហាក្នុងការទាញយកទិន្នន័យ Hongguo៖ {err}"
+
+
+_HG_CAT_FN = _hg_categories          # រក្សាទុក function ដើម (ព្រោះ VIP block ប្តូរឈ្មោះនេះជា list)
+_HG_GUEST_CALL_LIMIT = 25            # កំណត់ចំនួនហៅ API ក្នុងមួយ session សម្រាប់អ្នកមិនមែន VIP
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _hg_guest_hot():
-    """បញ្ជីរឿងពេញនិយមសម្រាប់អ្នកមិនមែន VIP មើលតែប៉ុណ្ណោះ (cache 1 ម៉ោង កុំឱ្យអស់កូតា API)។"""
     return _hg_rank(1)
 
 
-def _hg_guest_preview():
-    """អ្នកមិនទាន់មាន VIP ឃើញទំព័រដូចគ្នា ប៉ុន្តែគ្រប់ប៊ូតុងត្រូវបានចាក់សោ — ចុចហើយបង្ហាញសារឱ្យទាក់ទងម្ចាស់កម្មវិធី។"""
-    notice = st.empty()
-    clicked = []
+@st.cache_data(ttl=3600, show_spinner=False)
+def _hg_guest_cat_list(cat_id):
+    return _hg_category_list(cat_id, 1)
 
-    def _btn(label, key):
-        if st.button(label, key=key, use_container_width=True):
-            clicked.append(key)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _hg_guest_search(keyword):
+    return _hg_search(keyword)
+
+
+def _hg_no_vip_body():
+    st.markdown("### 🔒 អ្នកមិនទាន់មាន VIP")
+    st.warning("អ្នកគ្មាន VIP ទេ ដូច្នេះគ្មានសិទ្ធិប្រើមុខងារនេះឡើយ។")
+    st.write("សូមអញ្ជើញទៅប្រើមុខងារឥតគិតថ្លៃនៅផ្ទាំងផ្សេងៗ (🏠 វីដេអូ, ✂️ កាត់, 🌐 បកប្រែ, 🎙 សំឡេង, 🔤 អក្សរ ...) ដែលអាចប្រើបានធម្មតា។")
+    st.link_button("👑 ទាក់ទងបើក VIP — Telegram @Smeytk", "https://t.me/Smeytk",
+                   type="primary", use_container_width=True)
+
+
+if hasattr(st, "dialog"):
+    @st.dialog("🔒 មុខងារសម្រាប់សមាជិក VIP")
+    def _hg_no_vip_dialog():
+        _hg_no_vip_body()
+else:
+    def _hg_no_vip_dialog():
+        _hg_no_vip_body()
+
+
+def _hg_guest_preview():
+    """អ្នកមិនមែន VIP៖ ស្វែងរក/មើលបញ្ជីរឿងបាន ប៉ុន្តែពេលចុចបើករឿង បង្ហាញផ្ទាំងលោតប្រាប់ថាគ្មានសិទ្ធិ។"""
+    ss = st.session_state
+    ss.setdefault("_hgg_calls", 0)
+    ss.setdefault("_hgg_rows", None)
+
+    def _guard():
+        if ss["_hgg_calls"] >= _HG_GUEST_CALL_LIMIT:
+            st.info("សូមរង់ចាំបន្តិច ឬទាក់ទង @Smeytk ដើម្បីបើក VIP ប្រើបានគ្មានដែនកំណត់។")
+            return False
+        ss["_hgg_calls"] += 1
+        return True
 
     st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
     st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
+
     q1, q2 = st.columns([3, 1])
     with q1:
-        st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hgg_search_text",
-                      placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
+        kw = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hgg_search_text",
+                           placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
     with q2:
         st.write("")
-        _btn("🔎 ស្វែងរក", "hgg_search_btn")
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        st.selectbox("📚 ប្រភេទរឿង", ["🔥 កំពុងពេញនិយម"], key="hgg_category_choice")
-        _btn("🔄 ផ្ទុកប្រភេទឡើងវិញ", "hgg_refresh_categories")
-    with c2:
-        st.write("")
-        _btn("បង្ហាញរឿង", "hgg_category_load")
-    _btn("🔥 រឿងកំពុងពេញនិយម", "hgg_home_btn")
+        do_search = st.button("🔎 ស្វែងរក", key="hgg_search_btn", use_container_width=True)
 
-    rows = []
+    cat_map = {}
     if _HG_APIFY_TOKEN:
         try:
-            rows = [r for r in (_hg_guest_hot() or []) if isinstance(r, dict) and r.get("series_id")]
+            cat_map = _hg_flat_categories(_HG_CAT_FN())
+        except Exception:
+            cat_map = {}
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        cat_choice = st.selectbox("📚 ប្រភេទរឿង", ["🔥 កំពុងពេញនិយម"] + list(cat_map.keys()), key="hgg_category_choice")
+    with c2:
+        st.write("")
+        do_cat = st.button("បង្ហាញរឿង", key="hgg_category_load", use_container_width=True)
+    do_home = st.button("🔥 រឿងកំពុងពេញនិយម", key="hgg_home_btn", use_container_width=True)
+
+    try:
+        if do_search and kw.strip():
+            if _hg_extract_series_id(kw):
+                _hg_no_vip_dialog()          # បើករឿងតាម Link = មុខងារ VIP
+            elif _guard():
+                with st.spinner("កំពុងស្វែងរករឿង..."):
+                    ss["_hgg_rows"] = _hg_guest_search(kw.strip())
+                if not ss["_hgg_rows"]:
+                    st.info("រកមិនឃើញរឿងទេ។")
+        elif do_cat and cat_choice != "🔥 កំពុងពេញនិយម" and _guard():
+            with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
+                ss["_hgg_rows"] = _hg_guest_cat_list(cat_map[cat_choice])
+        elif do_home or do_cat:
+            ss["_hgg_rows"] = None
+    except Exception as e:
+        st.error(_hg_error_khmer(e))
+
+    rows = ss.get("_hgg_rows")
+    if rows is None and _HG_APIFY_TOKEN:
+        try:
+            rows = _hg_guest_hot()
         except Exception:
             rows = []
+    rows = [r for r in (rows or []) if isinstance(r, dict) and r.get("series_id")]
     for i in range(0, len(rows), 3):
         cols = st.columns(3, gap="small")
         for col, row in zip(cols, rows[i:i + 3]):
@@ -8160,9 +8222,9 @@ def _hg_guest_preview():
                     st.image(row["cover"], use_container_width=True)
                 st.markdown("**" + str(row.get("name") or "រឿង") + "**")
                 st.caption(f"ចំនួនភាគ៖ {row.get('episode_cnt') or row.get('listed_cnt') or '—'}")
-                _btn("មើលរឿង", f"hgg_select_{row['series_id']}")
-    if clicked:
-        notice.warning(_HG_CONTACT_MSG)
+                if st.button("មើលរឿង", key=f"hgg_select_{row['series_id']}", use_container_width=True):
+                    _hg_no_vip_dialog()
+
 
 with tab_drama:
     _hg_access = _hg_vip_gate(show_login=False)
