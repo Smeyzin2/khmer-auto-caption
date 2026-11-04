@@ -7289,7 +7289,7 @@ def _hg_vip_gate(show_admin_panel=True, show_login=True):
         # Render the Admin controls only in the primary Hongguo tab.
         # Calling this gate from another tab must not create duplicate Streamlit widget keys.
         if show_admin_panel:
-            with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
+            with st.expander("👑➕ Admin: បង្កើត / គ្រប់គ្រងគណនី VIP", expanded=True):
                 _hg_admin_panel()
         return True
     if st.session_state.get("_auth_role") == "vip":
