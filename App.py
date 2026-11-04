@@ -7569,7 +7569,7 @@ _HG_APIFY_BASE = "https://api.apify.com/v2/acts"
 _HG_ACTOR_SEARCH = "spider_studio~hongguo-search"
 _HG_ACTOR_DETAIL = "spider_studio~hongguo-series-detail"
 _HG_ACTOR_PLAY = "dramadatalab~hongguo-direct-video"
-_HG_ACTOR_FEED = "spider_studio~hongguo-recommend-feed"
+_HG_ACTOR_FEED = "bovi~hongguo-scraper"
 
 
 def _hg_apify_actor(actor_id, actor_input, timeout=180):
@@ -7598,33 +7598,71 @@ def _hg_apify_actor(actor_id, actor_input, timeout=180):
 
 
 def _hg_normalize_row(item):
+    """Normalize Hongguo Actor records while retaining raw fields for compatibility."""
     if not isinstance(item, dict):
         return {}
     nested = item.get("data") if isinstance(item.get("data"), dict) else item
-    sid = nested.get("seriesId") or nested.get("series_id") or nested.get("bookId") or nested.get("book_id") or nested.get("id")
+
+    # Some Actor outputs wrap the series metadata in one more object.
+    for key in ("series", "drama", "book", "item", "result"):
+        if isinstance(nested.get(key), dict):
+            nested = nested[key]
+            break
+
+    sid = (nested.get("seriesId") or nested.get("series_id") or nested.get("bookId")
+           or nested.get("book_id") or nested.get("id"))
+    cover = (
+        nested.get("coverUrl") or nested.get("cover_url") or nested.get("cover")
+        or nested.get("posterUrl") or nested.get("poster_url") or nested.get("poster")
+        or nested.get("coverImage") or nested.get("cover_image")
+        or nested.get("imageUrl") or nested.get("image_url")
+        or nested.get("image") or nested.get("thumbnail") or nested.get("thumb")
+    )
+    if isinstance(cover, dict):
+        cover = cover.get("url") or cover.get("src") or cover.get("imageUrl") or ""
+    if isinstance(cover, list):
+        cover = next((x for x in cover if isinstance(x, str) and x.startswith(("http://", "https://"))), "")
+
+    title = (nested.get("title") or nested.get("name") or nested.get("bookName")
+             or nested.get("seriesName") or nested.get("dramaName") or "រឿង Hongguo")
+    description = (nested.get("intro") or nested.get("description")
+                   or nested.get("summary") or nested.get("synopsis") or "")
+    count = (nested.get("episodeCount") or nested.get("episode_cnt")
+             or nested.get("totalEpisodes") or nested.get("episode_count") or "")
     return {
         **nested,
         "series_id": str(sid or ""),
-        "name": nested.get("title") or nested.get("name") or nested.get("bookName") or "រឿង Hongguo",
-        "cover": nested.get("coverUrl") or nested.get("cover") or nested.get("cover_url") or nested.get("image") or "",
-        "intro": nested.get("intro") or nested.get("description") or nested.get("summary") or "",
-        "episode_cnt": nested.get("episodeCount") or nested.get("episode_cnt") or nested.get("totalEpisodes") or "",
+        "name": title,
+        "cover": str(cover or ""),
+        "intro": description,
+        "episode_cnt": count,
     }
 
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_rank(page=1):
-    # Recommendation Actor is metadata discovery; paging is best-effort.
-    items = _hg_apify_actor(_HG_ACTOR_FEED, {"maxResults": min(100, max(20, int(page) * 20)), "includeRaw": False})
+    """Fetch Hongguo hot-ranking records through the Apify listing Actor."""
+    page = max(1, int(page))
+    items = _hg_apify_actor(
+        _HG_ACTOR_FEED,
+        {"listings": ["rank/hot-drama"], "maxResults": min(100, page * 20),
+         "includeDetails": False},
+        timeout=180,
+    )
     rows = [_hg_normalize_row(x) for x in items]
     rows = [x for x in rows if x.get("series_id")]
-    return rows[(int(page)-1)*20:int(page)*20]
+    return rows[(page - 1) * 20:page * 20]
 
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _hg_categories():
-    # This Actor set does not expose a category tree; keep UI functional with hot/recommend feed.
-    return []
+    """Categories supported by the Apify Hongguo scraper listing input."""
+    return [
+        {"name": "រឿងសម្ដែងពិត", "slug": "category/real-drama"},
+        {"name": "រឿងគំនូរជីវចល", "slug": "category/comic-drama"},
+        {"name": "រឿង AI", "slug": "category/ai-drama"},
+        {"name": "រឿងកំប្លែង/គំនូរ", "slug": "category/comic"},
+    ]
 
 
 def _hg_flat_categories(categories):
@@ -7696,7 +7734,20 @@ def _hg_detail(series_id):
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_category_list(category, page=1):
-    return []
+    """Fetch a supported category listing via Apify and paginate its returned rows."""
+    page = max(1, int(page))
+    category = str(category or "").strip()
+    if not category:
+        return []
+    items = _hg_apify_actor(
+        _HG_ACTOR_FEED,
+        {"listings": [category], "maxResults": min(100, page * 20),
+         "includeDetails": False},
+        timeout=180,
+    )
+    rows = [_hg_normalize_row(x) for x in items]
+    rows = [x for x in rows if x.get("series_id")]
+    return rows[(page - 1) * 20:page * 20]
 
 
 @st.cache_data(ttl=240, show_spinner=False)
