@@ -7598,7 +7598,7 @@ def _hg_apify_actor(actor_id, actor_input, timeout=180):
             )
         elif response.status_code == 404 and actor_id == _HG_ACTOR_PLAY:
             detail += (
-                "\\nActor ចាក់វីដេអូមិនមានទៀតទេ។ សូមលុប HONGGUO_PLAY_ACTOR ចេញពី "
+                "\nActor ចាក់វីដេអូមិនមានទៀតទេ។ សូមលុប HONGGUO_PLAY_ACTOR ចេញពី "
                 "Streamlit Secrets (ឬកំណត់ទៅ spider_studio~hongguo-video-download-kvs)។"
             )
         elif response.status_code == 521 and actor_id == _HG_ACTOR_PLAY:
@@ -7908,11 +7908,24 @@ def _hg_get(endpoint, params=None, timeout=45):
             )
 
         # spider_studio~hongguo-video-download-kvs: input videoIds, output signed MP4 videoUrl
-        items = _hg_apify_actor(
-            _HG_ACTOR_PLAY,
-            {"videoIds": [str(video_id)]},
-            timeout=300
-        )
+        _play_candidates = []
+        for _a in (_HG_ACTOR_PLAY, "spider_studio~hongguo-video-download-kvs"):
+            if _a and _a not in _play_candidates:
+                _play_candidates.append(_a)
+        items, _last_err = None, None
+        for _a in _play_candidates:
+            try:
+                items = _hg_apify_actor(_a, {"videoIds": [str(video_id)]}, timeout=300)
+                break
+            except RuntimeError as _exc:
+                _last_err = _exc
+                if "HTTP 404" not in str(_exc):
+                    raise
+        if items is None:
+            raise RuntimeError(
+                f"Actor ចាក់វីដេអូមិនមាន (បានសាកល្បង: {', '.join(_play_candidates)})។ "
+                f"{_last_err}"
+            )
         result = next((x for x in items if isinstance(x, dict)), {}) if items else {}
         if result.get("success") is False or result.get("status") == "error" or result.get("errorMessage") or result.get("error"):
             raise RuntimeError(str(
