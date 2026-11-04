@@ -7826,10 +7826,48 @@ def _hg_rank(page=1):
 def _hg_categories():
     """Categories supported by the Apify Hongguo scraper listing input."""
     return [
-        {"name": "រឿងសម្ដែងពិត", "slug": "category/real-drama"},
-        {"name": "រឿងគំនូរជីវចល", "slug": "category/comic-drama"},
-        {"name": "រឿង AI", "slug": "category/ai-drama"},
-        {"name": "រឿងកំប្លែង/គំនូរ", "slug": "category/comic"},
+        {"name": "🎭 រឿងសម្ដែងពិត", "slug": "category/real-drama"},
+        {"name": "🎨 រឿងគំនូរជីវចល", "slug": "category/comic-drama"},
+        {"name": "🤖 រឿង AI", "slug": "category/ai-drama"},
+        {"name": "😂 រឿងកំប្លែង/គំនូរ", "slug": "category/comic"},
+        {"name": "🔄 កើតជាថ្មី (重生)", "slug": "kw:重生"},
+        {"name": "🚀 ងើបឡើងវិញ (逆袭)", "slug": "kw:逆袭"},
+        {"name": "💼 ប្រធានក្រុមហ៊ុន (总裁)", "slug": "kw:总裁"},
+        {"name": "🍬 ស្នេហាផ្អែមល្ហែម (甜宠)", "slug": "kw:甜宠"},
+        {"name": "⚔️ សងសឹក (复仇)", "slug": "kw:复仇"},
+        {"name": "🌀 ឆ្លងកាលសម័យ (穿越)", "slug": "kw:穿越"},
+        {"name": "👑 បុរាណ/ព្រះរាជវាំង (古装)", "slug": "kw:古装"},
+        {"name": "🏙️ ទីក្រុងទំនើប (都市)", "slug": "kw:都市"},
+        {"name": "🥷 ទេពសឹកសង្គ្រាម (战神)", "slug": "kw:战神"},
+        {"name": "🩺 គ្រូពេទ្យអស្ចារ្យ (神医)", "slug": "kw:神医"},
+        {"name": "🏰 គ្រួសារអ្នកមាន (豪门)", "slug": "kw:豪门"},
+        {"name": "💔 លែងលះ (离婚)", "slug": "kw:离婚"},
+        {"name": "🏃 ដេញតាមប្រពន្ធ (追妻)", "slug": "kw:追妻"},
+        {"name": "🎭 អត្តសញ្ញាណសម្ងាត់ (马甲)", "slug": "kw:马甲"},
+        {"name": "👶 ទារកគួរឱ្យស្រលាញ់ (萌宝)", "slug": "kw:萌宝"},
+        {"name": "💞 ស្នេហា (爱情)", "slug": "kw:爱情"},
+        {"name": "😆 កំប្លែង (喜剧)", "slug": "kw:喜剧"},
+        {"name": "🧙 ហ្វង់តាស៊ី/ឥទ្ធិឫទ្ធិ (玄幻)", "slug": "kw:玄幻"},
+        {"name": "🕵️ អាថ៌កំបាំង/ស៊ើបអង្កេត (悬疑)", "slug": "kw:悬疑"},
+        {"name": "🏫 សាលា/យុវវ័យ (校园)", "slug": "kw:校园"},
+        {"name": "👩‍👧 គ្រួសារ (家庭)", "slug": "kw:家庭"},
+        {"name": "🌟 អ្នកស្នងមរតក (继承)", "slug": "kw:继承"},
+        {"name": "🔥 ស្នេហាក្តៅ (虐恋)", "slug": "kw:虐恋"},
+        {"name": "🧑‍🍳 ជីវិតជនបទ (乡村)", "slug": "kw:乡村"},
+        {"name": "💰 អ្នកមានភ្លាមៗ (首富)", "slug": "kw:首富"},
+        {"name": "🐉 សិល្បៈក្បាច់គុន (武侠)", "slug": "kw:武侠"},
+        {"name": "🦸 វីរបុរស (英雄)", "slug": "kw:英雄"},
+        {"name": "🎬 តារា/កម្សាន្ត (明星)", "slug": "kw:明星"},
+        {"name": "🏥 វេជ្ជសាស្ត្រ (医生)", "slug": "kw:医生"},
+        {"name": "👮 ប៉ូលិស/តុលាការ (律师)", "slug": "kw:律师"},
+        {"name": "🧚 បិសាច/ខ្មោច (灵异)", "slug": "kw:灵异"},
+        {"name": "🪄 ប្រព័ន្ធពិសេស (系统)", "slug": "kw:系统"},
+        {"name": "🛡️ ការពារ/ថ្នាំងអាក់ (保镖)", "slug": "kw:保镖"},
+        {"name": "🎓 សិស្សពូកែ (学霸)", "slug": "kw:学霸"},
+        {"name": "🍜 ម្ហូបអាហារ (美食)", "slug": "kw:美食"},
+        {"name": "🌹 អាពាហ៍ពិពាហ៍លាក់កំបាំង (闪婚)", "slug": "kw:闪婚"},
+        {"name": "👸 ព្រះនាង/ម្ចាស់ក្សត្រី (公主)", "slug": "kw:公主"},
+        {"name": "🧓 ជីដូនជីតា/ប្រពន្ធចាស់ (奶奶)", "slug": "kw:奶奶"},
     ]
 
 
@@ -7996,6 +8034,9 @@ def _hg_category_list(category, page=1):
     category = str(category or "").strip()
     if not category:
         return []
+    if category.startswith("kw:"):
+        _kw_rows = _hg_search(category[3:])
+        return _kw_rows[(page - 1) * 20:page * 20]
     items = _hg_apify_actor(
         _HG_ACTOR_FEED,
         {"listings": [category], "maxResults": min(100, page * 20),
@@ -8260,15 +8301,15 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_categories = _hg_categories() if _HG_APIFY_TOKEN else []
+                _hg_cat_list_data = _HG_CAT_FN() if _HG_APIFY_TOKEN else []
             except Exception as _cat_err:
-                _hg_categories = []
+                _hg_cat_list_data = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-            _hg_cat_map = _hg_flat_categories(_hg_categories)
+            _hg_cat_map = _hg_flat_categories(_hg_cat_list_data)
             _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
-                _hg_categories.clear()
+                _HG_CAT_FN.clear()
                 st.rerun()
         with _hg_c2:
             st.write("")
@@ -10255,6 +10296,9 @@ st.markdown(TITLE_CODE_FIX_CSS, unsafe_allow_html=True)
 # warning box is hidden instead of shown to the user.
 # =====================================================================
 KVAI_FIX_CSS = r"""
+[data-baseweb="popover"] ul[role="listbox"], [data-baseweb="popover"] [role="listbox"], div[data-baseweb="menu"] {
+  max-height: 55vh !important; overflow-y: auto !important; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
+}
 <style>
 .st-key-kv_ls, .st-key-kv_login_ls,
 [data-testid="stElementContainer"]:has(iframe[title*="kvai_local_storage"]),
