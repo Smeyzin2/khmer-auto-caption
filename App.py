@@ -7528,7 +7528,7 @@ def _hg_walk_secrets():
 
 
 _HG_ID_KEYS = {"XIAOYINGAPPID", "APPID", "HONGGUOAPPID", "XIAOYINGAPIAPPID", "XIAOYINGID"}
-_HG_SECRET_KEYS = {"XIAOYINGAPPSECRET", "APPSECRET", "HONGGUOAPPSECRET", "XIAOYINGAPIAPPSECRET", "XIAOYINGSECRET"}
+_HG_SECRET_KEYS = {"XIAOYINGAPPSECRET", "APPSECRET", "HONGGUOAPPSECRET", "XIAOYINGAPIAPPSECRET", "XIAOYINGSECRET", "APIFYAPITOKEN", "APIFYTOKEN"}
 
 
 def _hg_secret(*names):
@@ -7562,135 +7562,130 @@ def _hg_secret_key_names():
     return sorted({k for k, _ in _hg_walk_secrets()})
 
 
-_HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
-_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "APPSECRET")
-_HG_API_BASE = "https://www.xiaoyingapi.com"
-_HG_API_PREFIX = "/api/dramas/hongguo"
+# Hongguo backend: Apify Actors (replaces XiaoYingAPI app_id/app_secret signing).
+# Keep the token server-side in Streamlit Secrets; never render it in the UI.
+_HG_APIFY_TOKEN = _hg_secret("APIFY_API_TOKEN", "APIFY_TOKEN")
+_HG_APIFY_BASE = "https://api.apify.com/v2/acts"
+_HG_ACTOR_SEARCH = "spider_studio~hongguo-search"
+_HG_ACTOR_DETAIL = "spider_studio~hongguo-series-detail"
+_HG_ACTOR_PLAY = "dramadatalab~hongguo-direct-video"
+_HG_ACTOR_FEED = "spider_studio~hongguo-recommend-feed"
 
-def _hg_get(endpoint, params=None, timeout=45):
-    if not _HG_APP_ID or not _HG_APP_SECRET:
-        raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
-    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}"  # XiaoYingAPI route: no trailing slash
-    signed = dict(params or {})
-    signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
-    pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
-    query = "&".join(f"{k}={v}" for k, v in pairs)
-    raw = "GET\n" + path + "\n" + query
-    signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
-    response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
-                            headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
-    if response.status_code == 404:
-        raise RuntimeError(
-            f"XiaoYingAPI HTTP 404: មិនរកឃើញ API path {path} ទេ។ "
-            "សូមពិនិត្យ endpoint ឬ API version។"
+
+def _hg_apify_actor(actor_id, actor_input, timeout=180):
+    if not _HG_APIFY_TOKEN:
+        raise RuntimeError("មិនទាន់កំណត់ APIFY_API_TOKEN ក្នុង Streamlit Secrets ទេ។")
+    url = f"{_HG_APIFY_BASE}/{actor_id}/run-sync-get-dataset-items"
+    try:
+        response = requests.post(
+            url, params={"token": _HG_APIFY_TOKEN}, json=actor_input, timeout=timeout,
+            headers={"Accept": "application/json", "Content-Type": "application/json",
+                     "User-Agent": "KhmerVideoAI/1.0"}
         )
+    except requests.RequestException as exc:
+        raise RuntimeError(f"Apify network error: {exc}") from exc
     if not response.ok:
-        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {response.text[:300]}")
-    data = response.json()
-    if not isinstance(data, dict) or data.get("code") != 10000:
-        raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
-    return data.get("data") or {}
+        raise RuntimeError(f"Apify HTTP {response.status_code}: {response.text[:350]}")
+    try:
+        result = response.json()
+    except ValueError as exc:
+        raise RuntimeError("Apify បានត្រឡប់ទិន្នន័យ JSON មិនត្រឹមត្រូវ។") from exc
+    if not isinstance(result, list):
+        if isinstance(result, dict) and result.get("error"):
+            raise RuntimeError(f"Apify Actor error: {result.get('error')}")
+        raise RuntimeError("Apify Actor មិនបានត្រឡប់បញ្ជីលទ្ធផលទេ។")
+    return result
+
+
+def _hg_normalize_row(item):
+    if not isinstance(item, dict):
+        return {}
+    nested = item.get("data") if isinstance(item.get("data"), dict) else item
+    sid = nested.get("seriesId") or nested.get("series_id") or nested.get("bookId") or nested.get("book_id") or nested.get("id")
+    return {
+        **nested,
+        "series_id": str(sid or ""),
+        "name": nested.get("title") or nested.get("name") or nested.get("bookName") or "រឿង Hongguo",
+        "cover": nested.get("coverUrl") or nested.get("cover") or nested.get("cover_url") or nested.get("image") or "",
+        "intro": nested.get("intro") or nested.get("description") or nested.get("summary") or "",
+        "episode_cnt": nested.get("episodeCount") or nested.get("episode_cnt") or nested.get("totalEpisodes") or "",
+    }
+
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_rank(page=1):
-    d = _hg_get("rank", {"type": "hot-drama", "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
+    # Recommendation Actor is metadata discovery; paging is best-effort.
+    items = _hg_apify_actor(_HG_ACTOR_FEED, {"maxResults": min(100, max(20, int(page) * 20)), "includeRaw": False})
+    rows = [_hg_normalize_row(x) for x in items]
+    rows = [x for x in rows if x.get("series_id")]
+    return rows[(int(page)-1)*20:int(page)*20]
+
 
 @st.cache_data(ttl=600, show_spinner=False)
 def _hg_categories():
-    """ទាញ category tree ពិតពី XiaoYingAPI (ប្រើ slug មិនប្រើឈ្មោះចិនជាតម្លៃ API)។"""
-    d = _hg_get("categories", {})
-    if isinstance(d, list):
-        return d
-    if isinstance(d, dict):
-        return d.get("categories") or d.get("results") or d.get("list") or []
+    # This Actor set does not expose a category tree; keep UI functional with hot/recommend feed.
     return []
 
 
 @st.cache_data(ttl=180, show_spinner=False)
 def _hg_detail(series_id):
-    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី Hongguo API។"""
-    d = _hg_get("detail", {"series_id": str(series_id)})
-    if not isinstance(d, dict):
+    items = _hg_apify_actor(_HG_ACTOR_DETAIL, {"seriesIds": [str(series_id)]}, timeout=180)
+    if not items:
         return {}
-    # API versions may wrap detail data one level deeper.
-    if isinstance(d.get("detail"), dict):
-        d = d["detail"]
-    elif isinstance(d.get("result"), dict):
-        d = d["result"]
-    episodes = d.get("episodes") or d.get("episode_list") or d.get("list") or []
+    raw = items[0] if isinstance(items[0], dict) else {}
+    d = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+    episodes = d.get("episodes") or d.get("episodeList") or d.get("episode_list") or d.get("videos") or []
     normalized = []
     for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
         if not isinstance(ep, dict):
             continue
-        ep_no = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or (i + 1)
+        ep_no = ep.get("episodeNo") or ep.get("episode") or ep.get("ep") or ep.get("episode_no") or ep.get("index") or (i + 1)
         try:
             ep_no = int(ep_no)
         except (TypeError, ValueError):
             ep_no = i + 1
-        playable = ep.get("playable")
-        if playable is None:
-            playable = bool(ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("token"))
-        normalized.append({**ep, "ep": ep_no, "playable": bool(playable)})
-    d["episodes"] = normalized
-    return d
+        video_id = ep.get("videoId") or ep.get("video_id") or ep.get("id") or ep.get("vid")
+        normalized.append({**ep, "ep": ep_no, "video_id": str(video_id or ""), "playable": bool(video_id or ep.get("url") or ep.get("play_url"))})
+    return {
+        **d,
+        "name": d.get("title") or d.get("name") or d.get("seriesName") or "រឿង Hongguo",
+        "cover": d.get("coverUrl") or d.get("cover") or d.get("cover_url") or "",
+        "intro": d.get("intro") or d.get("description") or d.get("summary") or "",
+        "episode_cnt": d.get("episodeCount") or d.get("episode_cnt") or len(normalized),
+        "episodes": normalized,
+    }
 
-
-# ឈ្មោះប្រភេទចិន -> ភាសាខ្មែរ (តម្លៃ slug សម្រាប់ API មិនត្រូវបានប្ដូរ)
-_HG_CATEGORY_KH = {'真人剧': 'រឿងសម្ដែងពិត', '爱情': 'ស្នេហា', '年代': 'រឿងសម័យកាល', '逆袭': 'តស៊ូត្រឡប់មកជោគជ័យ', '传奇': 'រឿងវីរភាព', '成长': 'ការរីកចម្រើន', '家庭': 'គ្រួសារ', '都市': 'ជីវិតទីក្រុង', '古装': 'សម័យបុរាណ', '现代': 'សម័យទំនើប', '悬疑': 'អាថ៌កំបាំង', '喜剧': 'កំប្លែង', '动作': 'ក្បាច់គុន និងសកម្មភាព', '战争': 'សង្គ្រាម', '历史': 'ប្រវត្តិសាស្ត្រ', '奇幻': 'រវើរវាយ', '玄幻': 'រឿងអច្ឆរិយៈ', '仙侠': 'ទេពអប្សរ និងអ្នក仙', '武侠': 'ក្បាច់គុន', '青春': 'យុវវ័យ', '校园': 'សាលារៀន', '职场': 'ជីវិតការងារ', '甜宠': 'ស្នេហាផ្អែមល្ហែម', '虐恋': 'ស្នេហាសោកសៅ', '复仇': 'ការសងសឹក', '豪门': 'គ្រួសារអ្នកមាន', '总裁': 'ប្រធានក្រុមហ៊ុន', '穿越': 'ឆ្លងពេលវេលា', '重生': 'កើតជាថ្មី', '乡村': 'ជីវិតជនបទ', '农村': 'ជីវិតជនបទ', '亲情': 'សេចក្ដីស្រឡាញ់ក្នុងគ្រួសារ', '友情': 'មិត្តភាព', '现实': 'ជីវិតពិត', '励志': 'លើកទឹកចិត្ត', '惊悚': 'រន្ធត់', '恐怖': 'ភ័យរន្ធត់', '犯罪': 'ឧក្រិដ្ឋកម្ម', '探案': 'ស៊ើបអង្កេត', '科幻': 'វិទ្យាសាស្ត្រប្រឌិត', '萌宝': 'កូនតូចគួរឱ្យស្រឡាញ់', '神医': 'គ្រូពេទ្យអស្ចារ្យ', '战神': 'អ្នកចម្បាំងខ្លាំង', '赘婿': 'កូនប្រសារប្រុស', '女强': 'នារីខ្លាំង', '男频': 'សម្រាប់ទស្សនិកជនប្រុស', '女频': 'សម្រាប់ទស្សនិកជនស្រី', '短剧': 'រឿងភាគខ្លី', '漫剧': 'រឿងគំនូរជីវចល', '漫画': 'រឿងគំនូរជីវចល', '动画': 'គំនូរជីវចល', '全部': 'ទាំងអស់'}
-
-
-def _hg_category_label(name):
-    raw = str(name or "").strip()
-    return _HG_CATEGORY_KH.get(raw, raw)
-
-
-def _hg_flat_categories(tree):
-    """បម្លែង category tree ទៅជាជម្រើស UI ដែលរក្សា slug ត្រឹមត្រូវ។"""
-    out = {}
-    for parent in tree or []:
-        if not isinstance(parent, dict):
-            continue
-        pslug = str(parent.get("slug") or parent.get("category") or parent.get("category_id") or parent.get("id") or "").strip()
-        pname = str(parent.get("name") or parent.get("title") or parent.get("category_name") or pslug).strip()
-        if pslug and pname:
-            out[_hg_category_label(pname)] = pslug
-        children = parent.get("children") or []
-        if isinstance(children, list):
-            for child in children:
-                if not isinstance(child, dict):
-                    continue
-                cslug = str(child.get("slug") or child.get("category") or child.get("category_id") or child.get("id") or "").strip()
-                cname = str(child.get("name") or child.get("title") or child.get("category_name") or cslug).strip()
-                if cslug and cname:
-                    # បង្ហាញតែឈ្មោះប្រភេទរងជាខ្មែរ ដើម្បីកុំឱ្យអក្សរវែងពេកក្នុង Dropdown លើទូរស័ព្ទ។
-                    # បើឈ្មោះដូចគ្នា ទើបបន្ថែមឈ្មោះមេជាអក្សរខ្លីសម្រាប់បំបែក។
-                    child_label = _hg_category_label(cname)
-                    if child_label in out:
-                        child_label = f"{child_label} · {_hg_category_label(pname)}"
-                    out[child_label] = cslug
-    return out
-
-
-def _hg_error_khmer(error):
-    """បកស្រាយ error សំខាន់ៗជាខ្មែរ ដើម្បីអ្នកប្រើដឹងវិធីដោះស្រាយ។"""
-    msg = str(error or "")
-    if "20003" in msg or "参数值非法" in msg or "category" in msg and "合法分类" in msg:
-        return "ប្រភេទរឿងដែល API ទទួលបានមិនត្រឹមត្រូវ។ កម្មវិធីត្រូវប្រើ Category slug ពីបញ្ជីប្រភេទ Hongguo មិនមែនឈ្មោះចិនទេ។ សូមចុច «ផ្ទុកប្រភេទឡើងវិញ» ហើយជ្រើសប្រភេទម្ដងទៀត។"
-    if "20002" in msg or "参数缺失" in msg:
-        return "API ខ្វះប៉ារ៉ាម៉ែត្រចាំបាច់។ សូមជ្រើសប្រភេទរឿងម្ដងទៀត។"
-    return msg
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_category_list(category, page=1):
-    d = _hg_get("list", {"category": str(category), "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
+    return []
+
 
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_search(keyword, page=1):
-    d = _hg_get("search", {"keyword": keyword, "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
+    items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
+    rows = [_hg_normalize_row(x) for x in items]
+    return [x for x in rows if x.get("series_id")]
 
+
+def _hg_get(endpoint, params=None, timeout=45):
+    """Compatibility adapter for existing Hongguo UI actions, backed by Apify."""
+    params = dict(params or {})
+    if endpoint == "play":
+        series_id = str(params.get("series_id") or "")
+        ep_no = int(params.get("ep") or 1)
+        detail = _hg_detail(series_id)
+        ep = next((x for x in detail.get("episodes", []) if int(x.get("ep", 0)) == ep_no), None)
+        video_id = (ep or {}).get("video_id") or (ep or {}).get("videoId")
+        if not video_id:
+            raise RuntimeError(f"រកមិនឃើញ videoId សម្រាប់ភាគ {ep_no} ក្នុង Apify episode data។")
+        quality = str(params.get("q") or 1080) + "p"
+        items = _hg_apify_actor(_HG_ACTOR_PLAY, {"videoId": str(video_id), "quality": quality}, timeout=180)
+        result = items[0] if items and isinstance(items[0], dict) else {}
+        if result.get("status") == "error" or result.get("errorMessage"):
+            raise RuntimeError(str(result.get("errorMessage") or result.get("errorCode") or "Apify មិនអាចដោះស្រាយ video URL បាន។"))
+        return {"url": result.get("url") or result.get("videoUrl") or result.get("playUrl") or "", "ready": True, "source": "Apify"}
+    raise RuntimeError(f"Hongguo endpoint មិនទាន់មានការគាំទ្រតាម Apify: {endpoint}")
 
 def _hg_extract_series_id(value):
     """ទទួលយក URL លម្អិត Hongguo ឬ series_id ដោយផ្ទាល់។"""
@@ -7719,11 +7714,11 @@ with tab_drama:
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
-        if not _HG_APP_ID or not _HG_APP_SECRET:
-            st.warning("មិនទាន់រកឃើញ Hongguo APPID/APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin ពិនិត្យ Secrets របស់កម្មវិធី។ អ្នកប្រើមិនចាំបាច់បញ្ចូល API នៅផ្ទាំងផ្សេងទៀតទេ។")
+        if not _HG_APIFY_TOKEN:
+            st.warning("មិនទាន់កំណត់ APIFY_API_TOKEN ក្នុង Streamlit Secrets ទេ។ សូម Admin បន្ថែម Apify API Token ដើម្បីប្រើ Hongguo។")
             if _is_admin_session():
                 with st.expander("🔧 Admin: មើលមូលហេតុ (មិនបង្ហាញតម្លៃ Secret)"):
-                    st.write("APPID រកឃើញ:", "✅" if _HG_APP_ID else "❌", " · APPSECRET រកឃើញ:", "✅" if _HG_APP_SECRET else "❌")
+                    st.write("Apify API Token រកឃើញ:", "✅" if _HG_APIFY_TOKEN else "❌")
                     _names = _hg_secret_key_names()
                     st.write("ឈ្មោះ key ដែលកម្មវិធីឃើញក្នុង Secrets:", ", ".join(_names) if _names else "(គ្មានសោះ)")
                     st.caption("ឈ្មោះដែលទទួល៖ XIAOYING_APPID / APPID / HONGGUO_APPID និង XIAOYING_APPSECRET / APPSECRET / HONGGUO_APPSECRET។ ត្រូវដាក់នៅផ្នែកខាងលើបំផុតនៃ Secrets មុនបន្ទាត់ [section] ណាមួយ។")
@@ -7742,7 +7737,7 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_categories = _hg_categories() if _HG_APP_ID and _HG_APP_SECRET else []
+                _hg_categories = _hg_categories() if _HG_APIFY_TOKEN else []
             except Exception as _cat_err:
                 _hg_categories = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
@@ -7795,7 +7790,7 @@ with tab_drama:
                         st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
             except Exception as e:
                 st.error(str(e))
-        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APIFY_TOKEN):
             try:
                 st.session_state["_hg_page"] = 1
                 st.session_state["_hg_catalog_mode"] = "hot"
