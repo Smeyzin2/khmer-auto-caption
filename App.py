@@ -7627,6 +7627,44 @@ def _hg_categories():
     return []
 
 
+def _hg_flat_categories(categories):
+    """Flatten category data into a label -> API category ID mapping.
+
+    Apify's currently configured Hongguo Actors do not return categories, so
+    an empty list naturally produces an empty mapping and leaves the Hot feed
+    available. This helper also tolerates nested category data if an Actor
+    starts returning it in a future version.
+    """
+    flat = {}
+
+    def walk(items, prefix=""):
+        if isinstance(items, dict):
+            items = [items]
+        if not isinstance(items, (list, tuple)):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            label = (item.get("name") or item.get("title") or item.get("categoryName")
+                     or item.get("label") or "")
+            category_id = (item.get("slug") or item.get("categoryId")
+                           or item.get("category_id") or item.get("id") or "")
+            label = str(label).strip()
+            category_id = str(category_id).strip()
+            if label and category_id:
+                display = f"{prefix}{label}" if prefix else label
+                # Avoid overwriting duplicate labels in the visible selector.
+                if display in flat:
+                    display = f"{display} ({category_id})"
+                flat[display] = category_id
+            children = (item.get("children") or item.get("categories")
+                        or item.get("categoryList") or item.get("category_list") or [])
+            walk(children, f"{label} / " if label else prefix)
+
+    walk(categories)
+    return flat
+
+
 @st.cache_data(ttl=180, show_spinner=False)
 def _hg_detail(series_id):
     items = _hg_apify_actor(_HG_ACTOR_DETAIL, {"seriesIds": [str(series_id)]}, timeout=180)
