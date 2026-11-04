@@ -7594,7 +7594,7 @@ def _hg_login_form():
                 st.rerun()
             time.sleep(1)
             st.error(_info)
-        st.markdown('<div class="kv-f">មិនទាន់មានគណនី? សូមទាក់ទង Admin ដើម្បីទទួលគណនី</div>',
+        st.markdown('<div class="kv-f">មិនទាន់មានគណនី? សូមទាក់ទង Admin ដើម្បីទទួលគណនី · Telegram: <a href="https://t.me/Smeytk" target="_blank" rel="noopener noreferrer">@Smeytk</a></div>',
                     unsafe_allow_html=True)
 
 
@@ -8108,8 +8108,65 @@ def _hg_extract_series_id(value):
         return value
     return ""
 
+
+_HG_CONTACT_MSG = "🔒 សូមទាក់ទងម្ចាស់កម្មវិធី ដើម្បីបើកគណនី VIP មុនប្រើមុខងារនេះ។\n\n📨 Telegram: [@Smeytk](https://t.me/Smeytk)"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _hg_guest_hot():
+    """បញ្ជីរឿងពេញនិយមសម្រាប់អ្នកមិនមែន VIP មើលតែប៉ុណ្ណោះ (cache 1 ម៉ោង កុំឱ្យអស់កូតា API)។"""
+    return _hg_rank(1)
+
+
+def _hg_guest_preview():
+    """អ្នកមិនទាន់មាន VIP ឃើញទំព័រដូចគ្នា ប៉ុន្តែគ្រប់ប៊ូតុងត្រូវបានចាក់សោ — ចុចហើយបង្ហាញសារឱ្យទាក់ទងម្ចាស់កម្មវិធី។"""
+    notice = st.empty()
+    clicked = []
+
+    def _btn(label, key):
+        if st.button(label, key=key, use_container_width=True):
+            clicked.append(key)
+
+    st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
+    st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
+    q1, q2 = st.columns([3, 1])
+    with q1:
+        st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hgg_search_text",
+                      placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
+    with q2:
+        st.write("")
+        _btn("🔎 ស្វែងរក", "hgg_search_btn")
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.selectbox("📚 ប្រភេទរឿង", ["🔥 កំពុងពេញនិយម"], key="hgg_category_choice")
+        _btn("🔄 ផ្ទុកប្រភេទឡើងវិញ", "hgg_refresh_categories")
+    with c2:
+        st.write("")
+        _btn("បង្ហាញរឿង", "hgg_category_load")
+    _btn("🔥 រឿងកំពុងពេញនិយម", "hgg_home_btn")
+
+    rows = []
+    if _HG_APIFY_TOKEN:
+        try:
+            rows = [r for r in (_hg_guest_hot() or []) if isinstance(r, dict) and r.get("series_id")]
+        except Exception:
+            rows = []
+    for i in range(0, len(rows), 3):
+        cols = st.columns(3, gap="small")
+        for col, row in zip(cols, rows[i:i + 3]):
+            with col:
+                if row.get("cover"):
+                    st.image(row["cover"], use_container_width=True)
+                st.markdown("**" + str(row.get("name") or "រឿង") + "**")
+                st.caption(f"ចំនួនភាគ៖ {row.get('episode_cnt') or row.get('listed_cnt') or '—'}")
+                _btn("មើលរឿង", f"hgg_select_{row['series_id']}")
+    if clicked:
+        notice.warning(_HG_CONTACT_MSG)
+
 with tab_drama:
     _hg_access = _hg_vip_gate()
+    if not _hg_access:
+        _hg_guest_preview()
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
@@ -8511,7 +8568,7 @@ def _tt_apply_ep_input():
 with tab_tiktok:
     _tt_access = _hg_has_access()
     if not _tt_access:
-        st.info("🔒 ផ្ទាំងនេះសម្រាប់សមាជិក VIP។ សូមចូលគណនី VIP នៅផ្ទាំង 🍎 Hongguo មុន រួចត្រឡប់មកទីនេះ។")
+        st.info("🔒 ផ្ទាំងនេះសម្រាប់សមាជិក VIP។ សូមចូលគណនី VIP នៅផ្ទាំង 🍎 Hongguo មុន រួចត្រឡប់មកទីនេះ។\n\n📨 ទាក់ទងបើកគណនី៖ Telegram [@Smeytk](https://t.me/Smeytk)")
     if _tt_access:
         st.markdown("### 🎵 TikTok Short Drama")
         st.caption("បិទភ្ជាប់ Episode URL មួយ រួចប្រើប៊ូតុង ⏮ ភាគមុន / ភាគបន្ទាប់ ⏭ ដើម្បីប្តូរភាគ ដូច Hongguo។")
