@@ -7705,29 +7705,113 @@ def _hg_flat_categories(categories):
 
 @st.cache_data(ttl=180, show_spinner=False)
 def _hg_detail(series_id):
+    """Normalize Hongguo detail Actor outputs from common nested API shapes."""
     items = _hg_apify_actor(_HG_ACTOR_DETAIL, {"seriesIds": [str(series_id)]}, timeout=180)
     if not items:
         return {}
-    raw = items[0] if isinstance(items[0], dict) else {}
-    d = raw.get("data") if isinstance(raw.get("data"), dict) else raw
-    episodes = d.get("episodes") or d.get("episodeList") or d.get("episode_list") or d.get("videos") or []
-    normalized = []
-    for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
-        if not isinstance(ep, dict):
+
+    def _first_dict(value):
+        if isinstance(value, dict):
+            return value
+        if isinstance(value, list):
+            return next((x for x in value if isinstance(x, dict)), {})
+        return {}
+
+    raw = _first_dict(items)
+    root = raw
+    # Unwrap common response wrappers without losing outer episode arrays.
+    for key in ("result", "response", "detail", "item"):
+        if isinstance(root.get(key), dict):
+            root = root[key]
+            break
+
+    data = root.get("data") if isinstance(root.get("data"), dict) else root
+    series = _first_dict(data.get("series") or data.get("seriesInfo") or data.get("series_info"))
+    if not series:
+        series = _first_dict(root.get("series") or root.get("seriesInfo") or root.get("series_info"))
+    d = {**root, **data, **series}
+
+    episode_rows = None
+    for container in (raw, root, data, series):
+        if not isinstance(container, dict):
             continue
-        ep_no = ep.get("episodeNo") or ep.get("episode") or ep.get("ep") or ep.get("episode_no") or ep.get("index") or (i + 1)
+        for key in (
+            "episodes", "episodeList", "episode_list", "episodeInfos",
+            "episode_infos", "videos", "videoList", "video_list", "list"
+        ):
+            candidate = container.get(key)
+            if isinstance(candidate, (list, dict)) and candidate:
+                episode_rows = candidate
+                break
+        if episode_rows is not None:
+            break
+
+    if isinstance(episode_rows, dict):
+        # Some Actors return an object indexed by episode number.
+        episode_rows = list(episode_rows.values())
+    if not isinstance(episode_rows, list):
+        episode_rows = []
+
+    normalized = []
+    for i, item in enumerate(episode_rows):
+        if isinstance(item, (str, int)):
+            ep = {"videoId": str(item)}
+        elif isinstance(item, dict):
+            ep = item
+        else:
+            continue
+
+        ep_no = (
+            ep.get("episodeIndex") or ep.get("episodeNo") or ep.get("episode")
+            or ep.get("ep") or ep.get("episode_no") or ep.get("episodeNumber")
+            or ep.get("episode_number") or ep.get("number") or ep.get("index")
+            or ep.get("sort") or ep.get("order") or (i + 1)
+        )
         try:
             ep_no = int(ep_no)
         except (TypeError, ValueError):
             ep_no = i + 1
-        video_id = ep.get("videoId") or ep.get("video_id") or ep.get("id") or ep.get("vid")
-        normalized.append({**ep, "ep": ep_no, "video_id": str(video_id or ""), "playable": bool(video_id or ep.get("url") or ep.get("play_url"))})
+
+        video_id = (
+            ep.get("videoId") or ep.get("video_id") or ep.get("videoID")
+            or ep.get("vid") or ep.get("video_id_str") or ep.get("playId")
+            or ep.get("play_id") or ep.get("resourceId") or ep.get("resource_id")
+        )
+        if not video_id:
+            video_id = ep.get("episodeId") or ep.get("episode_id") or ep.get("id")
+
+        direct_url = (
+            ep.get("url") or ep.get("videoUrl") or ep.get("video_url")
+            or ep.get("playUrl") or ep.get("play_url") or ep.get("downloadUrl")
+            or ep.get("download_url") or ep.get("src")
+        )
+        normalized.append({
+            **ep,
+            "ep": ep_no,
+            "video_id": str(video_id or ""),
+            "url": str(direct_url or ""),
+            "playable": bool(video_id or direct_url),
+        })
+
+    count = (
+        d.get("episodeCount") or d.get("episode_count") or d.get("episode_cnt")
+        or d.get("totalEpisodes") or d.get("total_episodes") or len(normalized)
+    )
+    try:
+        count = int(count)
+    except (TypeError, ValueError):
+        count = len(normalized)
+
     return {
         **d,
-        "name": d.get("title") or d.get("name") or d.get("seriesName") or "រឿង Hongguo",
-        "cover": d.get("coverUrl") or d.get("cover") or d.get("cover_url") or "",
-        "intro": d.get("intro") or d.get("description") or d.get("summary") or "",
-        "episode_cnt": d.get("episodeCount") or d.get("episode_cnt") or len(normalized),
+        "series_id": str(d.get("seriesId") or d.get("series_id") or series_id),
+        "name": d.get("title") or d.get("name") or d.get("seriesName")
+                or d.get("seriesTitle") or "រឿង Hongguo",
+        "cover": d.get("coverUrl") or d.get("cover_url") or d.get("cover")
+                 or d.get("posterUrl") or d.get("poster_url") or "",
+        "intro": d.get("intro") or d.get("description") or d.get("summary")
+                 or d.get("synopsis") or "",
+        "episode_cnt": count,
         "episodes": normalized,
     }
 
@@ -7764,16 +7848,57 @@ def _hg_get(endpoint, params=None, timeout=45):
         series_id = str(params.get("series_id") or "")
         ep_no = int(params.get("ep") or 1)
         detail = _hg_detail(series_id)
-        ep = next((x for x in detail.get("episodes", []) if int(x.get("ep", 0)) == ep_no), None)
-        video_id = (ep or {}).get("video_id") or (ep or {}).get("videoId")
+        ep = next(
+            (x for x in detail.get("episodes", [])
+             if isinstance(x, dict) and int(x.get("ep", 0) or 0) == ep_no),
+            None
+        )
+        if not ep:
+            raise RuntimeError(f"រកមិនឃើញព័ត៌មានភាគ {ep_no} ក្នុងទិន្នន័យ Hongguo។")
+
+        # If the detail Actor already supplies a playable URL, use it directly.
+        direct_url = str(
+            ep.get("url") or ep.get("videoUrl") or ep.get("video_url")
+            or ep.get("playUrl") or ep.get("play_url") or ep.get("downloadUrl")
+            or ep.get("download_url") or ""
+        ).strip()
+        if direct_url.startswith(("http://", "https://")):
+            return {"url": direct_url, "ready": True, "source": "Hongguo detail"}
+
+        video_id = (
+            ep.get("video_id") or ep.get("videoId") or ep.get("video_id")
+            or ep.get("videoID") or ep.get("vid") or ep.get("playId")
+            or ep.get("play_id") or ep.get("episodeId") or ep.get("episode_id")
+            or ep.get("id")
+        )
         if not video_id:
-            raise RuntimeError(f"រកមិនឃើញ videoId សម្រាប់ភាគ {ep_no} ក្នុង Apify episode data។")
+            raise RuntimeError(
+                f"រកមិនឃើញ videoId ឬ Video URL សម្រាប់ភាគ {ep_no}។ "
+                "សូមពិនិត្យ Actor detail ដែលបានភ្ជាប់ក្នុង Apify។"
+            )
+
         quality = str(params.get("q") or 1080) + "p"
-        items = _hg_apify_actor(_HG_ACTOR_PLAY, {"videoId": str(video_id), "quality": quality}, timeout=180)
-        result = items[0] if items and isinstance(items[0], dict) else {}
-        if result.get("status") == "error" or result.get("errorMessage"):
-            raise RuntimeError(str(result.get("errorMessage") or result.get("errorCode") or "Apify មិនអាចដោះស្រាយ video URL បាន។"))
-        return {"url": result.get("url") or result.get("videoUrl") or result.get("playUrl") or "", "ready": True, "source": "Apify"}
+        items = _hg_apify_actor(
+            _HG_ACTOR_PLAY,
+            {"videoId": str(video_id), "quality": quality},
+            timeout=180
+        )
+        result = next((x for x in items if isinstance(x, dict)), {}) if items else {}
+        if result.get("status") == "error" or result.get("errorMessage") or result.get("error"):
+            raise RuntimeError(str(
+                result.get("errorMessage") or result.get("error")
+                or result.get("errorCode") or "Apify មិនអាចដោះស្រាយ Video URL បាន។"
+            ))
+        video_url = (
+            result.get("url") or result.get("videoUrl") or result.get("video_url")
+            or result.get("playUrl") or result.get("play_url")
+            or result.get("downloadUrl") or result.get("download_url")
+        )
+        if not isinstance(video_url, str) or not video_url.startswith(("http://", "https://")):
+            raise RuntimeError(
+                "Actor សម្រាប់ដោះស្រាយភាគមិនបានផ្ដល់ Video URL ត្រឹមត្រូវទេ។"
+            )
+        return {"url": video_url, "ready": True, "source": "Apify"}
     raise RuntimeError(f"Hongguo endpoint មិនទាន់មានការគាំទ្រតាម Apify: {endpoint}")
 
 def _hg_extract_series_id(value):
@@ -7902,7 +8027,7 @@ with tab_drama:
                     _hg_d = _hg_detail(_hg_selected["series_id"])
                 if _hg_d.get("intro"):
                     st.write(_hg_d["intro"])
-                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
+                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and (e.get("playable") or e.get("video_id") or e.get("url"))]
                 if not _hg_eps:
                     st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
                 else:
