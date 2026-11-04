@@ -10322,3 +10322,30 @@ KVAI_FIX_CSS = r"""
 </style>
 """
 st.markdown(KVAI_FIX_CSS, unsafe_allow_html=True)
+
+# ── មិនឱ្យ keyboard លោតចេញពេលចុច selectbox (ធ្វើឱ្យ input ក្នុង selectbox ជា readonly) ──
+components.html(
+    """
+<script>
+(function(){
+  try {
+    const doc = window.parent.document;
+    if (doc.__kvaiNoKb) return;
+    doc.__kvaiNoKb = true;
+    const fix = () => {
+      doc.querySelectorAll('[data-testid="stSelectbox"] input').forEach(i => {
+        if (i.dataset.nokb) return;
+        i.dataset.nokb = "1";
+        i.setAttribute('inputmode', 'none');
+        i.setAttribute('readonly', 'readonly');
+        i.style.caretColor = 'transparent';
+      });
+    };
+    fix();
+    new MutationObserver(fix).observe(doc.body, {childList: true, subtree: true});
+  } catch (e) {}
+})();
+</script>
+""",
+    height=0,
+)
