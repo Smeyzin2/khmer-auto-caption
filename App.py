@@ -27,6 +27,38 @@ from datetime import datetime, timezone, timedelta
 
 import streamlit as st
 import streamlit.components.v1 as components
+
+
+# កែបញ្ហា "SyntaxError: Invalid regular expression ... Nothing to repeat" លើ browser៖
+# emoji keycap (*️⃣ #️⃣ 0️⃣) ក្នុងអត្ថបទ markdown ធ្វើឱ្យ Streamlit frontend គាំង។ ដូរទៅអក្សរធម្មតាមុនបង្ហាញ។
+import re as _re_kc
+_KEYCAP_RE = _re_kc.compile("([#*0-9])\ufe0f?\u20e3")
+
+
+def _kc_clean(x):
+    if isinstance(x, str) and "\u20e3" in x:
+        return _KEYCAP_RE.sub(lambda m: {"*": "\uff0a", "#": "\uff03"}.get(m.group(1), m.group(1)), x)
+    return x
+
+
+def _kc_wrap(_name):
+    _orig = getattr(st, _name, None)
+    if _orig is None:
+        return
+
+    def _w(body=None, *a, **k):
+        if body is None:
+            return _orig(*a, **k)
+        return _orig(_kc_clean(body), *a, **k)
+    _w.__name__ = _name
+    setattr(st, _name, _w)
+
+
+for _n_kc in ("markdown", "caption", "info", "warning", "error", "success", "write"):
+    try:
+        _kc_wrap(_n_kc)
+    except Exception:
+        pass
 import imageio_ffmpeg
 import edge_tts
 
