@@ -1143,7 +1143,7 @@ CHUNK_MAX = 28.0
 MAX_CHUNK_WORKERS = 6
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"]   # turbo មុន = លឿនជាង ~6 ដង
+GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]   # large-v3 មុន = ស្តាប់ត្រូវជាង
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
@@ -3540,14 +3540,14 @@ except Exception:
     TRANS_BATCH = 8
 LLM_GROUP = 12   # ចំនួនឃ្លាក្នុងមួយការហៅ AI ពេលកែ/ជ្រើស/តម្រឹម (ធំជាង = ហៅតិចជាង = លឿនជាង)
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
-REVIEW_MODE = str(get_secret("REVIEW_MODE", "off")).strip().lower()   # លំនាំដើមបិទ = លឿនបំផុត (ដាក់ "refine" ដើម្បីបកឱ្យល្អជាង តែយឺតជាង)
+REVIEW_MODE = str(get_secret("REVIEW_MODE", "refine")).strip().lower()   # លំនាំដើមបិទ = លឿនបំផុត (ដាក់ "refine" ដើម្បីបកឱ្យល្អជាង តែយឺតជាង)
 # CLAUDE_FIRST=1 (លំនាំដើម): Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ | 0 = ប្រើ Provider ផ្សេងមុន
 CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "1")).strip().lower() in ("1", "true", "yes", "on")
 # FIT_MODE=1 (លំនាំដើម): បង្រួមឃ្លាវែងដោយ AI ដើម្បីសមពេលនិយាយ
-FIT_MODE = str(get_secret("FIT_MODE", "1")).strip().lower() in ("1", "true", "yes", "on")
+FIT_MODE = str(get_secret("FIT_MODE", "0")).strip().lower() in ("1", "true", "yes", "on")
 # EXPAND_MODE=1: ពង្រីកឃ្លាខ្លីឱ្យវែង (អាចបន្ថែមពាក្យមិនមាននៅដើម) — លំនាំដើមបិទ ដើម្បីរក្សាភាពត្រឹមត្រូវ
 EXPAND_MODE = str(get_secret("EXPAND_MODE", "0")).strip().lower() in ("1", "true", "yes", "on")
-FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
+FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "0")).strip().lower() not in ("0", "false", "no", "off")
 
 
 def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progress=None, speakers=None, fit=True):
@@ -3588,7 +3588,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
     synopsis = ""
-    if n > 2 and str(get_secret("SYNOPSIS", "0")).strip().lower() in ("1", "true", "yes", "on"):
+    if n > 2 and str(get_secret("SYNOPSIS", "1")).strip().lower() in ("1", "true", "yes", "on"):
         if groq_key or oai_enabled():
             synopsis = make_synopsis(english, texts, None, groq_key)
         if not synopsis and gemini_key:
@@ -6327,6 +6327,52 @@ def announce_new_done(job):
     return played
 
 
+
+# ជំហានលម្អិត: (ឈ្មោះ, pct ចាប់ផ្តើម, pct បញ្ចប់) — ប្រើបង្ហាញភាគរយ និងពេលវេលាតាមជំហាននីមួយៗ
+PIPE_STAGES = [
+    ("ទាញយកវីដេអូ", 0.00, 0.12),
+    ("រៀបចំឯកសារ", 0.12, 0.18),
+    ("ដកសំឡេងចេញពីវីដេអូ", 0.18, 0.25),
+    ("ស្តាប់ និងបកប្រែជាខ្មែរ", 0.25, 0.55),
+    ("បង្កើតសំឡេងខ្មែរ / រៀបចំអក្សរ", 0.55, 0.75),
+    ("ដាក់អក្សរចូលវីដេអូ", 0.75, 1.00),
+]
+
+
+def _fmt_secs(x):
+    x = int(max(0, x))
+    return f"{x // 60} នាទី {x % 60} វិ" if x >= 60 else f"{x} វិ"
+
+
+def stage_panel(it):
+    """បង្ហាញបញ្ជីជំហាន: ✅ ចប់ (ប្រើពេលប៉ុន្មាន) · 🔄 កំពុងធ្វើ (ភាគរយក្នុងជំហាន) · ⏳ រង់ចាំ។"""
+    pct = max(0.0, min(1.0, float(it.get("pct", 0.0))))
+    now = time.time()
+    t0 = it.get("t0") or now
+    times = it.setdefault("stage_times", {})
+    cur = 0
+    for k, (_n, lo, hi) in enumerate(PIPE_STAGES):
+        if pct >= lo:
+            cur = k
+    for k in range(cur + 1):
+        times.setdefault(k, now)
+    elapsed = now - t0
+    head = f"**សរុប {int(pct * 100)}%** · ចំណាយពេល {_fmt_secs(elapsed)}"
+    if pct > 0.08 and elapsed > 5:
+        head += f" · នៅសល់ប្រហែល {_fmt_secs(elapsed / pct - elapsed)}"
+    lines = [head, ""]
+    for k, (name, lo, hi) in enumerate(PIPE_STAGES):
+        if k < cur:
+            dur = times.get(k + 1, now) - times.get(k, now)
+            lines.append(f"✅ {k + 1}. {name} — ចប់ ១០០% ({_fmt_secs(dur)})")
+        elif k == cur:
+            frac = max(0.0, min(1.0, (pct - lo) / (hi - lo))) if hi > lo else 0.0
+            lines.append(f"🔄 **{k + 1}. {name} — {int(frac * 100)}%** ({_fmt_secs(now - times.get(k, now))})")
+        else:
+            lines.append(f"⏳ {k + 1}. {name} — រង់ចាំ")
+    st.markdown("  \n".join(lines))
+
+
 def work_area(job, was_running, reviewing=False):
     items = job.items
     total = len(items)
@@ -6385,7 +6431,9 @@ def work_area(job, was_running, reviewing=False):
                     time.sleep(0.5)
                     st.rerun()
             else:
-                st.progress(max(0.0, min(1.0, it["pct"])), text=it["stage"])
+                st.progress(max(0.0, min(1.0, it["pct"])), text=f"{int(max(0.0, min(1.0, it['pct'])) * 100)}% · {it['stage']}")
+                if it["state"] in ("running", "queued"):
+                    stage_panel(it)
             for w in it["warn"]:
                 st.warning(w)
     _played = announce_new_done(job)
