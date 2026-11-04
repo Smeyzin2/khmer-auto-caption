@@ -7790,6 +7790,27 @@ def _hg_normalize_row(item):
         cover = cover.get("url") or cover.get("src") or cover.get("imageUrl") or ""
     if isinstance(cover, list):
         cover = next((x for x in cover if isinstance(x, str) and x.startswith(("http://", "https://"))), "")
+    if not cover:
+        def _deep_img(o, depth=0):
+            if depth > 4:
+                return ""
+            if isinstance(o, str):
+                lo = o.lower().split("?")[0]
+                if o.startswith(("http://", "https://")) and lo.endswith((".jpg", ".jpeg", ".png", ".webp", ".image", ".heic", ".avif")):
+                    return o
+                return ""
+            if isinstance(o, dict):
+                for v in o.values():
+                    r = _deep_img(v, depth + 1)
+                    if r:
+                        return r
+            if isinstance(o, list):
+                for v in o[:8]:
+                    r = _deep_img(v, depth + 1)
+                    if r:
+                        return r
+            return ""
+        cover = _deep_img(nested)
 
     title = (nested.get("title") or nested.get("name") or nested.get("bookName")
              or nested.get("seriesName") or nested.get("dramaName") or "រឿង Hongguo")
@@ -8027,6 +8048,37 @@ def _hg_detail(series_id):
     }
 
 
+def _hg_enrich_rows(rows):
+    """បំពេញ poster/ឈ្មោះ/ចំនួនភាគ ដែលខ្វះ ពី detail actor (ស្របគ្នា)។"""
+    def _need(r):
+        return (not r.get("cover")) or r.get("name") == "រឿង Hongguo" or not r.get("episode_cnt")
+
+    def _fix(r):
+        if not _need(r):
+            return r
+        try:
+            d = _hg_detail(r["series_id"])
+        except Exception:
+            return r
+        if not d:
+            return r
+        out = dict(r)
+        if d.get("cover"):
+            out["cover"] = d["cover"]
+        if d.get("name") and d["name"] != "រឿង Hongguo":
+            out["name"] = d["name"]
+        if d.get("episode_cnt"):
+            out["episode_cnt"] = d["episode_cnt"]
+        if d.get("intro"):
+            out["intro"] = d["intro"]
+        return out
+
+    if not rows:
+        return rows
+    with ThreadPoolExecutor(max_workers=6) as ex:
+        return list(ex.map(_fix, rows))
+
+
 @st.cache_data(ttl=240, show_spinner=False)
 def _hg_category_list(category, page=1):
     """Fetch a supported category listing via Apify and paginate its returned rows."""
@@ -8035,8 +8087,8 @@ def _hg_category_list(category, page=1):
     if not category:
         return []
     if category.startswith("kw:"):
-        _kw_rows = _hg_search(category[3:])
-        return _kw_rows[(page - 1) * 20:page * 20]
+        _kw_rows = _hg_search(category[3:])[(page - 1) * 20:page * 20]
+        return _hg_enrich_rows(_kw_rows)
     items = _hg_apify_actor(
         _HG_ACTOR_FEED,
         {"listings": [category], "maxResults": min(100, page * 20),
@@ -10296,10 +10348,11 @@ st.markdown(TITLE_CODE_FIX_CSS, unsafe_allow_html=True)
 # warning box is hidden instead of shown to the user.
 # =====================================================================
 KVAI_FIX_CSS = r"""
+<style>
 [data-baseweb="popover"] ul[role="listbox"], [data-baseweb="popover"] [role="listbox"], div[data-baseweb="menu"] {
   max-height: 55vh !important; overflow-y: auto !important; -webkit-overflow-scrolling: touch; overscroll-behavior: contain;
 }
-<style>
+
 .st-key-kv_ls, .st-key-kv_login_ls,
 [data-testid="stElementContainer"]:has(iframe[title*="kvai_local_storage"]),
 [data-testid="stElementContainer"]:has(iframe[title*="kvai_login_storage"]) {
