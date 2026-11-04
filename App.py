@@ -6,9 +6,6 @@ import gc
 import time
 import uuid
 import hmac
-import hashlib
-import secrets
-import requests
 import shutil
 import asyncio
 import zipfile
@@ -23,7 +20,6 @@ import urllib.request
 import unicodedata
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone, timedelta
 
 import streamlit as st
 import streamlit.components.v1 as components
@@ -31,7 +27,7 @@ import imageio_ffmpeg
 import edge_tts
 
 st.set_page_config(
-    page_title="TikTok Short Drama + Khmer Auto Caption",
+    page_title="បកប្រែវីដេអូមកនិយាយខ្មែរ",
     page_icon="🎬",
     layout="wide",
 )
@@ -274,23 +270,6 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
   background: #FFFFFF !important; color: var(--ink) !important;
 }
 [data-baseweb="popover"] li:hover { background: rgba(124,58,237,.12) !important; }
-/* បង្ហាញឈ្មោះប្រភេទពេញ មិនកាត់ជាសញ្ញា ... លើទូរស័ព្ទ */
-[data-baseweb="popover"] [role="option"],
-[data-baseweb="menu"] [role="option"] {
-  white-space: normal !important;
-  overflow: visible !important;
-  text-overflow: clip !important;
-  line-height: 1.55 !important;
-  min-height: 44px !important;
-  height: auto !important;
-  align-items: center !important;
-}
-[data-baseweb="popover"] [role="option"] > div,
-[data-baseweb="menu"] [role="option"] > div {
-  white-space: normal !important;
-  overflow-wrap: anywhere !important;
-  text-overflow: clip !important;
-}
 
 /* ---------- Text area ---------- */
 .stTextArea textarea, [data-baseweb="textarea"], [data-baseweb="textarea"] > div {
@@ -1109,7 +1088,7 @@ MAX_DURATION_MIN = 300
 
 CHUNK_TARGET = 20.0
 CHUNK_MAX = 28.0
-MAX_CHUNK_WORKERS = 6
+MAX_CHUNK_WORKERS = 4
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
 GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
@@ -2500,9 +2479,8 @@ TRANS_SYSTEM_FULL = (
     "no word salad. Write numbers and units the way Khmer speakers say them. Transliterate foreign names naturally. "
     "(6) If a line is garbled or uncertain, keep the closest clear meaning, do not invent dialogue. "
     "(7) A [max N chars] tag is the SPEAKING-TIME budget of the on-screen speaker's mouth (Khmer TTS speaks about 12 characters per second). "
-    "Make the dubbed line end when the mouth stops, so treat N as a TARGET length (aim for 80-105% of N): if your natural Khmer is longer than N, use the shortest everyday wording and drop fillers; "
-    "if it is clearly shorter than ~70% of N (the speaker talks for a long time), make it fuller and more natural with common connecting words, polite particles and a fuller phrasing of the SAME meaning, without inventing any new fact. "
-    "NEVER drop a fact, name, number, negation or the emotional point just to fit; if the meaning truly cannot fit, keep the meaning and exceed the budget slightly. Never output the tag. "
+    "Make the dubbed line end when the mouth stops: choose the shortest natural everyday wording, drop filler words, repeated words and pronouns a native would omit, "
+    "and keep the same rhythm as the original. NEVER drop a fact, name, number, negation or the emotional point just to fit; if the meaning truly cannot fit, keep the meaning and exceed the budget slightly. Never output the tag. "
     "(8) Every numbered line is ONE complete spoken sentence unit: translate it into exactly one complete, grammatical Khmer "
     "sentence; never merge lines, split lines, or move content between lines. Never leave source-language words untranslated except names. "
     "(9) The output will be read aloud by a TTS voice: use plain natural Khmer, put ។ (or ? !) only at the end of a sentence, and avoid "
@@ -2536,70 +2514,17 @@ TRANS_SYSTEM_LITE = (
     "Rules: keep exact meaning, names, numbers, negations and emotion; never add or drop facts; pick pronouns/politeness by relationship "
     "and keep them consistent; transliterate foreign names by sound the same way every time; translate idioms by meaning; "
     "one input line = exactly one complete Khmer sentence, same order, never merge or split. "
-    "A [max N chars] tag is the TARGET length (aim for 80-105% of N): shorten with simpler wording if too long; if clearly under ~70% of N, phrase it fuller with natural connecting words but never invent facts; never drop a fact; never output the tag. "
+    "A [max N chars] tag is the speaking-time budget: use the shortest natural wording, drop fillers, never drop a fact; never output the tag. "
     "Output is read by TTS: Khmer script only, end with ។ ? or !, no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
     "A [speaker: male] or [speaker: female] tag is the true gender of the speaker: use បាទ / ខ្ញុំបាទ for a man and ចាស / នាងខ្ញុំ (formal) for a woman, never swap them; never output the tag. "
     "An English hint, if given, is only a hint; the original wins. "
     'Return JSON {"translations": [...]} with exactly one item per input.'
 )
 LITE_PROMPT = str(get_secret("LITE_PROMPT", "0")).strip().lower() in ("1", "true", "yes", "on")
-TRANS_ACCURACY_NOTE = (
-    " FAITHFULNESS FIRST (overrides any length or style wish): the source lines come from automatic speech recognition, so a word may be a "
-    "homophone or a mis-heard name. Use the VIDEO SUMMARY and the surrounding lines to pick the reading that fits the story (who is speaking to whom, "
-    "the relationship, what just happened), but never invent dialogue. Translate what is actually SAID in each line: keep every fact, "
-    "question, negation, number, name, threat, promise and joke, and keep the speaker's attitude (respect, contempt, anger, love). "
-    "Do not summarise, soften, embellish or replace a line with a generic sentence. Keep the same person called by the same Khmer name and the same "
-    "kinship or title word in every line. If a line has no [max N chars] tag there is NO length limit: translate it fully. "
-    "Even when a [max N chars] tag is present, meaning and story fit always win over length."
-)
-TRANS_SYSTEM = (TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL) + TRANS_ACCURACY_NOTE
+TRANS_SYSTEM = TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL
 
 
-def _groq_is_too_large(msg):
-    low = str(msg).lower()
-    return "request too large" in low or "reduce your message size" in low or "413" in low or "context_length" in low
-
-
-def _groq_shrink_system(system):
-    """បង្រួម prompt: ប្តូរ prompt ពេញទៅ LITE ហើយកាត់បរិបទរឿង (STORY/SUMMARY) ឱ្យខ្លី។"""
-    sys_ = system or TRANS_SYSTEM
-    sys_ = sys_.replace(TRANS_SYSTEM_FULL, TRANS_SYSTEM_LITE)
-    for tag in (" STORY SO FAR", "VIDEO SUMMARY:"):
-        i = sys_.find(tag)
-        if i > 0 and len(sys_) - i > 1500:
-            sys_ = sys_[:i + 1500]
-            break
-    return sys_
-
-
-def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False, _depth=0):
-    try:
-        return _groq_translate_chunk_core(api_key, texts, budgets, system, to_english, rotate)
-    except Exception as e:
-        if not _groq_is_too_large(e) or _depth >= 3:
-            raise
-        # ជំហាន ១: បង្រួម prompt រួចសាកម្តងទៀត
-        if _depth == 0:
-            small = _groq_shrink_system(system)
-            if small != (system or TRANS_SYSTEM):
-                try:
-                    return _groq_translate_chunk_core(api_key, texts, budgets, small, to_english, rotate)
-                except Exception as e2:
-                    if not _groq_is_too_large(e2):
-                        raise
-                system = small
-        # ជំហាន ២: ចែកបាច់ជាពាក់កណ្តាល
-        if len(texts) < 2:
-            raise
-        mid = len(texts) // 2
-        b1 = budgets[:mid] if budgets else None
-        b2 = budgets[mid:] if budgets else None
-        left = _groq_translate_chunk_impl(api_key, texts[:mid], b1, system, to_english, rotate, _depth + 1)
-        right = _groq_translate_chunk_impl(api_key, texts[mid:], b2, system, to_english, rotate, _depth + 1)
-        return list(left) + list(right)
-
-
-def _groq_translate_chunk_core(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
+def _groq_translate_chunk_impl(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
     numbered = "\n".join(
         f"{i + 1}. " + (f"[max {budgets[i]} chars] " if budgets and budgets[i] else "") + str(t)
         for i, t in enumerate(texts)
@@ -2637,8 +2562,6 @@ def _groq_translate_chunk_core(api_key, texts, budgets=None, system=None, to_eng
                 break
             except urllib.error.HTTPError as e:
                 last = f"{model}: {http_detail(e)}"
-                if _groq_is_too_large(last):
-                    break   # ធំពេក → កុំសម្រាកម៉ូដែល កុំរង់ចាំ (ឱ្យ caller បង្រួម/ចែកបាច់)
                 if e.code == 429 and attempt == 0:
                     time.sleep(6)
                     continue
@@ -2951,51 +2874,34 @@ def oai_test(key, base, model):
         return False, "សាកមិនបាន៖ " + str(e)[:220]
 
 
-def _claude_tier(texts, budgets, system, to_english):
-    """ម៉ាស៊ីនសំខាន់ #1: Claude (គ្រប់ Key ដែលមាន)។"""
-    if not claude_enabled():
-        return None
-    for _cn, _cc in _CLAUDE_PROVIDERS:
-        _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
-        if _cl.get("until", 0) > time.time():
-            continue
-        _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
-        if _cr is not None:
-            return _cr
-    return None
-
-
 def groq_translate_chunk(api_key, texts, budgets=None, system=None, to_english=False, rotate=False):
-    """លំដាប់ថ្មី៖
-       ម៉ាស៊ីនសំខាន់ = Claude + Groq (CLAUDE_FIRST=1 → Claude មុន; =0 → Groq មុន)
-       ម៉ាស៊ីនបម្រុង = OpenRouter / Mistral / NVIDIA / ... / CodeCraft (ប្រើតែពេលសំខាន់ទាំងពីរបរាជ័យ)"""
+    """លំដាប់៖ Groq (ម៉ាស៊ីនសំខាន់) → OpenRouter → CodeCraft (ម៉ាស៊ីនបម្រុង)។"""
     groq_err = None
-
-    def _groq():
-        nonlocal groq_err
-        if not api_key:
-            return None
+    if claude_enabled() and CLAUDE_FIRST:
+        for _cn, _cc in _CLAUDE_PROVIDERS:
+            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
+            if _cl.get("until", 0) > time.time():
+                continue
+            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
+            if _cr is not None:
+                return _cr
+    if api_key:
         try:
             return _groq_translate_chunk_impl(api_key, texts, budgets, system, to_english, rotate)
         except Exception as e:
             groq_err = e
-            _LAST_AI_ERR["Groq"] = str(e)[:260]
-            return None
-
-    primaries = [lambda: _claude_tier(texts, budgets, system, to_english), _groq]
-    if not CLAUDE_FIRST:
-        primaries.reverse()
-    for _p in primaries:
-        _r = _p()
+    if oai_enabled():
+        _r = oai_try(texts, budgets, system, to_english)
         if _r is not None:
             return _r
-
-    # ---- ម៉ាស៊ីនបម្រុង (មិនរាប់ Claude ម្តងទៀត) ----
-    if extra_provider_enabled() or xk_enabled():
-        _r = oai_try(texts, budgets, system, to_english, skip_claude=True)
-        if _r is not None:
-            return _r
-
+    if claude_enabled() and not CLAUDE_FIRST:
+        for _cn, _cc in _CLAUDE_PROVIDERS:
+            _cl = _CLAUDE_COOL.setdefault(_cn, {"until": 0.0})
+            if _cl.get("until", 0) > time.time():
+                continue
+            _cr = _try_provider(_cl, _cc, texts, budgets, system, to_english, False, name=_cn, fn=claude_translate_chunk)
+            if _cr is not None:
+                return _cr
     parts = [f"Groq: {str(groq_err)[:150]}"] if groq_err else []
     if _LAST_AI_ERR:
         parts.append("; ".join(f"{k}: {v}"[:110] for k, v in list(_LAST_AI_ERR.items())[:4]))
@@ -3060,7 +2966,7 @@ def provider_status():
     return " · ".join(out)
 
 
-def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_claude=False):
+def oai_try(texts, budgets=None, system=None, to_english=False, raw=False):
     """ម៉ាស៊ីនបម្រុងក្រៅពី Groq តាមលំដាប់៖ OpenRouter(+ផ្សេងៗ) → CodeCraft
     (មានកំណត់ពេលសរុប ១២០ វិនាទីក្នុងមួយបាច់)។"""
     if getattr(_API_LOCAL, "isolated", False):
@@ -3084,7 +2990,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_
             if r is not None:
                 return r
         return None
-    if CLAUDE_FIRST and not skip_claude:
+    if CLAUDE_FIRST:
         r = _claude_pass()
         if r is not None:
             return r
@@ -3110,7 +3016,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_
         r = _try_provider(_OAI_COOL, oai_cfg(), texts, budgets, system, to_english, raw, name="CodeCraft")
         if r is not None:
             return r
-    if not CLAUDE_FIRST and not skip_claude:
+    if not CLAUDE_FIRST:
         return _claude_pass()
     return None
 
@@ -3140,28 +3046,12 @@ def gemini_translate_khmer(api_key, texts, english=None, budgets=None, story=Non
           "Use the surrounding story only to resolve ambiguity; never invent missing dialogue. Never omit or add meaning. Output Khmer only; never output English text or tags."
         + ((" STORY SO FAR (context only, do NOT translate): " + story) if story else "")
     )
-    # កុំទុកឱ្យចម្លើយភាសាអង់គ្លេស/ចម្លើយខ្វះបន្ទាត់ឆ្លងទៅ Subtitle។
-    # សាកម៉ាស៊ីនសំខាន់ រួចម៉ាស៊ីនបម្រុងដោយផ្ទាល់ និងពិនិត្យ Khmer មុន return។
-    _attempt_errors = []
-    _candidates = []
     if groq_key:
-        _candidates.append(("Groq + providers", lambda: groq_translate_chunk(groq_key, rows, budgets, system=system)))
-    if oai_enabled():
-        # បើគ្មាន Groq key → Claude ជាសំខាន់ (oai_try រួមទាំង Claude); បើមាន Groq key → groq_translate_chunk ធ្វើរួចហើយ
-        _candidates.append(("Claude/បម្រុង", lambda: oai_try(rows, budgets, system, skip_claude=bool(groq_key))))
-    for _name, _call in _candidates:
-        try:
-            _result = _call()
-            if not isinstance(_result, (list, tuple)) or len(_result) != len(rows):
-                raise RuntimeError("ចំនួនបន្ទាត់ចម្លើយមិនត្រូវនឹងអត្ថបទដើម")
-            _cleaned = [clean_translation(x) for x in _result]
-            _bad = [i + 1 for i, x in enumerate(_cleaned) if not x or not has_khmer(str(x)) or not khmer_dominant(str(x))]
-            if _bad:
-                raise RuntimeError("ចម្លើយមិនមែនជាភាសាខ្មែរត្រឹមត្រូវ នៅបន្ទាត់ " + ",".join(map(str, _bad[:12])))
-            return _cleaned
-        except Exception as _e:
-            _attempt_errors.append(f"{_name}: {str(_e)[:180]}")
-    _why = " | ".join(_attempt_errors) or " | ".join(f"{k}: {v}" for k, v in _LAST_AI_ERR.items()) or "គ្មាន API Key ដែលអាចប្រើបាន"
+        return groq_translate_chunk(groq_key, rows, budgets, system=system)
+    result = oai_try(rows, budgets, system)
+    if result is not None:
+        return result
+    _why = " | ".join(f"{k}: {v}" for k, v in _LAST_AI_ERR.items()) or "គ្មាន API Key ដែលបានកំណត់"
     raise RuntimeError("ម៉ាស៊ីន AI បកប្រែមិនបាន។ មូលហេតុ៖ " + _why + " | ស្ថានភាព៖ " + provider_status())
 
 
@@ -3339,18 +3229,15 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
 
 def make_synopsis(english, texts, gemini_key, groq_key):
     """សង្ខេបរឿងទាំងមូល (អ្នកណានិយាយទៅអ្នកណា ប្រធានបទ អារម្មណ៍) ជាអង់គ្លេស ដើម្បីជួយបកប្រែឱ្យត្រូវបរិបទ។"""
-    body = " ".join((english[i] or str(texts[i])) for i in range(len(texts)))[:9000]
-    ask = ("Read this video transcript (machine-transcribed, may contain small errors). In under 200 words of English, state: the genre and setting "
-           "(modern, ancient, family drama, business, romance, comedy...), the plot so far in 2-3 sentences, who the speakers/characters are and exactly how "
-           "they relate (husband/wife, boss/employee, mother/son, enemies...), their gender and age group, whether they speak formally or casually, "
-           "the mood, and a list of recurring names and terms (with the most likely correct spelling). No translation.\n\n" + body)
+    body = " ".join((english[i] or str(texts[i])) for i in range(len(texts)))[:7000]
+    ask = ("Read this video transcript. In under 120 words of English, state: the topic, who the speakers are and how they relate "
+           "(gender, age, formal or casual), the mood, and any recurring names or terms. No translation.\n\n" + body)
     _r = oai_try([body], None,
-                 "Read the video transcript (machine-transcribed, may contain small errors). In under 200 words of English, state: the genre and setting, "
-                 "the plot so far in 2-3 sentences, who the characters are and exactly how they relate (husband/wife, boss/employee, parent/child, enemies...), "
-                 "their gender and age group, formal or casual speech, the mood, and recurring names and terms (most likely correct spelling). No translation. "
+                 "Read the video transcript line. In under 120 words of English, state: the topic, who the speakers are and how they relate "
+                 "(gender, age, formal or casual), the mood, and any recurring names or terms. No translation. "
                  'Return JSON {"translations": ["<summary>"]}.', to_english=True)
     if _r and _r[0]:
-        return str(_r[0])[:1400]
+        return str(_r[0])[:900]
     try:
         if gemini_key:
             client = make_gemini_client(gemini_key, types.HttpOptions(timeout=TRANSLATE_TIMEOUT_MS))
@@ -3441,43 +3328,12 @@ FIT_SYSTEM = (
 )
 
 
-EXPAND_SYSTEM = (
-    "You are a Khmer dubbing editor doing lip-sync timing. Each numbered item has an ORIGINAL line, the current KHMER line and a TARGET number "
-    "of characters (the time the speaker's mouth is moving). The KHMER line is too short, so the voice would end long before the mouth stops. "
-    "Rewrite it to about TARGET characters (not more than 120% of TARGET) with fuller natural spoken Khmer: use complete everyday phrasing, "
-    "natural connecting words and polite particles. Keep exactly the same meaning; never add new facts, names or numbers. "
-    "Khmer script only, one sentence per item ending with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses or symbols. "
-    "Return JSON {\"translations\": [...]} with exactly one item per input, same order."
-)
-
-
 def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
     """បង្រួមឃ្លាខ្មែរដែលវែងជាងពេលមាត់និយាយ ដោយរក្សាអត្ថន័យ (ឱ្យសំឡេងចប់ត្រូវមាត់)។"""
     n = len(outs)
     result = list(outs)
     over = [i for i in range(n)
             if budgets[i] and len(str(outs[i])) > budgets[i] * 1.6 and len(str(outs[i])) > 30]
-    short = [i for i in range(n)
-             if EXPAND_MODE and budgets[i] and budgets[i] >= 28 and 0 < len(str(outs[i])) < budgets[i] * 0.55]
-    if short:
-        def _exp(idxs):
-            rows = [f"ORIGINAL: {str(texts[i]).strip()} | KHMER: {outs[i]} | TARGET: {budgets[i]}" for i in idxs]
-            try:
-                return idxs, llm_lines(rows, EXPAND_SYSTEM, gemini_key, groq_key)
-            except Exception:
-                return idxs, None
-        try:
-            egroups = [short[k:k + LLM_GROUP] for k in range(0, len(short), LLM_GROUP)]
-            with ThreadPoolExecutor(max_workers=6) as _ep:
-                for idxs, res in _ep.map(_exp, egroups):
-                    if res:
-                        for i, r in zip(idxs, res):
-                            r = str(r or "")
-                            if (has_khmer(r) and khmer_dominant(r) and len(r) > len(str(outs[i]))
-                                    and len(r) <= budgets[i] * 1.4):
-                                result[i] = r
-        except Exception:
-            pass
     if not over:
         return result
     groups = [over[k:k + LLM_GROUP] for k in range(0, len(over), LLM_GROUP)]
@@ -3514,8 +3370,6 @@ REVIEW_MODE = str(get_secret("REVIEW_MODE", "refine")).strip().lower()
 CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "1")).strip().lower() in ("1", "true", "yes", "on")
 # FIT_MODE=1 (លំនាំដើម): បង្រួមឃ្លាវែងដោយ AI ដើម្បីសមពេលនិយាយ
 FIT_MODE = str(get_secret("FIT_MODE", "1")).strip().lower() in ("1", "true", "yes", "on")
-# EXPAND_MODE=1: ពង្រីកឃ្លាខ្លីឱ្យវែង (អាចបន្ថែមពាក្យមិនមាននៅដើម) — លំនាំដើមបិទ ដើម្បីរក្សាភាពត្រឹមត្រូវ
-EXPAND_MODE = str(get_secret("EXPAND_MODE", "0")).strip().lower() in ("1", "true", "yes", "on")
 FAST_TRANSLATE = str(get_secret("FAST_TRANSLATE", "1")).strip().lower() not in ("0", "false", "no", "off")
 
 
@@ -3557,7 +3411,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
     synopsis = ""
-    if n > 2:
+    if n > 2 and not FAST_TRANSLATE:
         if groq_key or oai_enabled():
             synopsis = make_synopsis(english, texts, None, groq_key)
         if not synopsis and gemini_key:
@@ -3568,13 +3422,13 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
     if (gemini_key or oai_enabled()) and missing:
         def _km(idxs):
             try:
-                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 25), idxs[0])]
-                story = " / ".join(str(x).strip() for x in prev_ctx if x)[-3000:] or None
+                prev_ctx = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 20), idxs[0])]
+                story = " / ".join(str(x).strip() for x in prev_ctx if x)[-1800:] or None
                 if synopsis:
                     story = "VIDEO SUMMARY: " + synopsis + " || " + (story or "")
-                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 21))]
+                nxt_ctx = [english[j] or str(texts[j]) for j in range(idxs[-1] + 1, min(n, idxs[-1] + 13))]
                 if nxt_ctx:
-                    story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)[:2000]
+                    story = (story or "") + " || NEXT LINES (context only): " + " / ".join(str(x).strip() for x in nxt_ctx if x)[:1000]
                 return idxs, gemini_translate_khmer(
                     gemini_key, [str(texts[i]).strip() for i in idxs],
                     [english[i] for i in idxs], [budgets[i] for i in idxs] if budgets else None,
@@ -3601,7 +3455,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         groups = [missing[k:k + 8] for k in range(0, len(missing), 8)]
         def _gkm(idxs):
             try:
-                prev = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 15), idxs[0])]
+                prev = [english[j] or str(texts[j]) for j in range(max(0, idxs[0] - 6), idxs[0])]
                 story = " / ".join(str(x).strip() for x in prev if x)
                 if synopsis:
                     story = "VIDEO SUMMARY: " + synopsis + " || " + story
@@ -4105,7 +3959,7 @@ def transcribe_free(groq_key, audio_path, duration, source_language, status, spe
         # ឃ្លាវែងត្រូវសង្ខេបខ្មែរឱ្យខ្លី ដើម្បីសមនឹងចន្លោះសំឡេង។
         # ប្រវែងគោល (soft hint): ~១០ តួអក្សរខ្មែរ/វិនាទី តាមពេលមាត់និយាយ ឱ្យស្របចង្វាក់ lip-sync
         # (prompt ហាមកាត់អត្ថន័យ ដូច្នេះនេះគ្រាន់តែជាការណែនាំ)
-        budgets = lip_budgets(keep) if dub else None  # ប្រវែងកំណត់ប្រើតែពេល dubbing; Caption ធម្មតាបកពេញន័យ មិនកាត់
+        budgets = lip_budgets(keep)  # ប្រវែងអក្សរតាមពេលមាត់និយាយ ឱ្យសំឡេងចប់ត្រូវមាត់
         outs, errs = translate_texts([t for _, _, t in keep], groq_key, budgets, gemini_key, progress=lambda m: status.write("៣/៤ " + m), speakers=speakers, fit=bool(dub))
         segs = []
         for (s, e, orig), out in zip(keep, outs):
@@ -5034,7 +4888,7 @@ def tts_retry(text, voice, path, prosody=None, tries=3):
                     return True
             except Exception as e:
                 last = e
-        time.sleep(0.08 * (k + 1))
+        time.sleep(0.25 * (k + 1))
     return False
 
 
@@ -5099,10 +4953,10 @@ VOICE_POLISH = ("highpass=f=70,"
 
 # ល្បឿនអតិបរមា ដើម្បីឱ្យសំឡេងច្បាស់ មិនលឿនពេកស្តាប់មិនទាន់ (ប្តូរបានក្នុង Secrets)
 try:
-    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.25") or 1.25)))
-    MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "25") or 25)))
+    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.45") or 1.45)))
+    MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "35") or 35)))
 except Exception:
-    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.25, 25
+    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.45, 35
 
 
 def assign_characters(dub_segments, chars, info):
@@ -5159,7 +5013,7 @@ def assign_characters(dub_segments, chars, info):
 
 def make_dub(folder, segments, voice, duration, keep_bg, client, model,
              seg_voices=None, targets=None, notes=None, emotions=None, groq_key=None,
-             ref_bands=None, offset=0.0, tight=True, hard_cut=True, bg_vol=0.08,
+             ref_bands=None, offset=0.0, tight=True, bg_vol=0.08,
              seg_char=None, char_bands=None):
     inputs, filters = [], []
     n = 0
@@ -5196,7 +5050,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
                 return max(0.0, x - hi_ * 1.03) + max(0.0, lo_ - x)
 
             def _fit_rate(text_, d_cur, p_cur):
-                for _k in range(1):
+                for _k in range(2):
                     if _miss(d_cur) <= 0:
                         break
                     try:
@@ -5228,7 +5082,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             p_cur_ = pros[i]
             d_, p_cur_ = _fit_rate(t_, d_, p_cur_)
             # នៅតែវែងពេក៖ បង្រួមឃ្លាបន្តិច (រក្សាអត្ថន័យ) រួចតម្រឹមល្បឿនម្តងទៀត
-            if d_ > slot0 * 2.2 and len(t_) > 30:
+            if d_ > slot0 * 1.6 and len(t_) > 30:
                 short_ = condense_for_slot(t_, slot0, client, model, groq_key)
                 if short_ != t_:
                     path3_ = os.path.join(folder, f"tts_{i}_s.mp3")
@@ -5251,7 +5105,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         except Exception:
             return None
 
-    with ThreadPoolExecutor(max_workers=max(4, min(16, int(get_secret("TTS_WORKERS", "14") or 14)))) as pool:
+    with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(gen, range(n_seg)))
 
     voice_eq = {}
@@ -5307,13 +5161,10 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         # តួអង្គនិយាយយឺត/បន្ថយសំឡេង៖ បើសំឡេង AI ខ្លីជាងពេលមាត់ ច្រើន ធ្វើឱ្យយឺតបន្តិច (មិនឱ្យសំឡេងចប់មុនមាត់)
         mouth = max(0.5, e - s)
         if d < mouth * 0.82 and speed == 1.0:
-            speed = max(0.75, d / (mouth * 0.92))
+            speed = max(0.85, d / (mouth * 0.92))
         cursor = max(cursor, start + d / speed + 0.02)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
-        maxdur = None
-        if hard_cut and d / speed > slot * 1.04:
-            maxdur = slot
-        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed, "maxdur": maxdur,
+        plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
                      "eq": (char_eq.get(seg_char[i], "") if (seg_char and i < len(seg_char)) else voice_eq.get(voices_[i], ""))})
     if notes is not None and skipped:
@@ -5342,15 +5193,9 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
             chain = atempo_chain(p["speed"])
         else:
             chain = ("aresample=24000," f"asetrate={int(24000 * ratio)}," "aresample=24000," + atempo_chain(p["speed"] / ratio))
-        if hard_cut:
-            # កាត់ស្ងាត់ដើមឃ្លា ដើម្បីឱ្យសំឡេងចាប់ផ្តើមត្រូវពេលមាត់
-            chain = "silenceremove=start_periods=1:start_threshold=-45dB:start_silence=0.03," + chain
         if p.get("eq"):
             chain += "," + p["eq"]
         chain += "," + VOICE_POLISH
-        if p.get("maxdur"):
-            md = max(0.3, float(p["maxdur"]))
-            chain += f",atrim=0:{md:.3f},afade=t=out:st={max(0.0, md - 0.08):.3f}:d=0.08"
         filters.append(f"[{n}:a]{chain},afade=t=in:d=0.03,adelay={delay}:all=1[a{n}]")
         n += 1
     if notes is not None:
@@ -5629,7 +5474,7 @@ def suggest_titles(lines, groq_key):
 
 
 def engine_name(engine):
-    return "Claude + Groq (បម្រុង៖ OpenRouter/CodeCraft)"
+    return "Groq + CodeCraft"
 
 
 def run_worker(job, item, settings, fonts_data):
@@ -5856,7 +5701,7 @@ def run_worker(job, item, settings, fonts_data):
                             item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
-                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=float(settings.get("dub_offset", 0.0) or 0.0), tight=True, hard_cut=bool(settings.get("tight_sync", True)), bg_vol=settings.get("bg_vol", 0.08), seg_char=seg_char, char_bands=char_bands)
+                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=0.0, tight=True, bg_vol=settings.get("bg_vol", 0.08), seg_char=seg_char, char_bands=char_bands)
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
@@ -6580,12 +6425,10 @@ def _ls_persist():
     claude = {"keys": list(ss.get("user_claude_keys", [])),
               "base": ss.get("user_claude_base", "https://api.laalaa.me"),
               "model": ss.get("user_claude_model", "claude-sonnet-5-5")}
-    hongguo = {"app_id": ss.get("user_hg_app_id", ""),
-               "app_secret": ss.get("user_hg_app_secret", "")}
-    if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"] or hongguo["app_id"] or hongguo["app_secret"]):
+    if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"]):
         payload = ""
     else:
-        payload = json.dumps({"groq": groq, "oai": oai, "claude": claude, "hongguo": hongguo})
+        payload = json.dumps({"groq": groq, "oai": oai, "claude": claude})
     ss["_ls_payload"] = payload
     ss["_ls_nonce"] = ss.get("_ls_nonce", 0) + 1
 
@@ -6626,12 +6469,6 @@ def ls_sync():
                 st.session_state["user_claude_base"] = str(cl.get("base")).strip()
             if cl.get("model") and not st.session_state.get("user_claude_model"):
                 st.session_state["user_claude_model"] = str(cl.get("model")).strip()
-    hg = data.get("hongguo") or {}
-    if isinstance(hg, dict):
-        if hg.get("app_id") and not st.session_state.get("user_hg_app_id"):
-            st.session_state["user_hg_app_id"] = str(hg.get("app_id")).strip()
-        if hg.get("app_secret") and not st.session_state.get("user_hg_app_secret"):
-            st.session_state["user_hg_app_secret"] = str(hg.get("app_secret")).strip()
 
 
 def has_user_keys():
@@ -6771,8 +6608,6 @@ def user_key_box():
         st.session_state.pop("user_key_input", None)
         st.session_state.pop("user_keys_bulk", None)
         st.session_state.pop("user_claude_bulk", None)
-        st.session_state.pop("user_hg_app_id_input", None)
-        st.session_state.pop("user_hg_app_secret_input", None)
     with st.container(border=True):
         st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន (ដាក់បានច្រើន Key)**")
         st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq Key សម្រាប់សម្គាល់សំឡេង និង CodeCraft Key សម្រាប់បកប្រែ។ "
@@ -6856,8 +6691,8 @@ def user_key_box():
                                  placeholder="gsk_...\ngsk_...", height=120, key="user_keys_bulk")
         st.toggle("💾 ចងចាំ Key ក្នុងឧបករណ៍/Browser នេះ (ចូលលើកក្រោយមិនបាច់ដាក់ម្តងទៀត)", value=True,
                   key="remember_keys", on_change=_ls_persist)
-        st.caption("🔒 Key រក្សាទុកក្នុង Browser របស់អ្នក (localStorage)។ ពេលហៅ API កម្មវិធីប្រើ Key ក្នុង Session របស់អ្នកដើម្បីផ្ញើសំណើទៅ Provider។ "
-                   "កុំប្រើលើឧបករណ៍សាធារណៈ។ បើលុបទិន្នន័យ Browser Key អាចបាត់។")
+        st.caption("🔒 Key រក្សាទុកក្នុង Browser របស់អ្នកតែប៉ុណ្ណោះ (localStorage) មិនត្រូវបានរក្សាទុកលើម៉ាស៊ីនមេទេ។ "
+                   "កុំប្រើលើកុំព្យូទ័រ/ទូរស័ព្ទសាធារណៈ។ បើលុបទិន្នន័យ Browser Key នឹងបាត់។")
         if st.button("✅ ពិនិត្យ និងបន្ថែម Key", key="user_key_save", use_container_width=True):
             if provider == "Claude":
                 _new = [_x for _x in split_keys(typed) if _x.startswith("sk-") and "=" not in _x][:20]
@@ -6964,220 +6799,61 @@ def user_key_box():
                            + " · ⚠️ = Key ត្រឹមត្រូវ តែ Rate limit/ម៉ាស៊ីនមេរវល់បណ្តោះអាសន្ន (មិនទាន់ច្បាស់ថាអស់កូតាទេ)។")
         if any_saved and st.button("🧹 លុប Key ផ្ទាល់ខ្លួនទាំងអស់ (រួមទាំងក្នុង Browser)", key="user_key_clear_all", use_container_width=True):
             for _k in ("user_groq_keys", "user_oai_key", "user_oai_base", "user_oai_model",
-                       "user_claude_keys", "user_claude_base", "user_claude_model",
-                       "user_hg_app_id", "user_hg_app_secret"):
+                       "user_claude_keys", "user_claude_base", "user_claude_model"):
                 st.session_state.pop(_k, None)
             _ls_persist()
             st.rerun()
 
 
-# ============================ Hongguo VIP Access ============================
-# All VIP checks and management use the server-only Supabase service key.
-
-def _hg_supabase_config():
-    _url = str(get_secret("SUPABASE_URL", "")).strip().rstrip("/")
-    # SUPABASE_URL must be the project root, not a REST endpoint.
-    # Accept a pasted URL ending in /rest/v1 and normalize it to avoid
-    # requesting /rest/v1/rest/v1/... (PostgREST PGRST125).
-    for _suffix in ("/rest/v1", "/rest/v1/"):
-        if _url.lower().endswith(_suffix):
-            _url = _url[:-len(_suffix)].rstrip("/")
-            break
-    _key = str(get_secret("SUPABASE_SERVICE_ROLE_KEY", "")).strip()
-    if not _key:
-        # Support the newer Supabase secret-key name if the owner used it.
-        _key = str(get_secret("SUPABASE_SECRET_KEY", "")).strip()
-    return _url, _key
-
-
-def _hg_sb_request(method, path="", params=None, payload=None):
-    _url, _key = _hg_supabase_config()
-    if not _url or not _key:
-        raise RuntimeError("មិនទាន់កំណត់ SUPABASE_URL និង SUPABASE_SERVICE_ROLE_KEY ក្នុង Streamlit Secrets ទេ។")
-    _headers = {
-        "apikey": _key,
-        "Authorization": "Bearer " + _key,
-        "Content-Type": "application/json",
-        "Prefer": "return=representation",
-    }
-    _resp = requests.request(
-        method, _url + "/rest/v1/hongguo_vip_users" + path,
-        headers=_headers, params=params, json=payload, timeout=20,
-    )
-    if not _resp.ok:
-        raise RuntimeError(f"Supabase HTTP {_resp.status_code}: {_resp.text[:300]}")
-    if not _resp.text.strip():
-        return []
-    try:
-        return _resp.json()
-    except Exception:
-        return []
-
-
-def _hg_password_hash(password):
-    _salt = secrets.token_bytes(16)
-    _rounds = 310000
-    _digest = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt, _rounds)
-    return "pbkdf2_sha256${}${}${}".format(
-        _rounds, base64.urlsafe_b64encode(_salt).decode().rstrip("="),
-        base64.urlsafe_b64encode(_digest).decode().rstrip("="),
-    )
-
-
-def _hg_password_verify(password, stored):
-    try:
-        _algo, _rounds, _salt, _expected = stored.split("$", 3)
-        if _algo != "pbkdf2_sha256":
-            return False
-        _salt_b = base64.urlsafe_b64decode(_salt + "=" * (-len(_salt) % 4))
-        _expected_b = base64.urlsafe_b64decode(_expected + "=" * (-len(_expected) % 4))
-        _actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), _salt_b, int(_rounds))
-        return hmac.compare_digest(_actual, _expected_b)
-    except Exception:
-        return False
-
-
-def _hg_get_vip_user(username):
-    _rows = _hg_sb_request("GET", params={
-        "select": "id,username,password_hash,expires_at,is_active,created_at,note",
-        "username": "eq." + str(username).strip(),
-        "limit": "1",
-    })
-    return _rows[0] if _rows else None
-
-
-def _hg_vip_is_valid(_user):
-    if not _user or not _user.get("is_active"):
-        return False
-    try:
-        _expiry = str(_user.get("expires_at", "")).replace("Z", "+00:00")
-        _dt = datetime.fromisoformat(_expiry)
-        if _dt.tzinfo is None:
-            _dt = _dt.replace(tzinfo=timezone.utc)
-        return _dt > datetime.now(timezone.utc)
-    except Exception:
-        return False
-
-
-def _hg_admin_panel():
-    st.markdown("#### 👑 គ្រប់គ្រងគណនី VIP")
-    with st.form("hg_vip_create_form", clear_on_submit=True):
-        _c1, _c2 = st.columns(2)
-        with _c1:
-            _new_user = st.text_input("ឈ្មោះអ្នកប្រើ VIP", key="hg_admin_new_username")
-            _new_pass = st.text_input("ពាក្យសម្ងាត់ VIP", type="password", key="hg_admin_new_password")
-        with _c2:
-            _days = st.selectbox("រយៈពេលប្រើប្រាស់", [7, 30, 90, 180, 365], index=1, format_func=lambda x: f"{x} ថ្ងៃ")
-            _note = st.text_input("កំណត់ចំណាំ (មិនចាំបាច់)")
-        _create = st.form_submit_button("➕ បង្កើតគណនី VIP", use_container_width=True)
-    if _create:
-        _u = str(_new_user or "").strip()
-        if len(_u) < 3 or len(_new_pass or "") < 8:
-            st.error("Username ត្រូវមានយ៉ាងតិច ៣ តួ និង Password យ៉ាងតិច ៨ តួ។")
-        else:
-            try:
-                if _hg_get_vip_user(_u):
-                    st.error("Username នេះមានរួចហើយ។")
-                else:
-                    _expiry = (datetime.now(timezone.utc) + timedelta(days=int(_days))).isoformat()
-                    _hg_sb_request("POST", payload={
-                        "username": _u,
-                        "password_hash": _hg_password_hash(_new_pass),
-                        "expires_at": _expiry,
-                        "is_active": True,
-                        "note": str(_note or "").strip(),
-                    })
-                    st.success(f"បានបង្កើត VIP '{_u}' រយៈពេល {_days} ថ្ងៃ។")
-                    st.rerun()
-            except Exception as _err:
-                st.error(f"បង្កើតគណនីមិនបាន៖ {_err}")
-
-    try:
-        _users = _hg_sb_request("GET", params={
-            "select": "id,username,expires_at,is_active,created_at,note",
-            "order": "created_at.desc", "limit": "200",
-        })
-        if _users:
-            st.markdown("**បញ្ជី VIP**")
-            for _u in _users:
-                _x = str(_u.get("expires_at", ""))[:10]
-                _status = "សកម្ម" if _hg_vip_is_valid(_u) else "ផុតកំណត់/បិទ"
-                _a, _b, _c, _d = st.columns([2.2, 1.7, 1.3, 1.3])
-                _a.write(f"**{_u.get('username','')}**")
-                _b.caption(f"{_status} · ដល់ {_x}")
-                with _c:
-                    _extend_days = st.selectbox("បន្ថែមថ្ងៃ", [7, 30, 90, 180, 365], index=1,
-                                                key="hg_vip_extend_days_" + str(_u["id"]), label_visibility="collapsed")
-                    if st.button("បន្ថែម", key="hg_vip_extend_" + str(_u["id"]), use_container_width=True):
-                        try:
-                            _base = datetime.now(timezone.utc)
-                            try:
-                                _old_exp = datetime.fromisoformat(str(_u.get("expires_at", "")).replace("Z", "+00:00"))
-                                if _old_exp.tzinfo is None:
-                                    _old_exp = _old_exp.replace(tzinfo=timezone.utc)
-                                if _old_exp > _base:
-                                    _base = _old_exp
-                            except Exception:
-                                pass
-                            _new_exp = (_base + timedelta(days=int(_extend_days))).isoformat()
-                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])},
-                                           payload={"expires_at": _new_exp, "is_active": True})
-                            st.success("បានបន្ថែមថ្ងៃ VIP រួចរាល់។")
-                            st.rerun()
-                        except Exception as _extend_err:
-                            st.error(f"បន្ថែមថ្ងៃមិនបាន៖ {_extend_err}")
-                with _d:
-                    if _u.get("is_active"):
-                        if st.button("បិទ", key="hg_vip_off_" + str(_u["id"]), use_container_width=True):
-                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": False})
-                            st.rerun()
-                    else:
-                        if st.button("បើកវិញ", key="hg_vip_on_" + str(_u["id"]), use_container_width=True):
-                            _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])}, payload={"is_active": True})
-                            st.rerun()
-    except Exception as _err:
-        st.error(f"មិនអាចទាញបញ្ជី VIP បាន៖ {_err}")
-
-
-def _hg_vip_gate(show_admin_panel=True):
-    if _is_logged_in():
-        _render_account_bar()
-    if _is_admin_session():
-        st.success("👑 Admin Access — អាចប្រើ Hongguo និងគ្រប់គ្រង VIP បាន")
-        # Render the Admin controls only in the primary Hongguo tab.
-        # Calling this gate from another tab must not create duplicate Streamlit widget keys.
-        if show_admin_panel:
-            with st.expander("⚙️ Admin: គ្រប់គ្រងគណនី VIP", expanded=False):
-                _hg_admin_panel()
-        return True
-    if st.session_state.get("_auth_role") == "vip":
-        _exp = str(st.session_state.get("_auth_expires", ""))
-        st.caption(f"🔐 VIP: {st.session_state.get('_auth_user', '')}" + (f" · ផុតកំណត់ {_exp}" if _exp else ""))
-        return True
-    _hg_login_form()
-    return False
-
-
-def _hg_has_access():
-    """ពិនិត្យសិទ្ធិ Admin/VIP ដោយមិនបង្កើត widget (សុវត្ថិភាពសម្រាប់ហៅក្នុងច្រើនផ្ទាំង)។"""
-    return _is_logged_in()
-
-
-
 # =====================================================================
-#  ចូលប្រើដោយ Username / Password — គណនីបង្កើតដោយ Admin ប៉ុណ្ណោះ (មិនប្រើ Gmail/Google ទៀតទេ)
-#  ► Admin ចូលដោយ ADMIN_USERNAME / ADMIN_PASSWORD ដែលដាក់ក្នុង Secrets
-#  ► អ្នកប្រើផ្សេងទៀត ចូលដោយគណនីដែល Admin បង្កើតក្នុង «គ្រប់គ្រងគណនី VIP»
+#  ចូលប្រើតាមគណនី Google (Gmail) — ត្រូវចូលមុនទើបប្រើកម្មវិធីបាន
+#  ► បិទបាន៖ ដាក់ REQUIRE_LOGIN = "0" ក្នុង Secrets
+#  ► កំណត់អ្នកអនុញ្ញាត (មិនចាំបាច់)៖ ALLOWED_EMAILS = "a@gmail.com, b@gmail.com"
 # =====================================================================
-from html import escape as _esc
+REQUIRE_LOGIN = str(get_secret("REQUIRE_LOGIN", "1")).strip().lower() not in ("0", "false", "no", "off")
 
-_AUTH_SETUP_HELP = """# Streamlit Cloud → Settings → Secrets
-# (ដាក់នៅខាងលើបំផុត មុនបន្ទាត់ [section] ណាមួយ)
-ADMIN_USERNAME = "admin"
-ADMIN_PASSWORD = "ដាក់ពាក្យសម្ងាត់វែងៗ យ៉ាងតិច ១២ តួ"
-SUPABASE_URL = "https://xxxx.supabase.co"
-SUPABASE_SERVICE_ROLE_KEY = "xxxx"
+_AUTH_SETUP_HELP = """# .streamlit/secrets.toml (ឬ Streamlit Cloud → Settings → Secrets)
+[auth]
+redirect_uri = "https://ឈ្មោះកម្មវិធីរបស់អ្នក.streamlit.app/oauth2callback"
+cookie_secret = "ដាក់អក្សរចៃដន្យវែងៗ ៣២ តួឡើង"
+
+[auth.google]
+client_id = "xxxx.apps.googleusercontent.com"
+client_secret = "xxxx"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
 """
+
+
+def _auth_configured():
+    try:
+        _a = st.secrets["auth"]
+        return bool(_a.get("cookie_secret")) and bool(_a.get("redirect_uri")) and "google" in _a
+    except Exception:
+        return False
+
+
+def _user_field(key, default=""):
+    try:
+        v = st.user.get(key)
+        return default if v is None else v
+    except Exception:
+        try:
+            v = getattr(st.user, key)
+            return default if v is None else v
+        except Exception:
+            return default
+
+
+def _allowed_email_set():
+    raw = get_secret("ALLOWED_EMAILS", "")
+    if isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        items = re.split(r"[,\n;\s]+", str(raw or ""))
+    return {str(x).strip().lower() for x in items if str(x).strip()}
+
+
+_GOOGLE_G_URI = "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E"
 
 _LOGIN_CSS = """<style>
 .st-key-kv_login{max-width:460px;margin:3vh auto 0;padding:30px 24px 22px;border-radius:26px;
@@ -7190,8 +6866,13 @@ background:linear-gradient(135deg,#FF2DAA,#7B5CFF 60%,#19B7FF);box-shadow:0 10px
 .st-key-kv_login .kv-l{margin:0 0 20px;padding:10px 14px;border-radius:14px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.09);}
 .st-key-kv_login .kv-l div{font-size:14px;line-height:1.95;color:#DCE3FF!important;}
 .st-key-kv_login .kv-f{margin-top:14px;text-align:center;font-size:12.5px;line-height:1.6;color:#8E9BCB!important;}
-.st-key-kv_login [data-testid="stForm"]{border:none!important;padding:0!important;}
-.st-key-kv_login button{width:100%;min-height:52px;border-radius:14px!important;font-weight:700;font-size:16px;}
+.st-key-kv_login_btn button,.st-key-kv_logout_unverified button,.st-key-kv_logout_denied button{
+width:100%;min-height:54px;border-radius:14px!important;border:none!important;background:#FFFFFF!important;
+box-shadow:0 8px 22px rgba(0,0,0,.35);transition:transform .12s ease,box-shadow .12s ease;}
+.st-key-kv_login_btn button:hover{transform:translateY(-1px);box-shadow:0 12px 28px rgba(0,0,0,.45);}
+.st-key-kv_login_btn button p,.st-key-kv_logout_unverified button p,.st-key-kv_logout_denied button p{color:#1F2A44!important;font-weight:700;font-size:16px;}
+.st-key-kv_login_btn button p::before{content:"";display:inline-block;width:22px;height:22px;margin-right:12px;vertical-align:-5px;
+background:url("data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2048%2048%22%3E%3Cpath%20fill%3D%22%23EA4335%22%20d%3D%22M24%209.5c3.54%200%206.71%201.22%209.21%203.6l6.85-6.85C35.9%202.38%2030.47%200%2024%200%2014.62%200%206.51%205.38%202.56%2013.22l7.98%206.19C12.43%2013.72%2017.74%209.5%2024%209.5z%22%2F%3E%3Cpath%20fill%3D%22%234285F4%22%20d%3D%22M46.98%2024.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58%202.96-2.26%205.48-4.78%207.18l7.73%206c4.51-4.18%207.09-10.36%207.09-17.65z%22%2F%3E%3Cpath%20fill%3D%22%23FBBC05%22%20d%3D%22M10.53%2028.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92%2016.46%200%2020.12%200%2024c0%203.88.92%207.54%202.56%2010.78l7.97-6.19z%22%2F%3E%3Cpath%20fill%3D%22%2334A853%22%20d%3D%22M24%2048c6.48%200%2011.93-2.13%2015.89-5.81l-7.73-6c-2.15%201.45-4.92%202.3-8.16%202.3-6.26%200-11.57-4.22-13.47-9.91l-7.98%206.19C6.51%2042.62%2014.62%2048%2024%2048z%22%2F%3E%3C%2Fsvg%3E") center/contain no-repeat;}
 </style>"""
 
 _ACCOUNT_CSS = """<style>
@@ -7210,7 +6891,7 @@ _ACCOUNT_CSS = """<style>
 
 
 def _login_screen(icon, title, sub, items=None):
-    """បង្ហាញកាតចូលប្រើតាម theme ងងឹត ហើយត្រឡប់ container ដើម្បីដាក់ form ក្នុងកាត។"""
+    """បង្ហាញកាតចូលប្រើតាម theme ងងឹត ហើយត្រឡប់ container ដើម្បីដាក់ប៊ូតុងក្នុងកាត។"""
     st.markdown(_LOGIN_CSS, unsafe_allow_html=True)
     box = st.container(key="kv_login")
     with box:
@@ -7221,246 +6902,76 @@ def _login_screen(icon, title, sub, items=None):
     return box
 
 
-def _admin_creds():
-    """Username/Password របស់ Admin ពី Secrets (មិនដាក់ក្នុង code)។"""
-    return (str(get_secret("ADMIN_USERNAME", "") or "").strip(),
-            str(get_secret("ADMIN_PASSWORD", "") or ""))
+def require_login():
+    """បិទមិនឱ្យប្រើកម្មវិធី ទាល់តែចូលតាមគណនី Google។ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិពេលចូលលើកដំបូង។"""
+    if not REQUIRE_LOGIN:
+        return
+    if not (hasattr(st, "login") and hasattr(st, "user")):
+        st.error("Streamlit ចាស់ពេក — សូមដាក់ `streamlit>=1.42.0` និង `Authlib>=1.3.2` ក្នុង requirements.txt។")
+        st.stop()
+    if not _auth_configured():
+        _login_screen("⚙️", "កម្មវិធីកំពុងរៀបចំ", "អ្នកគ្រប់គ្រងមិនទាន់កំណត់ Google Login ទេ។ សូមត្រឡប់មកវិញពេលក្រោយ។")
+        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
+            st.markdown(
+                "1. Google Cloud Console → APIs & Services → Credentials → **Create OAuth client ID** (Web application)។\n"
+                "2. ដាក់ **Authorized redirect URI** ជា `https://ឈ្មោះកម្មវិធី.streamlit.app/oauth2callback` "
+                "(ក្នុងម៉ាស៊ីនខ្លួនឯង៖ `http://localhost:8501/oauth2callback`)។\n"
+                "3. ដាក់ Secrets ដូចខាងក្រោម ហើយដាក់ `Authlib>=1.3.2` ក្នុង requirements.txt។"
+            )
+            st.code(_AUTH_SETUP_HELP, language="toml")
+        st.stop()
 
+    if not _user_field("is_logged_in", False):
+        box = _login_screen(
+            "🎬", "ចូលប្រើ Khmer Video AI",
+            "ចូលតាមគណនី Google របស់អ្នក ដើម្បីចាប់ផ្តើមបកប្រែវីដេអូ",
+            ["🎙️ បកប្រែវីដេអូជាសំឡេង និង Subtitle ខ្មែរ",
+             "⚡ គណនីថ្មីត្រូវបានបង្កើតស្វ័យប្រវត្តិ",
+             "🔒 យើងមិនឃើញពាក្យសម្ងាត់ Google របស់អ្នកទេ"],
+        )
+        with box:
+            st.button("ចូលតាម Google", key="kv_login_btn", use_container_width=True,
+                      on_click=st.login, args=("google",))
+            st.markdown('<div class="kv-f">ត្រូវការគណនី Gmail ឬ Google ដើម្បីប្រើកម្មវិធី</div>', unsafe_allow_html=True)
+        st.stop()
 
-def _is_admin_session():
-    return st.session_state.get("_auth_role") == "admin"
+    _email = str(_user_field("email", "")).strip().lower()
+    if not _email or _user_field("email_verified", True) is False:
+        box = _login_screen("⚠️", "អ៊ីមែលមិនទាន់បញ្ជាក់", "គណនី Google នេះមិនទាន់បញ្ជាក់អ៊ីមែលទេ។ សូមប្រើគណនីផ្សេង។")
+        with box:
+            st.button("ចាកចេញ", key="kv_logout_unverified", on_click=st.logout, use_container_width=True)
+        st.stop()
+    _allowed = _allowed_email_set()
+    if _allowed and _email not in _allowed:
+        from html import escape as _esc
+        box = _login_screen("⛔", "គ្មានសិទ្ធិប្រើ", f"គណនី <b>{_esc(_email)}</b> មិនមានក្នុងបញ្ជីអនុញ្ញាតទេ។")
+        with box:
+            st.button("ចាកចេញ", key="kv_logout_denied", on_click=st.logout, use_container_width=True)
+        st.stop()
 
-
-def _is_logged_in():
-    return st.session_state.get("_auth_role") in ("admin", "vip")
-
-
-_LOGIN_LS_HTML = """<!doctype html><html><body><script>
-(function () {
-  var KEY = "kvai_login_v1", lastNonce = null, sent = false;
-  function send(type, data) {
-    window.parent.postMessage(Object.assign({isStreamlitMessage: true, type: type}, data), "*");
-  }
-  function readStore() { try { return localStorage.getItem(KEY) || ""; } catch (e) { return ""; } }
-  window.addEventListener("message", function (ev) {
-    var d = ev.data;
-    if (!d || d.type !== "streamlit:render") return;
-    var a = d.args || {};
-    if (a.nonce !== undefined && a.nonce !== lastNonce) {
-      lastNonce = a.nonce;
-      if (a.save !== null && a.save !== undefined) {
-        try {
-          if (a.save === "") localStorage.removeItem(KEY); else localStorage.setItem(KEY, a.save);
-        } catch (e) {}
-      }
-    }
-    if (!sent) {
-      sent = true;
-      send("streamlit:setComponentValue", {value: {data: readStore()}, dataType: "json"});
-    }
-  });
-  send("streamlit:componentReady", {apiVersion: 1});
-  send("streamlit:setFrameHeight", {height: 0});
-})();
-</script></body></html>"""
-
-
-@st.cache_resource(show_spinner=False)
-def _login_component():
-    folder = os.path.join(tempfile.gettempdir(), "kvai_login_component")
-    os.makedirs(folder, exist_ok=True)
-    with open(os.path.join(folder, "index.html"), "w", encoding="utf-8") as f:
-        f.write(_LOGIN_LS_HTML)
-    return components.declare_component("kvai_login_storage", path=folder)
-
-
-def _auth_ls():
-    """សរសេរ/អាន token ចូលក្នុង localStorage របស់ Browser (ដើម្បីមិនបាច់ចូលម្តងទៀត)។"""
-    try:
-        return _login_component()(save=st.session_state.get("_auth_ls_payload"),
-                                  nonce=st.session_state.get("_auth_ls_nonce", 0),
-                                  default=None, key="kv_login_ls")
-    except Exception:
-        return None
-
-
-def _auth_secret():
-    _adm_p = _admin_creds()[1]
-    _, _sb_key = _hg_supabase_config()
-    base = str(get_secret("LOGIN_SECRET", "") or "") or (_adm_p + "|" + _sb_key)
-    if not base.strip("|"):
-        return b""
-    return hashlib.sha256(("kvai-login|" + base).encode("utf-8")).digest()
-
-
-def _auth_make_token(role, username):
-    sec = _auth_secret()
-    if not sec:
-        return ""
-    body = base64.urlsafe_b64encode(json.dumps(
-        {"r": role, "u": username, "e": int(time.time()) + 365 * 86400}).encode("utf-8")).decode().rstrip("=")
-    return body + "." + hmac.new(sec, body.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
-def _auth_read_token(token):
-    try:
-        body, sig = str(token).split(".", 1)
-        sec = _auth_secret()
-        if not sec or not hmac.compare_digest(sig, hmac.new(sec, body.encode("utf-8"), hashlib.sha256).hexdigest()):
-            return None
-        d = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
-        return d if int(d.get("e", 0)) > time.time() else None
-    except Exception:
-        return None
-
-
-def _auth_restore(token):
-    """ចូលវិញដោយស្វ័យប្រវត្តិពី token ដែលបានរក្សាទុក។"""
-    d = _auth_read_token(token) if token else None
-    if not d:
-        return False
-    if d.get("r") == "admin":
-        _adm_u = _admin_creds()[0]
-        if _adm_u and d.get("u") == _adm_u:
-            _auth_sign_in("admin", _adm_u)
-            return True
-    elif d.get("r") == "vip":
-        try:
-            row = _hg_get_vip_user(d.get("u", ""))
-        except Exception:
-            return False
-        if _hg_vip_is_valid(row):
-            _auth_sign_in("vip", row["username"], str(row.get("expires_at", ""))[:10])
-            return True
-    return False
-
-
-def _auth_sign_in(role, username, expires=""):
-    st.session_state["_auth_role"] = role
-    st.session_state["_auth_user"] = username
-    st.session_state["_auth_expires"] = expires
-    st.session_state["_auth_checked_at"] = time.time()
-    st.session_state.pop("_auth_logged_out", None)
-    st.session_state["_auth_ls_payload"] = _auth_make_token(role, username)
-    st.session_state["_auth_ls_nonce"] = st.session_state.get("_auth_ls_nonce", 0) + 1
-
-
-def _auth_sign_out():
-    for _k in ("_auth_role", "_auth_user", "_auth_expires", "_auth_checked_at"):
-        st.session_state.pop(_k, None)
-    st.session_state["_auth_logged_out"] = True
-    st.session_state["_auth_ls_payload"] = ""   # លុប token ក្នុង Browser
-    st.session_state["_auth_ls_nonce"] = st.session_state.get("_auth_ls_nonce", 0) + 1
-
-
-def _auth_check(username, password):
-    """ត្រឡប់ (role, username, expires) បើត្រូវ ឬ (None, "", សារកំហុស) បើខុស។"""
-    u = str(username or "").strip()
-    p = str(password or "")
-    if not u or not p:
-        return None, "", "សូមបញ្ចូល Username និង Password។"
-    adm_u, adm_p = _admin_creds()
-    if (adm_u and adm_p
-            and hmac.compare_digest(u.lower().encode("utf-8"), adm_u.lower().encode("utf-8"))
-            and hmac.compare_digest(p.encode("utf-8"), adm_p.encode("utf-8"))):
-        return "admin", adm_u, ""
-    try:
-        row = _hg_get_vip_user(u)
-    except Exception:
-        return None, "", "មិនអាចផ្ទៀងផ្ទាត់គណនីបាន។ សូមព្យាយាមម្តងទៀត ឬទាក់ទង Admin។"
-    if _hg_vip_is_valid(row) and _hg_password_verify(p, row.get("password_hash", "")):
-        return "vip", row["username"], str(row.get("expires_at", ""))[:10]
-    return None, "", "Username ឬ Password មិនត្រឹមត្រូវ ឬគណនីផុតកំណត់។"
-
-
-def _auth_revalidate():
-    """គណនី VIP៖ ពិនិត្យម្តងទៀតរៀងរាល់ ៥ នាទី (ក្រែងផុតកំណត់ ឬ Admin បិទគណនី)។"""
-    if st.session_state.get("_auth_role") != "vip":
-        return True
-    if time.time() - float(st.session_state.get("_auth_checked_at", 0) or 0) < 300:
-        return True
-    try:
-        row = _hg_get_vip_user(st.session_state.get("_auth_user", ""))
-    except Exception:
-        return True  # បណ្តាញមានបញ្ហាបណ្តោះអាសន្ន — កុំទាញអ្នកប្រើចេញ
-    if _hg_vip_is_valid(row):
-        st.session_state["_auth_checked_at"] = time.time()
-        st.session_state["_auth_expires"] = str(row.get("expires_at", ""))[:10]
-        return True
-    return False
-
-
-def _render_account_bar():
-    _name = str(st.session_state.get("_auth_user", ""))
-    _exp = str(st.session_state.get("_auth_expires", ""))
-    if _is_admin_session():
-        _meta = "👑 Admin"
-    else:
-        _meta = f"VIP · ផុតកំណត់ {_exp}" if _exp else "VIP"
+    from html import escape as _esc
+    _name = str(_user_field("name", "") or _email)
+    _pic = str(_user_field("picture", "") or "")
     st.markdown(_ACCOUNT_CSS, unsafe_allow_html=True)
     with st.container(key="kv_account"):
         _a, _b = st.columns([6, 2])
         with _a:
+            _av = (f'<img src="{_esc(_pic)}" referrerpolicy="no-referrer">' if _pic.startswith("https://")
+                   else f'<div class="kv-av">{_esc(_name[:1].upper())}</div>')
             st.markdown(
-                f'<div class="kv-u"><div class="kv-av">{_esc(_name[:1].upper())}</div>'
-                f'<div class="kv-t2"><div class="kv-n">{_esc(_name)}</div>'
-                f'<div class="kv-m">{_esc(_meta)}</div></div></div>',
+                f'<div class="kv-u">{_av}<div class="kv-t2"><div class="kv-n">{_esc(_name)}</div>'
+                f'<div class="kv-m">{_esc(_email)}</div></div></div>',
                 unsafe_allow_html=True,
             )
         with _b:
-            st.button("ចាកចេញ", key="kv_logout_btn", on_click=_auth_sign_out)
-
-
-def auth_bootstrap():
-    """មិនបិទកម្មវិធីទេ — គ្រាន់តែស្តារការចូលដែលបានចងចាំ និងពិនិត្យគណនីផុតកំណត់។"""
-    _ls_res = _auth_ls()
-    if _is_logged_in():
-        if not _auth_revalidate():
-            _auth_sign_out()
-            st.warning("គណនីរបស់អ្នកបានផុតកំណត់ ឬត្រូវបានបិទ។ សូមទាក់ទង Admin។")
-    elif (_ls_res and not st.session_state.get("_auth_logged_out")
-          and not st.session_state.get("_auth_restore_tried")):
-        st.session_state["_auth_restore_tried"] = True
-        _raw = (_ls_res.get("data") if isinstance(_ls_res, dict) else "") or ""
-        if _auth_restore(_raw):
-            st.rerun()
-
-
-def _hg_login_form():
-    """ទម្រង់ចូល Admin/VIP — បង្ហាញតែក្នុងផ្ទាំង Hongguo (កម្មវិធីផ្សេងទៀតប្រើបានដោយមិនបាច់ចូល)។"""
-    _adm_u, _adm_p = _admin_creds()
-    _sb_url, _sb_key = _hg_supabase_config()
-    if not (_adm_u and _adm_p) and not (_sb_url and _sb_key):
-        st.warning("មុខងារ VIP មិនទាន់ត្រូវបានកំណត់ដោយ Admin ទេ។")
-        with st.expander("🛠️ សម្រាប់អ្នកគ្រប់គ្រង — របៀបកំណត់"):
-            st.code(_AUTH_SETUP_HELP, language="toml")
-        return
-    box = _login_screen(
-        "🔒", "Hongguo VIP",
-        "បញ្ចូល Username និង Password ដែល Admin ផ្តល់ឱ្យ",
-        ["🔒 គណនីត្រូវបានបង្កើតដោយ Admin ប៉ុណ្ណោះ"],
-    )
-    with box:
-        with st.form("kv_login_form"):
-            _u = st.text_input("Username", key="kv_login_user")
-            _p = st.text_input("Password", type="password", key="kv_login_pass")
-            _go = st.form_submit_button("ចូលប្រើ", type="primary", use_container_width=True)
-        if _go:
-            _role, _name, _info = _auth_check(_u, _p)
-            if _role:
-                _auth_sign_in(_role, _name, _info if _role == "vip" else "")
-                st.rerun()
-            time.sleep(1)
-            st.error(_info)
-        st.markdown('<div class="kv-f">មិនទាន់មានគណនី? សូមទាក់ទង Admin ដើម្បីទទួលគណនី</div>',
-                    unsafe_allow_html=True)
+            st.button("ចាកចេញ", key="kv_logout_btn", on_click=st.logout)
 
 
 GEMINI_KEY = ""  # Gemini API ត្រូវបានបិទ និងមិនត្រូវបានប្រើ។
 GROQ_KEY = collect_api_keys("GROQ_API_KEY")
 
 render_header()
-auth_bootstrap()
+require_login()
 # Mobile-first interface: landscape/fullscreen rotation control intentionally removed.
 ls_sync()
 
@@ -7493,839 +7004,9 @@ tight_sync = False
 
 # ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
 
-tab_drama, tab_tiktok, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["🍎 Hongguo", "🎵 TikTok Short Drama", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
 )
-
-# ============================ Hongguo Drama → Khmer Auto Caption ============================
-# API credentials stay on the server in Streamlit Secrets. Never expose them in the UI.
-def _hg_norm(key):
-    return re.sub(r"[^A-Z0-9]", "", str(key).upper())
-
-
-def _hg_walk_secrets():
-    """យក (key, value) ទាំងអស់ពី st.secrets រួមទាំង [section] ខាងក្នុង។"""
-    out = []
-
-    def _walk(obj, depth=0):
-        if depth > 4:
-            return
-        try:
-            items = list(obj.items())
-        except Exception:
-            return
-        for k, v in items:
-            if hasattr(v, "items"):
-                _walk(v, depth + 1)
-            else:
-                out.append((str(k), v))
-
-    try:
-        _walk(st.secrets)
-    except Exception:
-        pass
-    return out
-
-
-_HG_ID_KEYS = {"XIAOYINGAPPID", "APPID", "HONGGUOAPPID", "XIAOYINGAPIAPPID", "XIAOYINGID"}
-_HG_SECRET_KEYS = {"XIAOYINGAPPSECRET", "APPSECRET", "HONGGUOAPPSECRET", "XIAOYINGAPIAPPSECRET", "XIAOYINGSECRET"}
-
-
-def _hg_secret(*names):
-    """អាន Hongguo credentials ពី Streamlit Secrets / Environment។
-    មិនប្រកាន់ អក្សរធំតូច, _ ឬ - ហើយរកក្នុង [section] ដែរ។
-    """
-    wanted = _HG_ID_KEYS if any(_hg_norm(n) in _HG_ID_KEYS for n in names) else _HG_SECRET_KEYS
-    # 1) ឈ្មោះដែលបានកំណត់ច្បាស់លាស់ (top-level)
-    for name in names:
-        try:
-            value = st.secrets.get(name, "")
-        except Exception:
-            value = ""
-        if value and not hasattr(value, "items"):
-            return str(value).strip().strip('"\'').strip()
-        value = os.environ.get(name, "")
-        if value:
-            return str(value).strip().strip('"\'').strip()
-    # 2) ឈ្មោះស្រដៀងគ្នា ឬនៅក្នុង [section]
-    for k, v in _hg_walk_secrets():
-        if _hg_norm(k) in wanted and v:
-            return str(v).strip().strip('"\'').strip()
-    for k, v in os.environ.items():
-        if _hg_norm(k) in wanted and v:
-            return str(v).strip().strip('"\'').strip()
-    return ""
-
-
-def _hg_secret_key_names():
-    """ឈ្មោះ key ក្នុង Secrets (មិនមានតម្លៃ) សម្រាប់ជួយ Admin រកបញ្ហា។"""
-    return sorted({k for k, _ in _hg_walk_secrets()})
-
-
-_HG_APP_ID = _hg_secret("XIAOYING_APPID", "APPID")
-_HG_APP_SECRET = _hg_secret("XIAOYING_APPSECRET", "APPSECRET")
-_HG_API_BASE = "https://www.xiaoyingapi.com"
-_HG_API_PREFIX = "/api/dramas/hongguo"
-
-def _hg_get(endpoint, params=None, timeout=45):
-    if not _HG_APP_ID or not _HG_APP_SECRET:
-        raise RuntimeError("មិនទាន់កំណត់ XIAOYING_APPID និង XIAOYING_APPSECRET ក្នុង Streamlit Secrets ទេ។")
-    path = f"{_HG_API_PREFIX}/{endpoint.strip('/')}"  # XiaoYingAPI route: no trailing slash
-    signed = dict(params or {})
-    signed.update({"app_id": _HG_APP_ID, "timestamp": str(int(time.time())), "nonce": secrets.token_hex(8)})
-    pairs = sorted((k, str(v)) for k, v in signed.items() if v not in (None, ""))
-    query = "&".join(f"{k}={v}" for k, v in pairs)
-    raw = "GET\n" + path + "\n" + query
-    signed["sign"] = hmac.new(_HG_APP_SECRET.encode(), raw.encode(), hashlib.sha256).hexdigest()
-    response = requests.get(_HG_API_BASE + path, params=signed, timeout=timeout,
-                            headers={"Accept": "application/json", "User-Agent": "KhmerAutoCaption/1.0"})
-    if response.status_code == 404:
-        raise RuntimeError(
-            f"XiaoYingAPI HTTP 404: មិនរកឃើញ API path {path} ទេ។ "
-            "សូមពិនិត្យ endpoint ឬ API version។"
-        )
-    if not response.ok:
-        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {response.text[:300]}")
-    data = response.json()
-    if not isinstance(data, dict) or data.get("code") != 10000:
-        raise RuntimeError(f"XiaoYingAPI ({data.get('code') if isinstance(data, dict) else 'ERR'}): {data.get('msg', 'API error') if isinstance(data, dict) else 'Invalid response'}")
-    return data.get("data") or {}
-
-@st.cache_data(ttl=240, show_spinner=False)
-def _hg_rank(page=1):
-    d = _hg_get("rank", {"type": "hot-drama", "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
-
-@st.cache_data(ttl=600, show_spinner=False)
-def _hg_categories():
-    """ទាញ category tree ពិតពី XiaoYingAPI (ប្រើ slug មិនប្រើឈ្មោះចិនជាតម្លៃ API)។"""
-    d = _hg_get("categories", {})
-    if isinstance(d, list):
-        return d
-    if isinstance(d, dict):
-        return d.get("categories") or d.get("results") or d.get("list") or []
-    return []
-
-
-@st.cache_data(ttl=180, show_spinner=False)
-def _hg_detail(series_id):
-    """ទាញព័ត៌មានរឿង និងបញ្ជីភាគពី Hongguo API។"""
-    d = _hg_get("detail", {"series_id": str(series_id)})
-    if not isinstance(d, dict):
-        return {}
-    # API versions may wrap detail data one level deeper.
-    if isinstance(d.get("detail"), dict):
-        d = d["detail"]
-    elif isinstance(d.get("result"), dict):
-        d = d["result"]
-    episodes = d.get("episodes") or d.get("episode_list") or d.get("list") or []
-    normalized = []
-    for i, ep in enumerate(episodes if isinstance(episodes, list) else []):
-        if not isinstance(ep, dict):
-            continue
-        ep_no = ep.get("ep") or ep.get("episode") or ep.get("episode_no") or ep.get("index") or (i + 1)
-        try:
-            ep_no = int(ep_no)
-        except (TypeError, ValueError):
-            ep_no = i + 1
-        playable = ep.get("playable")
-        if playable is None:
-            playable = bool(ep.get("url") or ep.get("play_url") or ep.get("video_url") or ep.get("token"))
-        normalized.append({**ep, "ep": ep_no, "playable": bool(playable)})
-    d["episodes"] = normalized
-    return d
-
-
-# ឈ្មោះប្រភេទចិន -> ភាសាខ្មែរ (តម្លៃ slug សម្រាប់ API មិនត្រូវបានប្ដូរ)
-_HG_CATEGORY_KH = {'真人剧': 'រឿងសម្ដែងពិត', '爱情': 'ស្នេហា', '年代': 'រឿងសម័យកាល', '逆袭': 'តស៊ូត្រឡប់មកជោគជ័យ', '传奇': 'រឿងវីរភាព', '成长': 'ការរីកចម្រើន', '家庭': 'គ្រួសារ', '都市': 'ជីវិតទីក្រុង', '古装': 'សម័យបុរាណ', '现代': 'សម័យទំនើប', '悬疑': 'អាថ៌កំបាំង', '喜剧': 'កំប្លែង', '动作': 'ក្បាច់គុន និងសកម្មភាព', '战争': 'សង្គ្រាម', '历史': 'ប្រវត្តិសាស្ត្រ', '奇幻': 'រវើរវាយ', '玄幻': 'រឿងអច្ឆរិយៈ', '仙侠': 'ទេពអប្សរ និងអ្នក仙', '武侠': 'ក្បាច់គុន', '青春': 'យុវវ័យ', '校园': 'សាលារៀន', '职场': 'ជីវិតការងារ', '甜宠': 'ស្នេហាផ្អែមល្ហែម', '虐恋': 'ស្នេហាសោកសៅ', '复仇': 'ការសងសឹក', '豪门': 'គ្រួសារអ្នកមាន', '总裁': 'ប្រធានក្រុមហ៊ុន', '穿越': 'ឆ្លងពេលវេលា', '重生': 'កើតជាថ្មី', '乡村': 'ជីវិតជនបទ', '农村': 'ជីវិតជនបទ', '亲情': 'សេចក្ដីស្រឡាញ់ក្នុងគ្រួសារ', '友情': 'មិត្តភាព', '现实': 'ជីវិតពិត', '励志': 'លើកទឹកចិត្ត', '惊悚': 'រន្ធត់', '恐怖': 'ភ័យរន្ធត់', '犯罪': 'ឧក្រិដ្ឋកម្ម', '探案': 'ស៊ើបអង្កេត', '科幻': 'វិទ្យាសាស្ត្រប្រឌិត', '萌宝': 'កូនតូចគួរឱ្យស្រឡាញ់', '神医': 'គ្រូពេទ្យអស្ចារ្យ', '战神': 'អ្នកចម្បាំងខ្លាំង', '赘婿': 'កូនប្រសារប្រុស', '女强': 'នារីខ្លាំង', '男频': 'សម្រាប់ទស្សនិកជនប្រុស', '女频': 'សម្រាប់ទស្សនិកជនស្រី', '短剧': 'រឿងភាគខ្លី', '漫剧': 'រឿងគំនូរជីវចល', '漫画': 'រឿងគំនូរជីវចល', '动画': 'គំនូរជីវចល', '全部': 'ទាំងអស់'}
-
-
-def _hg_category_label(name):
-    raw = str(name or "").strip()
-    return _HG_CATEGORY_KH.get(raw, raw)
-
-
-def _hg_flat_categories(tree):
-    """បម្លែង category tree ទៅជាជម្រើស UI ដែលរក្សា slug ត្រឹមត្រូវ។"""
-    out = {}
-    for parent in tree or []:
-        if not isinstance(parent, dict):
-            continue
-        pslug = str(parent.get("slug") or parent.get("category") or parent.get("category_id") or parent.get("id") or "").strip()
-        pname = str(parent.get("name") or parent.get("title") or parent.get("category_name") or pslug).strip()
-        if pslug and pname:
-            out[_hg_category_label(pname)] = pslug
-        children = parent.get("children") or []
-        if isinstance(children, list):
-            for child in children:
-                if not isinstance(child, dict):
-                    continue
-                cslug = str(child.get("slug") or child.get("category") or child.get("category_id") or child.get("id") or "").strip()
-                cname = str(child.get("name") or child.get("title") or child.get("category_name") or cslug).strip()
-                if cslug and cname:
-                    # បង្ហាញតែឈ្មោះប្រភេទរងជាខ្មែរ ដើម្បីកុំឱ្យអក្សរវែងពេកក្នុង Dropdown លើទូរស័ព្ទ។
-                    # បើឈ្មោះដូចគ្នា ទើបបន្ថែមឈ្មោះមេជាអក្សរខ្លីសម្រាប់បំបែក។
-                    child_label = _hg_category_label(cname)
-                    if child_label in out:
-                        child_label = f"{child_label} · {_hg_category_label(pname)}"
-                    out[child_label] = cslug
-    return out
-
-
-def _hg_error_khmer(error):
-    """បកស្រាយ error សំខាន់ៗជាខ្មែរ ដើម្បីអ្នកប្រើដឹងវិធីដោះស្រាយ។"""
-    msg = str(error or "")
-    if "20003" in msg or "参数值非法" in msg or "category" in msg and "合法分类" in msg:
-        return "ប្រភេទរឿងដែល API ទទួលបានមិនត្រឹមត្រូវ។ កម្មវិធីត្រូវប្រើ Category slug ពីបញ្ជីប្រភេទ Hongguo មិនមែនឈ្មោះចិនទេ។ សូមចុច «ផ្ទុកប្រភេទឡើងវិញ» ហើយជ្រើសប្រភេទម្ដងទៀត។"
-    if "20002" in msg or "参数缺失" in msg:
-        return "API ខ្វះប៉ារ៉ាម៉ែត្រចាំបាច់។ សូមជ្រើសប្រភេទរឿងម្ដងទៀត។"
-    return msg
-
-@st.cache_data(ttl=240, show_spinner=False)
-def _hg_category_list(category, page=1):
-    d = _hg_get("list", {"category": str(category), "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
-
-@st.cache_data(ttl=240, show_spinner=False)
-def _hg_search(keyword, page=1):
-    d = _hg_get("search", {"keyword": keyword, "page": int(page)})
-    return d.get("results", []) if isinstance(d, dict) else []
-
-
-def _hg_extract_series_id(value):
-    """ទទួលយក URL លម្អិត Hongguo ឬ series_id ដោយផ្ទាល់។"""
-    value = str(value or "").strip()
-    if not value:
-        return ""
-    # URL format: https://hongguoduanju.com/detail?series_id=123
-    try:
-        parsed = urllib.parse.urlparse(value)
-        query = urllib.parse.parse_qs(parsed.query)
-        ids = query.get("series_id") or query.get("seriesId") or []
-        if ids and str(ids[0]).strip().isdigit():
-            return str(ids[0]).strip()
-        match = re.search(r"/detail/(\d+)", parsed.path)
-        if match:
-            return match.group(1)
-    except Exception:
-        pass
-    # User may paste only the numeric series_id.
-    if value.isdigit():
-        return value
-    return ""
-
-with tab_drama:
-    _hg_access = _hg_vip_gate()
-    if _hg_access:
-        st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
-        st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
-        if not _HG_APP_ID or not _HG_APP_SECRET:
-            st.warning("មិនទាន់រកឃើញ Hongguo APPID/APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin ពិនិត្យ Secrets របស់កម្មវិធី។ អ្នកប្រើមិនចាំបាច់បញ្ចូល API នៅផ្ទាំងផ្សេងទៀតទេ។")
-            if _is_admin_session():
-                with st.expander("🔧 Admin: មើលមូលហេតុ (មិនបង្ហាញតម្លៃ Secret)"):
-                    st.write("APPID រកឃើញ:", "✅" if _HG_APP_ID else "❌", " · APPSECRET រកឃើញ:", "✅" if _HG_APP_SECRET else "❌")
-                    _names = _hg_secret_key_names()
-                    st.write("ឈ្មោះ key ដែលកម្មវិធីឃើញក្នុង Secrets:", ", ".join(_names) if _names else "(គ្មានសោះ)")
-                    st.caption("ឈ្មោះដែលទទួល៖ XIAOYING_APPID / APPID / HONGGUO_APPID និង XIAOYING_APPSECRET / APPSECRET / HONGGUO_APPSECRET។ ត្រូវដាក់នៅផ្នែកខាងលើបំផុតនៃ Secrets មុនបន្ទាត់ [section] ណាមួយ។")
-        _hg_q1, _hg_q2 = st.columns([3, 1])
-        with _hg_q1:
-            _hg_keyword = st.text_input("ស្វែងរកឈ្មោះរឿង ឬបិទភ្ជាប់ Link / series_id", key="hg_search_text", placeholder="ឈ្មោះរឿង ឬ https://hongguoduanju.com/detail?series_id=...")
-        with _hg_q2:
-            st.write("")
-            _hg_search_click = st.button("🔎 ស្វែងរក", key="hg_search_btn", use_container_width=True)
-        if "_hg_rows" not in st.session_state:
-            st.session_state["_hg_rows"] = []
-        if "_hg_page" not in st.session_state:
-            st.session_state["_hg_page"] = 1
-        if "_hg_catalog_mode" not in st.session_state:
-            st.session_state["_hg_catalog_mode"] = "hot"
-        _hg_c1, _hg_c2 = st.columns([3, 1])
-        with _hg_c1:
-            try:
-                _hg_categories = _hg_categories() if _HG_APP_ID and _HG_APP_SECRET else []
-            except Exception as _cat_err:
-                _hg_categories = []
-                st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-            _hg_cat_map = _hg_flat_categories(_hg_categories)
-            _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
-            _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
-            if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
-                _hg_categories.clear()
-                st.rerun()
-        with _hg_c2:
-            st.write("")
-            _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
-        _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
-        if _hg_load_category:
-            st.session_state["_hg_page"] = 1
-            st.session_state["_hg_catalog_mode"] = ("hot" if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
-                                                      else "category:" + _hg_cat_map.get(_hg_cat_choice, ""))
-            st.session_state.pop("_hg_selected", None)
-            try:
-                with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
-                    st.session_state["_hg_rows"] = (
-                        _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
-                        else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
-                    )
-            except Exception as e:
-                st.error(_hg_error_khmer(e))
-        if _hg_search_click and _hg_keyword.strip():
-            st.session_state["_hg_page"] = 1
-            st.session_state["_hg_catalog_mode"] = "search:" + _hg_keyword.strip()
-            try:
-                _direct_series_id = _hg_extract_series_id(_hg_keyword)
-                if _direct_series_id:
-                    with st.spinner("កំពុងបើករឿងតាម Link..."):
-                        _direct_detail = _hg_detail(_direct_series_id)
-                    st.session_state["_hg_selected"] = {
-                        "series_id": _direct_series_id,
-                        "name": _direct_detail.get("name") or "រឿង Hongguo",
-                        "cover": _direct_detail.get("cover") or "",
-                        "episode_cnt": _direct_detail.get("episode_cnt") or "",
-                        "listed_cnt": _direct_detail.get("listed_cnt") or "",
-                        "intro": _direct_detail.get("intro") or "",
-                    }
-                    st.session_state["_hg_rows"] = []
-                    st.rerun()
-                else:
-                    with st.spinner("កំពុងស្វែងរករឿង..."):
-                        st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
-                    st.session_state.pop("_hg_selected", None)
-                    if not st.session_state["_hg_rows"]:
-                        st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
-            except Exception as e:
-                st.error(str(e))
-        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APP_ID and _HG_APP_SECRET):
-            try:
-                st.session_state["_hg_page"] = 1
-                st.session_state["_hg_catalog_mode"] = "hot"
-                with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
-                    st.session_state["_hg_rows"] = _hg_rank(1)
-            except Exception as e:
-                st.error(str(e))
-        _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
-        _hg_selected = st.session_state.get("_hg_selected")
-        if _hg_selected:
-            if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
-                st.session_state.pop("_hg_selected", None)
-                st.rerun()
-            st.subheader(_hg_selected.get("name") or "រឿង")
-            _hg_cover = _hg_selected.get("cover")
-            if _hg_cover:
-                st.image(_hg_cover, use_container_width=True)
-            try:
-                with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
-                    _hg_d = _hg_detail(_hg_selected["series_id"])
-                if _hg_d.get("intro"):
-                    st.write(_hg_d["intro"])
-                _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and e.get("playable") is True]
-                if not _hg_eps:
-                    st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
-                else:
-                    _hg_ep_map = {f"ភាគ {int(e.get('ep', i+1))}": int(e.get('ep', i+1)) for i,e in enumerate(_hg_eps)}
-                    _hg_quality = st.selectbox("គុណភាព", [360,480,540,720,1080], index=3, key=f"hg_q_{_hg_selected['series_id']}")
-                    _hg_codec = st.selectbox("Codec", ["h264", "hevc"], key=f"hg_codec_{_hg_selected['series_id']}")
-                    _hg_ep_label = st.selectbox("ជ្រើសរើសភាគសម្រាប់មើល", list(_hg_ep_map), key=f"hg_ep_{_hg_selected['series_id']}")
-                    _hg_epnum = _hg_ep_map[_hg_ep_label]
-                    _hg_play_key = f"_hg_play_{_hg_selected['series_id']}_{_hg_epnum}"
-                    if st.button("▶ រៀបចំភាគនេះ", type="primary", key=f"hg_play_btn_{_hg_selected['series_id']}", use_container_width=True):
-                        with st.spinner("កំពុងរៀបចំវីដេអូ..."):
-                            _hg_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _hg_epnum, "q": _hg_quality, "codec": _hg_codec})
-                        if _hg_play.get("url"):
-                            st.session_state[_hg_play_key] = {"url": _hg_play["url"], "ready": _hg_play.get("ready"), "source": _hg_play.get("source")}
-                        else:
-                            st.error("API មិនបានផ្ដល់តំណវីដេអូទេ។")
-                    _hg_saved = st.session_state.get(_hg_play_key)
-                    if _hg_saved:
-                        st.video(_hg_saved["url"])
-                        st.link_button("⬇️ បើក / ទាញយកវីដេអូ", _hg_saved["url"], use_container_width=True)
-                        if _hg_saved.get("ready") is False:
-                            st.info("វីដេអូកំពុងរៀបចំលើម៉ាស៊ីនមេ។ សូមរង់ចាំបន្តិច។")
-                        if st.button("✨ យកភាគនេះទៅ Khmer Auto Caption", type="primary", key=f"hg_to_caption_{_hg_selected['series_id']}_{_hg_epnum}", use_container_width=True):
-                            st.session_state["mode_pick"] = "🔗 Link"
-                            st.session_state["link_text_area"] = _hg_saved["url"]
-                            st.session_state["link_searched"] = [_hg_saved["url"]]
-                            st.session_state["_hg_imported_caption_notice"] = True
-                            st.rerun()
-
-                    # Download multiple Hongguo episodes in one ZIP (all or selected)
-                    st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ")
-                    _hg_dl_all = st.checkbox(
-                        f"ជ្រើសរើសភាគទាំងអស់ ({len(_hg_ep_map)} ភាគ)",
-                        value=False,
-                        key=f"hg_dl_all_{_hg_selected['series_id']}"
-                    )
-                    _hg_dl_labels = st.multiselect(
-                        "ឬជ្រើសរើសតែភាគដែលចង់ទាញយក",
-                        list(_hg_ep_map.keys()),
-                        default=list(_hg_ep_map.keys()) if _hg_dl_all else [],
-                        key=f"hg_dl_eps_{_hg_selected['series_id']}"
-                    )
-                    _hg_dl_max = st.selectbox(
-                        "ចំនួនអតិបរមាក្នុងមួយលើក",
-                        [5, 10, 20, 50, 100],
-                        index=2,
-                        key=f"hg_dl_limit_{_hg_selected['series_id']}"
-                    )
-                    if st.button(
-                        f"📦 ទាញយក {_hg_dl_labels.__len__() if _hg_dl_all else len(_hg_dl_labels)} ភាគជា ZIP",
-                        key=f"hg_dl_start_{_hg_selected['series_id']}",
-                        disabled=(not (_hg_dl_all or _hg_dl_labels) or busy),
-                        use_container_width=True
-                    ):
-                        _chosen_dl_labels = list(_hg_ep_map.keys()) if _hg_dl_all else list(_hg_dl_labels)
-                        _chosen_dl_labels = _chosen_dl_labels[:_hg_dl_max]
-                        _dl_folder = tempfile.mkdtemp(prefix="hongguo_batch_")
-                        _dl_zip_path = os.path.join(_dl_folder, "hongguo_episodes.zip")
-                        _dl_errors = []
-                        _dl_ok = 0
-                        _dl_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
-                        try:
-                            with zipfile.ZipFile(_dl_zip_path, "w", compression=zipfile.ZIP_STORED) as _dl_zip:
-                                for _di, _dl_label in enumerate(_chosen_dl_labels, start=1):
-                                    _dl_ep = _hg_ep_map[_dl_label]
-                                    _dl_tmp = None
-                                    try:
-                                        _dl_play = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _dl_ep, "q": _hg_quality, "codec": _hg_codec})
-                                        _dl_url = str(_dl_play.get("url") or "").strip()
-                                        if not _dl_url:
-                                            raise RuntimeError("API មិនបានផ្ដល់តំណវីដេអូ")
-                                        _dl_result = _fetch_one(_dl_url)
-                                        if not _dl_result.get("ok") or not _dl_result.get("path"):
-                                            raise RuntimeError(_dl_result.get("err") or "ទាញយកវីដេអូមិនបាន")
-                                        _dl_tmp = _dl_result["path"]
-                                        _dl_size = os.path.getsize(_dl_tmp)
-                                        _dl_current = sum(x.file_size for x in _dl_zip.filelist)
-                                        if _dl_current + _dl_size > MAX_ZIP_MB * 1024 * 1024:
-                                            raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
-                                        _dl_zip.write(_dl_tmp, f"episode_{_dl_ep:04d}.mp4")
-                                        _dl_ok += 1
-                                    except Exception as _dl_err:
-                                        _dl_errors.append(f"ភាគ {_dl_ep}: {str(_dl_err)[:180]}")
-                                    finally:
-                                        if _dl_tmp:
-                                            shutil.rmtree(os.path.dirname(_dl_tmp), ignore_errors=True)
-                                    _dl_bar.progress(_di / max(1, len(_chosen_dl_labels)), text=f"ទាញយកបាន {_dl_ok}/{len(_chosen_dl_labels)} ភាគ · កំពុងដំណើរការ {_di}/{len(_chosen_dl_labels)}")
-                            _dl_bar.empty()
-                            if _dl_ok:
-                                st.session_state[f"_hg_dl_ready_{_hg_selected['series_id']}"] = {
-                                    "path": _dl_zip_path,
-                                    "folder": _dl_folder,
-                                    "count": _dl_ok,
-                                    "name": safe_filename(_hg_selected.get("name") or "hongguo")
-                                }
-                                st.success(f"បានរៀបចំទាញយកបាន {_dl_ok} ភាគរួចរាល់។")
-                            else:
-                                shutil.rmtree(_dl_folder, ignore_errors=True)
-                                st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
-                            if _dl_errors:
-                                with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_dl_errors)})"):
-                                    for _de in _dl_errors:
-                                        st.warning(_de)
-                        except Exception as _dl_fatal:
-                            shutil.rmtree(_dl_folder, ignore_errors=True)
-                            st.error(f"រៀបចំ ZIP មិនបាន៖ {_dl_fatal}")
-                    _dl_ready = st.session_state.get(f"_hg_dl_ready_{_hg_selected['series_id']}")
-                    if _dl_ready and os.path.isfile(_dl_ready.get("path", "")):
-                        with open(_dl_ready["path"], "rb") as _dl_file:
-                            dl_button(
-                                f"⬇️ ទាញយក ZIP ({_dl_ready['count']} ភាគ)",
-                                _dl_file,
-                                f"{_dl_ready['name']}_episodes.zip",
-                                "application/zip",
-                                key=f"hg_dl_file_{_hg_selected['series_id']}",
-                                use_container_width=True
-                            )
-
-                    st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
-                    _hg_batch_labels = st.multiselect(
-                        "ជ្រើសរើសភាគដែលចង់បកប្រែ",
-                        list(_hg_ep_map.keys()),
-                        default=[],
-                        key=f"hg_batch_eps_{_hg_selected['series_id']}",
-                        help="អាចជ្រើសរើសភាគជាច្រើនបាន។ កម្មវិធីនឹងរៀបចំ Link រួចបញ្ជូនទៅ Khmer Auto Caption តាមលំដាប់។"
-                    )
-                    _hg_batch_limit = st.selectbox(
-                        "ចំនួនភាគក្នុងមួយលើក",
-                        [2, 3, 5, 10, 20],
-                        index=2,
-                        key=f"hg_batch_limit_{_hg_selected['series_id']}"
-                    )
-                    if st.button(
-                        f"🚀 រៀបចំ និងបកប្រែ {len(_hg_batch_labels)} ភាគ",
-                        type="primary",
-                        disabled=not _hg_batch_labels or busy,
-                        key=f"hg_batch_start_{_hg_selected['series_id']}",
-                        use_container_width=True
-                    ):
-                        _batch_eps = [_hg_ep_map[x] for x in _hg_batch_labels][:_hg_batch_limit]
-                        _batch_urls = []
-                        _batch_errors = []
-                        _batch_bar = st.progress(0, text="កំពុងរៀបចំតំណភាគ...")
-                        for _bi, _be in enumerate(_batch_eps, start=1):
-                            try:
-                                _bp = _hg_get("play", {"series_id": _hg_selected["series_id"], "ep": _be, "q": _hg_quality, "codec": _hg_codec})
-                                _bu = str(_bp.get("url") or "").strip()
-                                if _bu:
-                                    _batch_urls.append(_bu)
-                                else:
-                                    _batch_errors.append(f"ភាគ {_be}: API មិនបានផ្ដល់ URL")
-                            except Exception as _be_err:
-                                _batch_errors.append(f"ភាគ {_be}: {_hg_error_khmer(_be_err)}")
-                            _batch_bar.progress(_bi / len(_batch_eps), text=f"កំពុងរៀបចំភាគ {_bi}/{len(_batch_eps)}")
-                        _batch_bar.empty()
-                        if _batch_urls:
-                            st.session_state["mode_pick"] = "🔗 Link"
-                            st.session_state["link_text_area"] = "\n".join(_batch_urls)
-                            st.session_state["link_searched"] = list(_batch_urls)
-                            st.session_state["_hg_imported_caption_notice"] = True
-                            st.session_state["_auto_translate"] = True
-                            st.session_state["_hg_batch_count"] = len(_batch_urls)
-                            st.rerun()
-                        if _batch_errors:
-                            st.warning("មិនអាចរៀបចំបានខ្លះ៖ " + " · ".join(_batch_errors[:5]))
-            except Exception as e:
-                st.error(str(e))
-        elif _hg_rows:
-            for _hg_i in range(0, len(_hg_rows), 3):
-                _hg_cols = st.columns(3, gap="small")
-                for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
-                    with _hg_col:
-                        if _hg_row.get("cover"):
-                            st.image(_hg_row["cover"], use_container_width=True)
-                        st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
-                        st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
-                        if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
-                            st.session_state["_hg_selected"] = _hg_row
-                            st.rerun()
-            _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
-            _hg_page_end = _hg_page_start + len(_hg_rows) - 1
-            st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
-            _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
-            with _hg_prev:
-                if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
-                             disabled=st.session_state.get("_hg_page", 1) <= 1):
-                    st.session_state["_hg_page"] -= 1
-                    _p = st.session_state["_hg_page"]
-                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
-                    try:
-                        if _mode == "hot":
-                            st.session_state["_hg_rows"] = _hg_rank(_p)
-                        elif _mode.startswith("category:"):
-                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
-                        elif _mode.startswith("search:"):
-                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
-                    except Exception as e:
-                        st.error(str(e))
-                    st.rerun()
-            with _hg_page_label:
-                st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {st.session_state.get('_hg_page',1)}</div>", unsafe_allow_html=True)
-            with _hg_next:
-                if st.button("បន្ទាប់ ➡️", key="hg_page_next", use_container_width=True,
-                             disabled=len(_hg_rows) < 20):
-                    st.session_state["_hg_page"] += 1
-                    _p = st.session_state["_hg_page"]
-                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
-                    try:
-                        if _mode == "hot":
-                            st.session_state["_hg_rows"] = _hg_rank(_p)
-                        elif _mode.startswith("category:"):
-                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
-                        elif _mode.startswith("search:"):
-                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
-                    except Exception as e:
-                        st.error(str(e))
-                    st.rerun()
-
-
-
-
-
-# ============================ TikTok Short Drama ============================
-# Episode navigator (prev/next), in-app player (when the video can be fetched),
-# and multi-episode ZIP download. TikTok has no public catalog API, so the series
-# is opened from one episode URL and the other episodes are built from series ID + number.
-def _tt_ep_url(series_id, ep):
-    return f"https://www.tiktok.com/shortdrama/episode/{series_id}/{int(ep)}?is_from_webapp=1&sender_device=pc"
-
-
-def _tt_resolve(url):
-    """បំប្លែងតំណខ្លី (vt/vm.tiktok.com, tiktok.com/t/) ទៅជា URL ពេញ ដើម្បីរក series ID និងលេខភាគ។"""
-    url = (url or "").strip()
-    if re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", url):
-        return url
-    if not re.match(r"https?://", url):
-        return url
-    try:
-        _r = requests.get(
-            url, allow_redirects=True, timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"},
-        )
-        _cands = [h.headers.get("Location", "") for h in _r.history] + [h.url for h in _r.history] + [_r.url]
-        for _c in _cands:
-            if re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", _c or ""):
-                return _c
-        _m = re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", _r.text[:2_000_000])
-        if _m:
-            return "https://www." + _m.group(0)
-        return _r.url
-    except Exception:
-        return url
-
-
-def _tt_free_media(res):
-    """លុបឯកសារវីដេអូបណ្ដោះអាសន្នរបស់ភាគមុន។"""
-    _old = (res or {}).get("path") or ""
-    if _old and os.path.isfile(_old):
-        shutil.rmtree(os.path.dirname(_old), ignore_errors=True)
-    if res is not None:
-        res["path"] = ""
-        res["fetch_err"] = ""
-
-
-def _tt_go_ep(delta):
-    """Callback ប៊ូតុង ភាគមុន/បន្ទាប់ (ដំណើរការមុន rerun)។"""
-    _res = st.session_state.get("_tiktok_drama_result")
-    if not _res:
-        return
-    _total = int(st.session_state.get("tiktok_drama_total", 60) or 60)
-    _cur = int(st.session_state.get("tiktok_drama_episode_number", _res.get("episode", 1)) or 1)
-    _new = max(1, min(_total, _cur + delta))
-    _tt_free_media(_res)
-    _res["episode"] = _new
-    _res["url"] = _tt_ep_url(_res["series_id"], _new)
-    st.session_state["tiktok_drama_episode_number"] = _new
-    st.session_state["_tiktok_drama_result"] = _res
-    if st.session_state.get("tiktok_drama_auto", True):
-        st.session_state["_tt_want_fetch"] = True
-
-
-def _tt_apply_ep_input():
-    """Callback ពេលវាយលេខភាគដោយផ្ទាល់។"""
-    _res = st.session_state.get("_tiktok_drama_result")
-    if not _res:
-        return
-    _new = int(st.session_state.get("tiktok_drama_episode_number", 1) or 1)
-    _tt_free_media(_res)
-    _res["episode"] = _new
-    _res["url"] = _tt_ep_url(_res["series_id"], _new)
-    st.session_state["_tiktok_drama_result"] = _res
-    if st.session_state.get("tiktok_drama_auto", True):
-        st.session_state["_tt_want_fetch"] = True
-
-
-with tab_tiktok:
-    _tt_access = _hg_has_access()
-    if not _tt_access:
-        st.info("🔒 ផ្ទាំងនេះសម្រាប់សមាជិក VIP។ សូមចូលគណនី VIP នៅផ្ទាំង 🍎 Hongguo មុន រួចត្រឡប់មកទីនេះ។")
-    if _tt_access:
-        st.markdown("### 🎵 TikTok Short Drama")
-        st.caption("បិទភ្ជាប់ Episode URL មួយ រួចប្រើប៊ូតុង ⏮ ភាគមុន / ភាគបន្ទាប់ ⏭ ដើម្បីប្តូរភាគ ដូច Hongguo។")
-
-        _tt_default_url = "https://www.tiktok.com/shortdrama/episode/7699896495729808392/2?is_from_webapp=1&sender_device=pc"
-        with st.container(border=True):
-            _tt_query_col, _tt_search_col = st.columns([4, 1], gap="small")
-            with _tt_query_col:
-                _tt_query = st.text_input(
-                    "TikTok Short Drama Episode URL",
-                    key="tiktok_drama_query",
-                    value=st.session_state.get("tiktok_drama_query", _tt_default_url),
-                    placeholder="https://www.tiktok.com/shortdrama/episode/.../...",
-                )
-            with _tt_search_col:
-                st.write("")
-                _tt_search_click = st.button("🔎 បើករឿង", key="tiktok_drama_search", type="primary", use_container_width=True)
-
-        _tt_match = None
-        if _tt_search_click:
-            with st.spinner("កំពុងពិនិត្យតំណ..."):
-                _tt_resolved = _tt_resolve(_tt_query)
-            _tt_match = re.search(r"tiktok\.com/shortdrama/episode/(\d+)/(\d+)", _tt_resolved or "")
-            if not _tt_match:
-                st.warning("រកមិនឃើញ series ID និងលេខភាគក្នុងតំណនេះទេ។ សូមបើកភាគក្នុង TikTok រួចចម្លង URL ពេញ (tiktok.com/shortdrama/episode/…/…)។")
-                if _tt_resolved and _tt_resolved != (_tt_query or "").strip():
-                    st.caption("តំណដែលបានបើក៖ " + _tt_resolved[:300])
-            else:
-                _tt_series_id, _tt_ep = _tt_match.group(1), int(_tt_match.group(2))
-                _tt_clean_url = _tt_ep_url(_tt_series_id, _tt_ep)
-                _tt_meta = {"title": f"TikTok Short Drama · {_tt_series_id}", "poster": "", "description": ""}
-                try:
-                    _tt_page = requests.get(
-                        _tt_clean_url,
-                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"},
-                        timeout=12,
-                    )
-                    if _tt_page.ok:
-                        _tt_html = _tt_page.text[:2_000_000]
-                        for _tt_prop, _tt_key in (("og:title", "title"), ("og:image", "poster"), ("og:description", "description")):
-                            _tt_m = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(_tt_prop) + r'["\'][^>]+content=["\']([^"\']*)', _tt_html, re.I)
-                            if not _tt_m:
-                                _tt_m = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']' + re.escape(_tt_prop) + r'["\']', _tt_html, re.I)
-                            if _tt_m:
-                                _tt_meta[_tt_key] = requests.utils.unquote(_tt_m.group(1).replace("&amp;", "&"))
-                except Exception:
-                    pass
-                _tt_free_media(st.session_state.get("_tiktok_drama_result"))
-                st.session_state["tiktok_drama_episode_number"] = _tt_ep
-                st.session_state["_tiktok_drama_result"] = {
-                    "url": _tt_clean_url, "series_id": _tt_series_id, "episode": _tt_ep,
-                    "title": _tt_meta["title"], "poster_url": _tt_meta["poster"],
-                    "description": _tt_meta["description"], "path": "", "fetch_err": "",
-                }
-                st.rerun()
-
-        _tt_ready = st.session_state.get("_tiktok_drama_result")
-        if _tt_ready:
-            with st.container(border=True):
-                st.markdown("#### 🎬 " + str(_tt_ready.get("title", "TikTok Short Drama")))
-                _tt_poster_url = _tt_ready.get("poster_url", "")
-                if _tt_poster_url.startswith(("https://", "http://")):
-                    st.image(_tt_poster_url, use_container_width=True, caption="Drama Poster")
-                else:
-                    st.markdown(
-                        f"<div style='border:1px solid #087da5;border-radius:14px;padding:18px;text-align:center;background:linear-gradient(135deg,#101b45,#062d45);'>"
-                        f"<div style='font-size:42px'>🎬</div><b>TikTok Short Drama</b><br><small>Series ID: {_tt_ready.get('series_id','')}</small></div>",
-                        unsafe_allow_html=True,
-                    )
-                if _tt_ready.get("description"):
-                    st.caption(_tt_ready["description"])
-
-                # ---------- Episode navigator ----------
-                _tt_total = st.number_input(
-                    "ចំនួនភាគសរុប (សម្រាប់កំណត់ដែនប៊ូតុង)", min_value=1, max_value=9999,
-                    value=int(st.session_state.get("tiktok_drama_total", 60)), step=1, key="tiktok_drama_total",
-                )
-                _tt_cur_ep = int(st.session_state.get("tiktok_drama_episode_number", _tt_ready.get("episode", 1)))
-                _nav_prev, _nav_num, _nav_next = st.columns([1, 1, 1], gap="small")
-                with _nav_prev:
-                    st.write("")
-                    st.button("⏮ ភាគមុន", key="tiktok_drama_prev", use_container_width=True,
-                              disabled=(_tt_cur_ep <= 1), on_click=_tt_go_ep, args=(-1,))
-                with _nav_num:
-                    st.number_input("ភាគ", min_value=1, max_value=9999, step=1,
-                                    key="tiktok_drama_episode_number", on_change=_tt_apply_ep_input)
-                with _nav_next:
-                    st.write("")
-                    st.button("ភាគបន្ទាប់ ⏭", key="tiktok_drama_next", use_container_width=True,
-                              disabled=(_tt_cur_ep >= int(_tt_total)), on_click=_tt_go_ep, args=(1,))
-                st.checkbox("ចាក់ស្វ័យប្រវត្តិពេលប្តូរភាគ (ព្យាយាមទាញវីដេអូភាគនោះ)", value=True, key="tiktok_drama_auto")
-                st.caption(f"កំពុងស្ថិតនៅ ភាគ {_tt_cur_ep} / {int(_tt_total)}")
-
-                # ---------- Fetch current episode ----------
-                _tt_do_fetch = bool(st.session_state.pop("_tt_want_fetch", False))
-                if st.button("▶️ ទាញ និងចាក់ភាគនេះ", key="tiktok_drama_play", type="primary", use_container_width=True, disabled=busy):
-                    _tt_do_fetch = True
-                if _tt_do_fetch:
-                    _tt_free_media(_tt_ready)
-                    _tt_ready["episode"] = _tt_cur_ep
-                    _tt_ready["url"] = _tt_ep_url(_tt_ready["series_id"], _tt_cur_ep)
-                    with st.spinner(f"កំពុងទាញភាគ {_tt_cur_ep}..."):
-                        _tt_res = _fetch_one(_tt_ready["url"])
-                    if _tt_res.get("ok") and _tt_res.get("path"):
-                        _tt_ready["path"] = _tt_res["path"]
-                        _tt_ready["fetch_err"] = ""
-                    else:
-                        _tt_ready["fetch_err"] = _tt_res.get("err") or "ទាញយកវីដេអូមិនបាន"
-                    st.session_state["_tiktok_drama_result"] = _tt_ready
-
-                _tt_media_path = _tt_ready.get("path", "")
-                if _tt_media_path and os.path.isfile(_tt_media_path):
-                    st.video(_tt_media_path)
-                    with open(_tt_media_path, "rb") as _tt_file:
-                        dl_button("⬇️ ទាញយកភាគនេះ", _tt_file.read(), f"tiktok_drama_{_tt_ready.get('series_id','')}_ep_{_tt_ready.get('episode',1)}.mp4",
-                                  "video/mp4", key="tiktok_drama_download", use_container_width=True)
-                else:
-                    if _tt_ready.get("fetch_err"):
-                        st.warning("ទាញវីដេអូភាគនេះមិនបាន។ ប្រហែល TikTok មិនអនុញ្ញាតទាញពី URL ប្រភេទ shortdrama នេះ។")
-                        with st.expander("មើលមូលហេតុ"):
-                            st.code(_tt_ready["fetch_err"])
-                    _tt_direct_media = st.text_input(
-                        "Media URL ផ្ទាល់ (MP4/M3U8) — ជាជម្រើស",
-                        value=_tt_ready.get("media_url", ""),
-                        placeholder="https://.../video.mp4",
-                        key="tiktok_drama_direct_media_url",
-                    )
-                    if _tt_direct_media.strip().lower().startswith(("https://", "http://")):
-                        _tt_ready["media_url"] = _tt_direct_media.strip()
-                        st.session_state["_tiktok_drama_result"] = _tt_ready
-                        st.video(_tt_direct_media.strip())
-                    else:
-                        st.markdown("**តំណភាគ:** " + _tt_ready.get("url", ""))
-
-                if st.button("✨ បញ្ជូន Link ទៅ Khmer Auto Caption", type="primary", key="tiktok_drama_to_caption", use_container_width=True):
-                    st.session_state["mode_pick"] = "🔗 Link"
-                    st.session_state["link_text_area"] = _tt_ready["url"]
-                    st.session_state["link_searched"] = [_tt_ready["url"]]
-                    st.session_state["_hg_imported_caption_notice"] = True
-                    st.rerun()
-
-                # ---------- Multi-episode ZIP ----------
-                st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ (ZIP)")
-                _rg_a, _rg_b = st.columns(2, gap="small")
-                with _rg_a:
-                    _tt_from = st.number_input("ពីភាគ", min_value=1, max_value=int(_tt_total), value=1, step=1, key="tiktok_dl_from")
-                with _rg_b:
-                    _tt_to = st.number_input("ដល់ភាគ", min_value=1, max_value=int(_tt_total), value=min(5, int(_tt_total)), step=1, key="tiktok_dl_to")
-                _tt_dl_max = st.selectbox("ចំនួនអតិបរមាក្នុងមួយលើក", [5, 10, 20, 50, 100], index=1, key="tiktok_dl_limit")
-                _tt_lo, _tt_hi = int(min(_tt_from, _tt_to)), int(max(_tt_from, _tt_to))
-                _tt_eps = list(range(_tt_lo, _tt_hi + 1))[:_tt_dl_max]
-                if st.button(f"📦 ទាញយក {len(_tt_eps)} ភាគជា ZIP", key="tiktok_dl_start",
-                             disabled=(not _tt_eps or busy), use_container_width=True):
-                    _tt_old = st.session_state.get("_tt_dl_ready")
-                    if _tt_old:
-                        shutil.rmtree(_tt_old.get("folder", ""), ignore_errors=True)
-                    _tt_folder = tempfile.mkdtemp(prefix="tiktok_batch_")
-                    _tt_zip_path = os.path.join(_tt_folder, "tiktok_drama_episodes.zip")
-                    _tt_errors, _tt_ok = [], 0
-                    _tt_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
-                    try:
-                        with zipfile.ZipFile(_tt_zip_path, "w", compression=zipfile.ZIP_STORED) as _tt_zip:
-                            for _ti, _tep in enumerate(_tt_eps, start=1):
-                                _ttmp = None
-                                try:
-                                    _tr = _fetch_one(_tt_ep_url(_tt_ready["series_id"], _tep))
-                                    if not _tr.get("ok") or not _tr.get("path"):
-                                        raise RuntimeError(_tr.get("err") or "ទាញយកវីដេអូមិនបាន")
-                                    _ttmp = _tr["path"]
-                                    _tsz = os.path.getsize(_ttmp)
-                                    _tcur = sum(x.file_size for x in _tt_zip.filelist)
-                                    if _tcur + _tsz > MAX_ZIP_MB * 1024 * 1024:
-                                        raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
-                                    _tt_zip.write(_ttmp, f"episode_{_tep:04d}.mp4")
-                                    _tt_ok += 1
-                                except Exception as _te:
-                                    _tt_errors.append(f"ភាគ {_tep}: {str(_te)[:180]}")
-                                finally:
-                                    if _ttmp:
-                                        shutil.rmtree(os.path.dirname(_ttmp), ignore_errors=True)
-                                _tt_bar.progress(_ti / max(1, len(_tt_eps)), text=f"ទាញបាន {_tt_ok}/{len(_tt_eps)} ភាគ · កំពុងដំណើរការ {_ti}/{len(_tt_eps)}")
-                        _tt_bar.empty()
-                        if _tt_ok:
-                            st.session_state["_tt_dl_ready"] = {"path": _tt_zip_path, "folder": _tt_folder, "count": _tt_ok,
-                                                                "name": safe_filename(f"tiktok_drama_{_tt_ready['series_id']}")}
-                            st.success(f"រៀបចំបាន {_tt_ok} ភាគរួចរាល់។")
-                        else:
-                            shutil.rmtree(_tt_folder, ignore_errors=True)
-                            st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
-                        if _tt_errors:
-                            with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_tt_errors)})"):
-                                for _tw in _tt_errors:
-                                    st.warning(_tw)
-                    except Exception as _tt_fatal:
-                        shutil.rmtree(_tt_folder, ignore_errors=True)
-                        st.error(f"រៀបចំ ZIP មិនបាន៖ {_tt_fatal}")
-                _tt_dl_ready = st.session_state.get("_tt_dl_ready")
-                if _tt_dl_ready and os.path.isfile(_tt_dl_ready.get("path", "")):
-                    with open(_tt_dl_ready["path"], "rb") as _tt_zf:
-                        dl_button(f"⬇️ ទាញយក ZIP ({_tt_dl_ready['count']} ភាគ)", _tt_zf, f"{_tt_dl_ready['name']}.zip",
-                                  "application/zip", key="tiktok_dl_file", use_container_width=True)
-
-                if st.button("🗑️ បិទរឿងនេះ", key="tiktok_drama_clear", use_container_width=True):
-                    _tt_free_media(_tt_ready)
-                    st.session_state.pop("_tiktok_drama_result", None)
-                    st.rerun()
-
-        st.caption("ចំណាំ៖ TikTok មិនមាន API បញ្ជីភាគទេ ដូច្នេះភាគត្រូវបានបង្កើតពី series ID + លេខភាគ។ ការទាញវីដេអូអាចមិនដំណើរការលើ URL shortdrama ទាំងអស់ — សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
@@ -8346,12 +7027,10 @@ with tab_vid:
             else:
                 st.caption("ក្នុង TikTok ចុច Share → Copy link រួចបិទភ្ជាប់តំណក្នុងប្រអប់ខាងក្រោម។")
                 link_text = st.text_area(
-                    "តំណវីដេអូ (TikTok ឬភាគ Hongguo ដែលបានជ្រើស)",
+                    "តំណវីដេអូ TikTok (ដាក់បានច្រើនតំណ — មួយបន្ទាត់ ១ តំណ)",
                     key="link_text_area",
                     placeholder="បិទភ្ជាប់តំណវីដេអូនៅទីនេះ\nដាក់បានច្រើនតំណម្តងតែមួយ (មួយបន្ទាត់ ១ តំណ)",
                     height=68)
-                if st.session_state.pop("_hg_imported_caption_notice", False):
-                    st.success("បានទទួលភាគ Hongguo ហើយ។ កម្មវិធីនឹងស្វែងរក និងចាប់ផ្ដើមបកប្រែដោយស្វ័យប្រវត្តិ បើតំណវីដេអូអាចទាញយកបាន។")
                 _all_links = extract_links(link_text)
                 _link_lines = _all_links[:link_limit]
                 if _all_links:
@@ -8481,10 +7160,6 @@ with tab_vid:
             bg_level = st.slider("កម្រិតសំឡេងដើម (%)", 2, 60, 8, key="bg_level_pick") if keep_bg else 8
             auto_gender = True
             st.caption("AI បង្កើតសំឡេងខ្មែរដោយស្វ័យប្រវត្តិ")
-            dub_offset = st.slider("⏱ កែពេលសំឡេងខ្មែរ (វិនាទី)", -1.0, 1.0, 0.0, 0.05, key="dub_offset_pick",
-                                   help="សំឡេងមកយឺតជាងមាត់ → ទាញទៅ − (មុន) | សំឡេងមកមុនមាត់ → ទាញទៅ + (ក្រោយ)")
-            tight_sync = st.toggle("✂️ កាត់សំឡេងឱ្យចប់ត្រឹមមាត់", value=True, key="tight_sync_pick",
-                                   help="កាត់ស្ងាត់ដើមឃ្លា និងកាត់ចុងឃ្លាខ្មែរបើវែងលើសពេលមាត់និយាយ")
         with st.expander("🔤 កំណត់ Subtitle និងរូបរាងអក្សរ", expanded=False):
             review_on = st.toggle("✏️ ពិនិត្យអក្សរមុនបង្កើត", value=False, key="review_toggle")
             _f1, _f2 = st.columns(2)
@@ -9045,7 +7720,7 @@ if run:
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
-        "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": float(dub_offset), "tight_sync": bool(tight_sync), "auto_gender": auto_gender,
+        "keep_bg": keep_bg, "bg_vol": (bg_level / 100.0 if keep_bg else 0.0), "dub_offset": 0.0, "tight_sync": False, "auto_gender": auto_gender,
         "voice_match": False, "emotion": emotion_on,
         "timbre": bool(clone_samples), "timbre_samples": clone_samples,
         "font_size": font_size, "outline_size": outline_size,
@@ -9727,36 +8402,3 @@ TITLE_CODE_FIX_CSS = r"""
 </style>
 """
 st.markdown(TITLE_CODE_FIX_CSS, unsafe_allow_html=True)
-
-
-# =====================================================================
-# FIX (Nov 2026): 1) hide "trouble loading App.kvai_local_storage" warning
-#                 2) make the Hongguo search row fit the phone screen
-# The local-storage components only remember keys/login in the browser.
-# If the network is slow they may time out; the app still works, so the
-# warning box is hidden instead of shown to the user.
-# =====================================================================
-KVAI_FIX_CSS = r"""
-<style>
-.st-key-kv_ls, .st-key-kv_login_ls,
-[data-testid="stElementContainer"]:has(iframe[title*="kvai_local_storage"]),
-[data-testid="stElementContainer"]:has(iframe[title*="kvai_login_storage"]) {
-  position:absolute !important; width:1px !important; height:1px !important;
-  overflow:hidden !important; opacity:0 !important; pointer-events:none !important;
-  margin:0 !important; padding:0 !important; border:0 !important;
-}
-@media (max-width: 759px) {
-  /* Swipe layout only for the 3 main panels (Upload / Preview / AI).
-     Every other row (e.g. Hongguo search box + buttons) fills the screen width. */
-  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title):not(:has(> [data-testid="stColumn"]:nth-child(3))) {
-    overflow-x:visible !important;
-  }
-  [data-testid="stHorizontalBlock"]:has(.kvai-panel-title):not(:has(> [data-testid="stColumn"]:nth-child(3))) > [data-testid="stColumn"] {
-    flex:1 1 0 !important; min-width:0 !important; width:0 !important; max-width:none !important;
-  }
-  .block-container, [data-testid="stMainBlockContainer"] { max-width:100vw !important; overflow-x:hidden !important; }
-  [data-testid="stTextInput"], [data-testid="stSelectbox"], [data-testid="stButton"] { max-width:100% !important; }
-}
-</style>
-"""
-st.markdown(KVAI_FIX_CSS, unsafe_allow_html=True)
