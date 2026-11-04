@@ -8087,8 +8087,9 @@ def _hg_category_list(category, page=1):
     if not category:
         return []
     if category.startswith("kw:"):
-        _kw_rows = _hg_search(category[3:])[(page - 1) * 20:page * 20]
-        return _hg_enrich_rows(_kw_rows)
+        # Search results already contain the catalog metadata; do not call detail
+        # Actor for every card (that caused slow page loads).
+        return _hg_search(category[3:], page)
     items = _hg_apify_actor(
         _HG_ACTOR_FEED,
         {"listings": [category], "maxResults": min(100, page * 20),
@@ -8100,11 +8101,53 @@ def _hg_category_list(category, page=1):
     return rows[(page - 1) * 20:page * 20]
 
 
-@st.cache_data(ttl=240, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False)
 def _hg_search(keyword, page=1):
-    items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
+    """Cached, page-aware search. Keep detail lookups out of the listing path."""
+    page = max(1, int(page))
+    # Request enough result pages for the requested 20-card page. Actor-side
+    # pagination support varies, so normalize/slice the returned dataset safely.
+    items = _hg_apify_actor(
+        _HG_ACTOR_SEARCH,
+        {"queries": [str(keyword)], "maxPages": min(5, page)},
+        timeout=60,
+    )
     rows = [_hg_normalize_row(x) for x in items]
-    return [x for x in rows if x.get("series_id")]
+    rows = [x for x in rows if x.get("series_id")]
+    return rows[(page - 1) * 20:page * 20]
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _hg_poster_bytes(url):
+    """Fetch poster bytes server-side so remote hotlink/CORS failures don't show broken icons."""
+    url = str(url or "").strip()
+    if not url.startswith(("http://", "https://")):
+        return b""
+    try:
+        r = requests.get(
+            url, timeout=(4, 10), stream=True,
+            headers={"User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/125 Safari/537.36",
+                     "Referer": "https://hongguoduanju.com/"},
+        )
+        r.raise_for_status()
+        content_type = (r.headers.get("Content-Type") or "").lower()
+        if "image" not in content_type and not url.lower().split("?")[0].endswith((".jpg", ".jpeg", ".png", ".webp", ".avif")):
+            return b""
+        data = r.content[:8 * 1024 * 1024]
+        return data if data else b""
+    except Exception:
+        return b""
+
+
+def _hg_show_poster(url, **kwargs):
+    """Render fetched poster bytes, falling back to the URL if fetch is blocked."""
+    data = _hg_poster_bytes(url)
+    if data:
+        st.image(data, **kwargs)
+    elif url:
+        st.image(url, **kwargs)
+    else:
+        st.caption("🖼️ មិនមាន Poster")
 
 
 def _hg_get(endpoint, params=None, timeout=45):
@@ -8423,7 +8466,7 @@ with tab_drama:
             st.subheader(_hg_selected.get("name") or "រឿង")
             _hg_cover = _hg_selected.get("cover")
             if _hg_cover:
-                st.image(_hg_cover, use_container_width=True)
+                _hg_show_poster(_hg_cover, use_container_width=True)
             try:
                 with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
                     _hg_d = _hg_detail(_hg_selected["series_id"])
@@ -8603,7 +8646,7 @@ with tab_drama:
                 for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
                     with _hg_col:
                         if _hg_row.get("cover"):
-                            st.image(_hg_row["cover"], use_container_width=True)
+                            _hg_show_poster(_hg_row["cover"], use_container_width=True)
                         st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
                         st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
                         if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
