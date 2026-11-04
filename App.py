@@ -7585,7 +7585,13 @@ def _hg_apify_actor(actor_id, actor_input, timeout=180):
     except requests.RequestException as exc:
         raise RuntimeError(f"Apify network error: {exc}") from exc
     if not response.ok:
-        raise RuntimeError(f"Apify HTTP {response.status_code}: {response.text[:350]}")
+        detail = response.text[:700]
+        if response.status_code == 400:
+            detail += (
+                "\\nចំណាំ៖ HTTP 400 មានន័យថា Actor បានបដិសេធ Input ឬ Run បរាជ័យ។ "
+                "សូមពិនិត្យ Run log របស់ Actor ក្នុង Apify Console ដើម្បីឃើញមូលហេតុពិត។"
+            )
+        raise RuntimeError(f"Apify HTTP {response.status_code}: {detail}")
     try:
         result = response.json()
     except ValueError as exc:
@@ -7617,6 +7623,8 @@ def _hg_normalize_row(item):
         or nested.get("coverImage") or nested.get("cover_image")
         or nested.get("imageUrl") or nested.get("image_url")
         or nested.get("image") or nested.get("thumbnail") or nested.get("thumb")
+        or nested.get("pic") or nested.get("img") or nested.get("verticalCover")
+        or nested.get("vertical_cover") or nested.get("poster")
     )
     if isinstance(cover, dict):
         cover = cover.get("url") or cover.get("src") or cover.get("imageUrl") or ""
@@ -7808,7 +7816,12 @@ def _hg_detail(series_id):
         "name": d.get("title") or d.get("name") or d.get("seriesName")
                 or d.get("seriesTitle") or "រឿង Hongguo",
         "cover": d.get("coverUrl") or d.get("cover_url") or d.get("cover")
-                 or d.get("posterUrl") or d.get("poster_url") or "",
+                 or d.get("posterUrl") or d.get("poster_url") or d.get("poster")
+                 or d.get("coverImage") or d.get("cover_image")
+                 or d.get("imageUrl") or d.get("image_url")
+                 or d.get("image") or d.get("thumbnail") or d.get("thumb")
+                 or d.get("pic") or d.get("img") or d.get("verticalCover")
+                 or d.get("vertical_cover") or "",
         "intro": d.get("intro") or d.get("description") or d.get("summary")
                  or d.get("synopsis") or "",
         "episode_cnt": count,
