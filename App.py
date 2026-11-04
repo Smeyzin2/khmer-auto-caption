@@ -1183,8 +1183,8 @@ FONT_SOURCES = [
 
 QUALITY = {
     "⚡ លឿន 480p": (480, 30, "ultrafast"),
-    "✨ ល្អ 720p": (720, 28, "superfast"),
-    "💎 ខ្ពស់ (ដើម)": (0, 25, "veryfast"),
+    "✨ ល្អ 720p": (720, 28, "ultrafast"),
+    "💎 ខ្ពស់ (ដើម)": (0, 25, "ultrafast"),
 }
 
 # កំណត់ bitrate អតិបរមា ដើម្បីកុំឱ្យឯកសារធំពេក (ទាញយកលើទូរស័ព្ទបានលឿន)
@@ -5580,7 +5580,7 @@ def render_with_fonts(folder, fonts, captions, font_size, outline_size,
         args += ["-i", "dub.wav"]
     extra_in, vf_args = video_filter_args(max_side, True, dub, fx_spec, vid_w, vid_h)
     args += extra_in + vf_args
-    args += ["-c:v", "libx264", "-preset", preset, "-crf", str(crf),
+    args += ["-c:v", "libx264", "-preset", preset, "-threads", "0", "-crf", str(crf),
              "-maxrate", RATE_CAP.get(max_side, RATE_CAP[0])[0], "-bufsize", RATE_CAP.get(max_side, RATE_CAP[0])[1],
              "-c:a", "aac", "-b:a", "96k", "-af", "aresample=async=1:first_pts=0", "-shortest", "-movflags", "+faststart", "output.mp4"]
     try:
@@ -6164,8 +6164,24 @@ def drop_link_cache(keep=()):
                 shutil.rmtree(os.path.dirname(ent["path"]), ignore_errors=True)
 
 
+def _request_origin():
+    """ទាញយក origin (https://host) និង User-Agent របស់អ្នកប្រើ ដើម្បីបង្កើតតំណពេញលេញ។"""
+    try:
+        h = st.context.headers
+        host = h.get("X-Forwarded-Host") or h.get("Host") or ""
+        proto = (h.get("X-Forwarded-Proto") or "https").split(",")[0].strip()
+        ua = h.get("User-Agent") or ""
+        if host:
+            return f"{proto}://{host.split(',')[0].strip()}", ua
+        origin = h.get("Origin") or ""
+        return origin, ua
+    except Exception:
+        return "", ""
+
+
 def browser_dl_link(label, path, file_name, mime, key):
-    """ប៊ូតុងទាញយកដែលបើកក្នុង Browser (តំណ /media របស់ Streamlit)។ ត្រឡប់ False បើមិនអាចបង្កើតតំណបាន។"""
+    """ប៊ូតុងទាញយកដែលលោតចេញទៅបើកក្នុង Browser ពិតប្រាកដ (មិនទាញក្នុង webview/app)។
+    Android: ប្រើ intent:// បើក Chrome ផ្ទាល់ · iPhone: តំណពេញលេញ + Chrome/Safari។"""
     try:
         from streamlit.runtime import get_instance
         mgr = get_instance().media_file_mgr
@@ -6176,15 +6192,33 @@ def browser_dl_link(label, path, file_name, mime, key):
             url = mgr.add(path, mime, coord, file_name=file_name)
         if not url:
             return False
-        import html as _html
+        import html as _html, urllib.parse as _up
+        origin, ua = _request_origin()
+        url = str(url)
+        full = url if url.startswith("http") else (origin + url if origin else url)
+        low = ua.lower()
+        href = full
+        if full.startswith("http") and "android" in low:
+            rest = full.split("://", 1)[1]
+            fb = _up.quote(full, safe="")
+            href = f"intent://{rest}#Intent;scheme=https;package=com.android.chrome;S.browser_fallback_url={fb};end"
+        elif full.startswith("http") and ("iphone" in low or "ipad" in low):
+            href = "googlechromes://" + full.split("://", 1)[1]
         st.markdown(
-            f'<a href="{_html.escape(str(url), quote=True)}" target="_blank" rel="noopener" '
+            f'<a href="{_html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer" '
             'style="display:block;text-align:center;padding:0.65rem 1rem;border-radius:0.6rem;'
             'font-weight:600;text-decoration:none;color:#fff;margin:0.25rem 0;'
             'background:linear-gradient(90deg,#ff1493,#8a2be2,#00bfff);">'
             f'{_html.escape(label)}</a>',
             unsafe_allow_html=True,
         )
+        if href != full:
+            st.markdown(
+                f'<div style="text-align:center;font-size:0.8rem;opacity:.8;margin-bottom:.3rem;">'
+                f'បើមិនបើក៖ <a href="{_html.escape(full, quote=True)}" target="_blank" rel="noopener noreferrer">'
+                'ចុចទីនេះ (តំណផ្ទាល់)</a></div>',
+                unsafe_allow_html=True,
+            )
         return True
     except Exception:
         return False
