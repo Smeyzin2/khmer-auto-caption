@@ -36,6 +36,37 @@ st.set_page_config(
     layout="wide",
 )
 
+# ---- ជៀសវាង heading ក្នុង Markdown (កំណែ Streamlit ថ្មីលើ Posit បាន SyntaxError លើ heading) ----
+import re as _re_hd
+_orig_st_markdown = st.markdown
+_HD_SIZES = {1: 1.7, 2: 1.45, 3: 1.25, 4: 1.1, 5: 1.0, 6: 0.95}
+
+
+def _no_heading_markdown(body, *args, **kwargs):
+    try:
+        if isinstance(body, str) and "<style" not in body and _re_hd.search(r"(?m)^\s{0,3}#{1,6}\s+\S", body):
+            def _sub(m):
+                lvl = len(m.group(1))
+                txt = m.group(2).strip()
+                return (f'<span style="font-size:{_HD_SIZES[lvl]}em;font-weight:700;line-height:1.6;display:inline-block;margin:.35em 0">'
+                        f'{txt}</span>\n')
+            body = _re_hd.sub(r"(?m)^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", _sub, body)
+            kwargs["unsafe_allow_html"] = True
+    except Exception:
+        pass
+    return _orig_st_markdown(body, *args, **kwargs)
+
+
+st.markdown = _no_heading_markdown
+
+
+def _no_heading_subheader(body, *args, **kwargs):
+    _no_heading_markdown(f"### {body}")
+
+
+st.subheader = _no_heading_subheader
+
+
 # =====================================================================
 #  MODE កំពុង UPDATE
 #  ► ពេលកំពុង update: ទុក MAINTENANCE_MODE = True  (អ្នកប្រើនឹងឃើញតែសារ «កំពុង Update»)
@@ -188,12 +219,12 @@ label, [data-testid="stWidgetLabel"] p, [data-testid="stCheckbox"] p,
   box-shadow: 0 8px 22px rgba(60,107,255,.45);
 }
 .kvai-title { flex: 1; min-width: 190px; }
-.kvai-title h1 {
+.kvai-title .kvai-h1 {
   margin: 0 !important; padding: 0 !important;
   font-size: clamp(1.5rem, 6vw, 2rem) !important;
   font-weight: 800 !important; line-height: 1.2 !important; color: var(--ink) !important;
 }
-.kvai-title h1 span {
+.kvai-title .kvai-h1 span {
   background: linear-gradient(90deg, #B13CFF, #3C6BFF);
   -webkit-background-clip: text; background-clip: text;
   color: transparent !important; -webkit-text-fill-color: transparent;
@@ -452,7 +483,7 @@ COMPACT_CSS = """
 .kvai-head { margin: 0 0 8px; gap: 10px; flex-wrap: nowrap; }
 .kvai-logo { width: 42px; height: 42px; font-size: 22px; border-radius: 13px; }
 .kvai-title { min-width: 0; }
-.kvai-title h1 { font-size: 1.35rem !important; }
+.kvai-title .kvai-h1 { font-size: 1.35rem !important; }
 .kvai-title p { font-size: .75rem; margin: 0; }
 .kvai-badge { padding: 5px 10px; font-size: .75rem; white-space: nowrap; }
 
@@ -503,8 +534,8 @@ html,body,.stApp,[data-testid="stAppViewContainer"]{background:radial-gradient(e
 [data-testid="stCaptionContainer"],[data-testid="stCaptionContainer"] p{color:#B9C7F5!important}
 .kvai-head{padding:8px 13px;border:1px solid rgba(65,195,255,.45);border-radius:18px;background:linear-gradient(105deg,rgba(255,45,170,.2),rgba(14,26,72,.94),rgba(22,207,255,.17));box-shadow:0 0 22px rgba(22,207,255,.15)}
 .kvai-logo{background:linear-gradient(135deg,#FF2DAA,#7B42FF,#16CFFF)!important;box-shadow:0 0 22px rgba(255,45,170,.5)!important}
-.kvai-title h1{color:white!important;text-shadow:0 0 16px rgba(22,207,255,.5)}
-.kvai-title h1 span{background:linear-gradient(90deg,#FF55C8,#43E7FF,#FFE36A);-webkit-background-clip:text;background-clip:text;color:transparent!important}
+.kvai-title .kvai-h1{color:white!important;text-shadow:0 0 16px rgba(22,207,255,.5)}
+.kvai-title .kvai-h1 span{background:linear-gradient(90deg,#FF55C8,#43E7FF,#FFE36A);-webkit-background-clip:text;background-clip:text;color:transparent!important}
 .kvai-badge{color:#FFE36A!important;background:rgba(255,211,78,.12)!important;border-color:#FFD34E!important}
 [data-baseweb="tab-list"]{display:flex!important;gap:5px!important;padding:5px!important;background:#080F30!important;border:1px solid rgba(70,190,255,.45)!important}
 button[data-baseweb="tab"]{flex:1 1 0!important;min-width:max-content!important;height:43px!important;border:1px solid rgba(120,150,255,.22)!important;border-radius:12px!important;background:linear-gradient(145deg,#18234F,#101735)!important;color:#DCE7FF!important}
@@ -529,7 +560,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] div[data-testid="stVerticalBlock
 [data-testid="stAlert"],[data-testid="stExpander"]{background:#111A40!important;border:1px solid #3B8FC8!important}
 [data-testid="stVideo"] video{max-height:190px}
 .kvai-prev{border-color:#27D9FF!important;box-shadow:0 0 20px rgba(22,207,255,.18)}
-@media(orientation:landscape) and (max-height:600px){.block-container{padding:.25rem .55rem 4rem!important}.kvai-head{padding:5px 10px;margin-bottom:4px}.kvai-logo{width:34px;height:34px;font-size:19px}.kvai-title h1{font-size:1.12rem!important}.kvai-title p,.kvai-badge{font-size:.68rem}button[data-baseweb="tab"]{height:35px!important}[data-testid="stVerticalBlock"]{gap:.35rem!important}div[data-testid="stVerticalBlockBorderWrapper"]{padding:2px!important}[data-testid="stVideo"] video{max-height:115px}.kvai-prev{height:105px!important}.stButton>button,.stDownloadButton>button{min-height:35px!important}}
+@media(orientation:landscape) and (max-height:600px){.block-container{padding:.25rem .55rem 4rem!important}.kvai-head{padding:5px 10px;margin-bottom:4px}.kvai-logo{width:34px;height:34px;font-size:19px}.kvai-title .kvai-h1{font-size:1.12rem!important}.kvai-title p,.kvai-badge{font-size:.68rem}button[data-baseweb="tab"]{height:35px!important}[data-testid="stVerticalBlock"]{gap:.35rem!important}div[data-testid="stVerticalBlockBorderWrapper"]{padding:2px!important}[data-testid="stVideo"] video{max-height:115px}.kvai-prev{height:105px!important}.stButton>button,.stDownloadButton>button{min-height:35px!important}}
 @media(max-width:700px){[data-baseweb="tab-list"]{overflow-x:auto!important}button[data-baseweb="tab"]{flex:0 0 auto!important;padding:0 9px!important}}
 </style>
 """
@@ -550,8 +581,8 @@ html,body,.stApp,[data-testid="stAppViewContainer"],[data-testid="stMain"]{backg
 .kvai-head:after{content:"";position:absolute;z-index:-1;inset:0;background:repeating-linear-gradient(115deg,transparent 0 65px,rgba(0,220,255,.16) 66px 68px,transparent 69px 135px);background-size:220% 100%;animation:kvai-light-run 9s linear infinite;pointer-events:none}
 @keyframes kvai-light-run{from{background-position:220% 0}to{background-position:-20% 0}}
 .kvai-logo{background:linear-gradient(135deg,#FF1493,#843BFF,#00D9FF)!important;box-shadow:0 0 24px rgba(255,20,147,.7)!important}
-.kvai-title h1{color:#fff!important;text-shadow:0 0 16px rgba(0,220,255,.75)!important}
-.kvai-title h1 span{background:linear-gradient(90deg,#FF65C5,#00E5FF,#FFE36A)!important;-webkit-background-clip:text!important;background-clip:text!important}
+.kvai-title .kvai-h1{color:#fff!important;text-shadow:0 0 16px rgba(0,220,255,.75)!important}
+.kvai-title .kvai-h1 span{background:linear-gradient(90deg,#FF65C5,#00E5FF,#FFE36A)!important;-webkit-background-clip:text!important;background-clip:text!important}
 .kvai-badge{background:rgba(5,13,39,.7)!important;border:1.5px solid #FFD84D!important;color:#FFE36A!important}
 [data-baseweb="tab-list"]{display:flex!important;gap:5px!important;padding:4px!important;background:rgba(5,12,40,.96)!important;border:1px solid rgba(0,210,255,.55)!important;box-shadow:0 0 16px rgba(0,210,255,.16)}
 button[data-baseweb="tab"]{flex:1 1 0!important;min-width:max-content!important;height:42px!important;border:1px solid rgba(87,165,255,.4)!important;border-radius:12px!important;background:linear-gradient(145deg,#17234F,#0A1435)!important;color:#EAF3FF!important}
@@ -587,7 +618,7 @@ div[data-testid="stVerticalBlockBorderWrapper"]{background:linear-gradient(145de
  .block-container{height:100dvh!important;overflow:hidden!important;padding:.18rem .48rem 3.0rem!important}
  .kvai-head{min-height:82px!important;padding:7px 15px!important;margin:0 0 5px!important}
  .kvai-logo{width:42px!important;height:42px!important;font-size:22px!important}
- .kvai-title h1{font-size:1.32rem!important}.kvai-title p{font-size:.72rem!important}
+ .kvai-title .kvai-h1{font-size:1.32rem!important}.kvai-title p{font-size:.72rem!important}
  .kvai-badge{padding:4px 9px!important;font-size:.72rem!important}
  [data-baseweb="tab-list"]{padding:3px!important}
  button[data-baseweb="tab"]{height:36px!important}
@@ -616,7 +647,7 @@ def render_header():
         <div class="kvai-head">
           <div class="kvai-logo">🎬</div>
           <div class="kvai-title">
-            <h1>Khmer <span>Video AI</span></h1>
+            <div class="kvai-h1">Khmer <span>Video AI</span></div>
             <p>បកប្រែវីដេអូ · បង្កើត Subtitle និងសំឡេងខ្មែរ ដោយ AI</p>
           </div>
           <div class="kvai-badge">👑 គម្រោង VIP</div>
@@ -719,7 +750,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 .kvai-head {{min-height:82px !important;height:82px !important;max-height:82px !important;
   margin:1px 0 4px !important;padding:6px 13px !important;overflow:hidden !important;}}
 .kvai-logo {{width:48px !important;height:48px !important;flex:0 0 48px !important;}}
-.kvai-title h1 {{font-size:clamp(1.05rem,2.4vw,1.65rem) !important;}}
+.kvai-title .kvai-h1 {{font-size:clamp(1.05rem,2.4vw,1.65rem) !important;}}
 .kvai-title p {{font-size:clamp(.65rem,1.1vw,.85rem) !important;margin-top:1px !important;}}
 [data-testid="stVerticalBlock"] {{gap:.35rem !important}}
 [data-testid="stElementContainer"] {{margin-bottom:0 !important}}
@@ -828,7 +859,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
   .kvai-head { height: 68px !important; min-height: 68px !important; max-height: 68px !important;
     margin: 0 0 3px !important; padding: 5px 10px !important; }
   .kvai-logo { width: 40px !important; height: 40px !important; flex-basis: 40px !important; }
-  .kvai-title h1 { font-size: 1.15rem !important; }
+  .kvai-title .kvai-h1 { font-size: 1.15rem !important; }
   .kvai-title p { font-size: .68rem !important; }
   [data-baseweb="tab-list"] { margin: 2px 0 !important; padding: 3px !important; }
   button[data-baseweb="tab"] { height: 35px !important; }
@@ -865,7 +896,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 .kvai-head {height:70px !important;min-height:70px !important;max-height:70px !important;
   margin:0 0 3px !important;padding:5px 12px !important}
 .kvai-logo {width:43px !important;height:43px !important;flex:0 0 43px !important}
-.kvai-title h1 {font-size:clamp(1.05rem,2vw,1.55rem) !important}
+.kvai-title .kvai-h1 {font-size:clamp(1.05rem,2vw,1.55rem) !important}
 .kvai-title p {font-size:.72rem !important;margin:0 !important}
 .kvai-badge {padding:4px 10px !important;font-size:.72rem !important}
 /* Compact orientation button: no large blank band under the header. */
@@ -913,7 +944,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] {padding:3px 4px !important;bord
   .block-container {padding:2px 7px 47px !important}
   .kvai-head {height:58px !important;min-height:58px !important;max-height:58px !important;padding:4px 9px !important}
   .kvai-logo {width:36px !important;height:36px !important;flex-basis:36px !important}
-  .kvai-title h1 {font-size:1.08rem !important}
+  .kvai-title .kvai-h1 {font-size:1.08rem !important}
   .kvai-title p {display:none !important}
   .kvai-badge {font-size:.64rem !important;padding:3px 7px !important}
   button[data-baseweb="tab"] {height:31px !important;padding:0 6px !important}
@@ -959,7 +990,7 @@ MOBILE_LANDSCAPE_FIT_CSS = """
     border-radius: 12px !important;
   }
   .kvai-logo { width: 34px !important; height: 34px !important; flex: 0 0 34px !important; font-size: 18px !important; }
-  .kvai-title h1 { font-size: clamp(.9rem, 2.1vw, 1.25rem) !important; line-height: 1.05 !important; }
+  .kvai-title .kvai-h1 { font-size: clamp(.9rem, 2.1vw, 1.25rem) !important; line-height: 1.05 !important; }
   .kvai-title p { font-size: .58rem !important; line-height: 1 !important; margin: 1px 0 0 !important; }
   .kvai-badge { padding: 3px 7px !important; font-size: .6rem !important; }
   iframe[title="streamlit.components.v1.html"] { height: 24px !important; max-height: 24px !important; }
@@ -3504,12 +3535,12 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
 
 
 try:
-    TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "12") or 12)))
+    TRANS_BATCH = max(4, min(16, int(get_secret("TRANS_BATCH", "16") or 16)))
 except Exception:
     TRANS_BATCH = 8
 LLM_GROUP = 12   # ចំនួនឃ្លាក្នុងមួយការហៅ AI ពេលកែ/ជ្រើស/តម្រឹម (ធំជាង = ហៅតិចជាង = លឿនជាង)
 # REVIEW_MODE: off = បកម្តងគត់ (ថោកបំផុត) | refine = បក+កែ ១ជុំ | full = បក+កែ+ជ្រើស (ថ្លៃបំផុត)
-REVIEW_MODE = str(get_secret("REVIEW_MODE", "refine")).strip().lower()
+REVIEW_MODE = str(get_secret("REVIEW_MODE", "off")).strip().lower()   # លំនាំដើមបិទ = លឿនបំផុត (ដាក់ "refine" ដើម្បីបកឱ្យល្អជាង តែយឺតជាង)
 # CLAUDE_FIRST=1 (លំនាំដើម): Claude ជាម៉ាស៊ីនបកប្រែសំខាន់ | 0 = ប្រើ Provider ផ្សេងមុន
 CLAUDE_FIRST = str(get_secret("CLAUDE_FIRST", "1")).strip().lower() in ("1", "true", "yes", "on")
 # FIT_MODE=1 (លំនាំដើម): បង្រួមឃ្លាវែងដោយ AI ដើម្បីសមពេលនិយាយ
@@ -9470,7 +9501,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
 .kvai-head {height:76px !important;min-height:76px !important;max-height:76px !important;
   margin:0 0 3px !important;padding:5px 12px !important}
 .kvai-logo {width:44px !important;height:44px !important;flex-basis:44px !important}
-.kvai-title h1 {font-size:clamp(1.05rem,2vw,1.5rem) !important}
+.kvai-title .kvai-h1 {font-size:clamp(1.05rem,2vw,1.5rem) !important}
 .kvai-title p {font-size:.72rem !important;margin:0 !important}
 .kvai-badge {font-size:.72rem !important;padding:4px 9px !important}
 iframe[title="streamlit.components.v1.html"] {
@@ -9570,7 +9601,7 @@ DESKTOP_MODE_VIEWPORT_CSS = r"""
   .kvai-head {height:52px !important;min-height:52px !important;max-height:52px !important;
     margin:0 0 2px !important;padding:3px 8px !important;gap:6px !important}
   .kvai-logo {width:34px !important;height:34px !important;flex:0 0 34px !important;font-size:18px !important}
-  .kvai-title h1 {font-size:1.08rem !important;line-height:1 !important}
+  .kvai-title .kvai-h1 {font-size:1.08rem !important;line-height:1 !important}
   .kvai-title p {display:none !important}
   .kvai-badge {font-size:.62rem !important;padding:3px 7px !important}
   iframe[title="streamlit.components.v1.html"] {height:20px !important;max-height:20px !important}
@@ -9659,7 +9690,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
   margin:0 0 8px !important;padding:8px 10px !important;gap:9px !important;flex-wrap:nowrap !important}
 .kvai-logo {width:42px !important;height:42px !important;flex:0 0 42px !important;font-size:22px !important}
 .kvai-title {min-width:0 !important}
-.kvai-title h1 {font-size:clamp(1.05rem,5vw,1.45rem) !important;line-height:1.15 !important}
+.kvai-title .kvai-h1 {font-size:clamp(1.05rem,5vw,1.45rem) !important;line-height:1.15 !important}
 .kvai-title p {display:block !important;font-size:.68rem !important;line-height:1.25 !important}
 .kvai-badge {font-size:.66rem !important;padding:4px 7px !important;white-space:nowrap !important}
 [data-baseweb="tab-list"] {display:flex !important;flex-wrap:nowrap !important;overflow-x:auto !important;
@@ -9746,7 +9777,7 @@ html, body, .stApp, [data-testid="stAppViewContainer"],
   font-size:24px !important;
 }
 .kvai-title { flex:1 1 auto !important; min-width:0 !important; }
-.kvai-title h1 {
+.kvai-title .kvai-h1 {
   font-size:clamp(1.05rem,4.3vw,1.42rem) !important;
   line-height:1.1 !important; white-space:nowrap !important;
 }
@@ -9852,7 +9883,7 @@ div[data-testid="stVerticalBlockBorderWrapper"] {
   .kvai-head { min-height:72px !important; height:72px !important; max-height:72px !important;
     gap:6px !important; padding:5px 6px !important; }
   .kvai-logo { flex-basis:38px !important; width:38px !important; height:38px !important; font-size:20px !important; }
-  .kvai-title h1 { font-size:1rem !important; }
+  .kvai-title .kvai-h1 { font-size:1rem !important; }
   .kvai-title p { font-size:.55rem !important; }
   .kvai-badge { font-size:.55rem !important; padding:3px 5px !important; }
   [data-testid="stHorizontalBlock"] { gap:.22rem !important; }
