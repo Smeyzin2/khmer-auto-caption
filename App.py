@@ -7568,7 +7568,12 @@ _HG_APIFY_TOKEN = _hg_secret("APIFY_API_TOKEN", "APIFY_TOKEN")
 _HG_APIFY_BASE = "https://api.apify.com/v2/acts"
 _HG_ACTOR_SEARCH = "spider_studio~hongguo-search"
 _HG_ACTOR_DETAIL = "spider_studio~hongguo-series-detail"
-_HG_ACTOR_PLAY = "dramadatalab~hongguo-direct-video"
+# The original direct-video Actor is deprecated and its upstream currently returns HTTP 521.
+# Allow an owner to configure a maintained replacement in Streamlit Secrets without editing UI code.
+_HG_ACTOR_PLAY = _hg_secret(
+    "HONGGUO_PLAY_ACTOR",
+    "dramadatalab~hongguo-direct-video",
+)
 _HG_ACTOR_FEED = "bovi~hongguo-scraper"
 
 
@@ -7590,6 +7595,13 @@ def _hg_apify_actor(actor_id, actor_input, timeout=180):
             detail += (
                 "\\nចំណាំ៖ HTTP 400 មានន័យថា Actor បានបដិសេធ Input ឬ Run បរាជ័យ។ "
                 "សូមពិនិត្យ Run log របស់ Actor ក្នុង Apify Console ដើម្បីឃើញមូលហេតុពិត។"
+            )
+        elif response.status_code == 521 and actor_id == _HG_ACTOR_PLAY:
+            detail += (
+                "\\nមូលហេតុទំនងជា Hongguo Direct Video Actor ខូច ឬសេវា upstream "
+                "មិនអាចភ្ជាប់បាន (Actor នេះត្រូវបានសម្គាល់ Deprecated)។ "
+                "កំណត់ HONGGUO_PLAY_ACTOR ក្នុង Streamlit Secrets ទៅជា Actor "
+                "ជំនួសដែលគាំទ្រ input videoId និង quality ហើយផ្ដល់ video URL ក្នុង output។"
             )
         raise RuntimeError(f"Apify HTTP {response.status_code}: {detail}")
     try:
