@@ -1143,7 +1143,7 @@ CHUNK_MAX = 28.0
 MAX_CHUNK_WORKERS = 6
 
 GROQ_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_MODELS = ["whisper-large-v3", "whisper-large-v3-turbo"]
+GROQ_MODELS = ["whisper-large-v3-turbo", "whisper-large-v3"]   # turbo មុន = លឿនជាង ~6 ដង
 
 GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODELS_URL = "https://api.groq.com/openai/v1/models"
@@ -2723,19 +2723,19 @@ def claude_enabled():
 
 _CLAUDE_FALLBACK_MODELS = ["claude-sonnet-5-5", "claude-sonnet-5"]   # ដក Opus ចេញ (ថ្លៃជាង ៥ដង)
 _CLAUDE_GOOD_MODEL = {}
-_CLAUDE_LAST_CALL = {"t": 0.0}
-_CLAUDE_MIN_GAP = 2.2   # laalaa មាន 30 request/នាទី → ទុកគម្លាត ≥2.2វិ រវាងការហៅ
+_CLAUDE_LAST_CALL = {}
+_CLAUDE_MIN_GAP = 1.2   # laalaa មាន 30 request/នាទី → ទុកគម្លាត ≥2.2វិ រវាងការហៅ
 
 
 _CLAUDE_LOCK = threading.Lock()
 
 
-def _claude_throttle():
-    """រក្សាទុកពេលហៅ (slot) ម្នាក់ម្តងៗ តាមលំដាប់ ដោយសុវត្ថិភាព thread — កុំឱ្យហៅព្រមគ្នាទាំងអស់ហើយជួប 429។"""
+def _claude_throttle(key="default"):
+    """throttle ដាច់ដោយឡែកសម្រាប់ Key នីមួយៗ — Key ច្រើន = ហៅស្របគ្នាបាន (លឿនជាង)។"""
     with _CLAUDE_LOCK:
         now = time.time()
-        slot = max(now, _CLAUDE_LAST_CALL["t"] + _CLAUDE_MIN_GAP)
-        _CLAUDE_LAST_CALL["t"] = slot
+        slot = max(now, _CLAUDE_LAST_CALL.get(key, 0.0) + _CLAUDE_MIN_GAP)
+        _CLAUDE_LAST_CALL[key] = slot
     wait = slot - now
     if wait > 0:
         time.sleep(wait)
@@ -2757,7 +2757,7 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
     models = [_first] + [m for m in [_model] + _CLAUDE_FALLBACK_MODELS if m != _first]
     mi = 0
     last = "Claude: មិនទាន់ទទួលបានចម្លើយ"
-    for attempt in range(5):
+    for attempt in range(3):
         payload = {
             "model": models[mi],
             "max_tokens": min(5000, 400 + 200 * len(texts)),
@@ -2777,9 +2777,9 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
                 "User-Agent": "Mozilla/5.0",
             },
         )
-        _claude_throttle()
+        _claude_throttle(_key)
         try:
-            with urllib.request.urlopen(request, timeout=90) as r:
+            with urllib.request.urlopen(request, timeout=45) as r:
                 data = json.loads(r.read().decode("utf-8"))
             content = "".join(b.get("text", "") for b in (data.get("content") or []) if b.get("type") == "text")
             content = re.sub(r"<think>.*?</think>", "", content, flags=re.S).strip()
@@ -2800,20 +2800,20 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
             except Exception:
                 pass
             last = f"Claude HTTP {e.code}: {detail}".strip()
-            if e.code == 400 and use_temp and attempt < 4:
+            if e.code == 400 and use_temp and attempt < 2:
                 use_temp = False          # ម៉ូដែលខ្លះមិនទទួល temperature → សាកដោយគ្មាន
                 continue
             if e.code in (404, 503, 529) and mi + 1 < len(models):
                 mi += 1                   # model នេះគ្មាន account ទំនេរ → សាក model បន្ទាប់
-                time.sleep(1.2)
+                time.sleep(0.5)
                 continue
-            if e.code in (429, 500, 502, 503, 504, 529) and attempt < 4:
+            if e.code in (429, 500, 502, 503, 504, 529) and attempt < 2:
                 _wait = 0.0
                 try:
                     _wait = float(e.headers.get("Retry-After", "0") or 0)
                 except Exception:
                     _wait = 0.0
-                time.sleep(min(max(_wait, 3.0 * (attempt + 1)), 15.0))   # រង់ចាំកើនឡើង 3,6,9,12វិ
+                time.sleep(min(max(_wait, 2.0 * (attempt + 1)), 8.0))   # រង់ចាំកើនឡើង 3,6,9,12វិ
                 continue
             raise RuntimeError(last)
         except (TimeoutError, urllib.error.URLError, ConnectionError) as e:
@@ -3103,7 +3103,7 @@ def oai_try(texts, budgets=None, system=None, to_english=False, raw=False, skip_
         except Exception as e:
             _API_LOCAL.last_error = str(e)[:200]
             return None
-    t_end = time.time() + 120
+    t_end = time.time() + 60
     def _claude_pass():
         for _name, _cfg in _CLAUDE_PROVIDERS:
             if time.time() >= t_end:
@@ -3588,7 +3588,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
                 done += len(idxs)
                 _say(f"កំពុងស្ដាប់អត្ថន័យ {done}/{n} ឃ្លា...")
     synopsis = ""
-    if n > 2:
+    if n > 2 and str(get_secret("SYNOPSIS", "0")).strip().lower() in ("1", "true", "yes", "on"):
         if groq_key or oai_enabled():
             synopsis = make_synopsis(english, texts, None, groq_key)
         if not synopsis and gemini_key:
@@ -3615,7 +3615,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
             except Exception as e:
                 return idxs, None, e
         done = 0
-        with ThreadPoolExecutor(max_workers=6) as pool:
+        with ThreadPoolExecutor(max_workers=10) as pool:
             for idxs, res, err in pool.map(_km, batches):
                 if err:
                     errors.append(f"CodeCraft: {err}"[:200])
@@ -3711,7 +3711,7 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         _say(f"កំពុងបកឃ្លាដែលនៅខ្វះ {len(missing)} ឃ្លា...")
         # ធ្វើស្របគ្នា + ឈប់សាកម៉ាស៊ីនដែលខូចជាប់ៗគ្នា + កំណត់ពេលអតិបរមា ដើម្បីកុំឱ្យរង់ចាំយូរដូចគាំង
         dead = {"gemini": 0, "groq": 0, "google": 0}
-        t_end = time.time() + 75
+        t_end = time.time() + 40
         lock = threading.Lock()
 
         def _fail(name, msg):
