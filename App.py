@@ -2582,6 +2582,10 @@ TRANS_ACCURACY_NOTE = (
     "Do not summarise, soften, embellish or replace a line with a generic sentence. Keep the same person called by the same Khmer name and the same "
     "kinship or title word in every line. If a line has no [max N chars] tag there is NO length limit: translate it fully. "
     "Even when a [max N chars] tag is present, meaning and story fit always win over length."
+    " CONNECTED SPEECH (very important): the viewer must hear ONE continuous story, not broken pieces. Make each Khmer line flow naturally from the previous line into the next: "
+    "use everyday connecting words (ព្រោះ, ដូច្នេះ, ប៉ុន្តែ, ហើយ, រួចហើយ, ទើប, បើ, តែ) exactly where the logic needs them, keep the same pronouns, names and tense across neighbouring lines, "
+    "and never output a line that sounds like an isolated word or label when the original is part of a longer sentence; if a source line is only a fragment of a longer sentence, translate it so it joins smoothly with the lines around it. "
+    "Never translate word by word: first understand what the speaker really means in this scene, then say it the way a native Khmer person would say the same thing in the same situation."
 )
 TRANS_SYSTEM = (TRANS_SYSTEM_LITE if LITE_PROMPT else TRANS_SYSTEM_FULL) + TRANS_ACCURACY_NOTE
 
@@ -3205,6 +3209,7 @@ REFINE_SYSTEM = (
     "return it unchanged. Use the neighbouring items as story context (who speaks to whom). One complete sentence per item, same order, "
     "Khmer script only, end with ។ (or ? !), no commas, brackets, quotes, dashes, ellipses, emojis or symbols. "
     "Also verify: every negation, question, number, name (same transliteration in every line), kinship word and who-does-what-to-whom is exactly right, and the Khmer has no invented or nonsense words. "
+    "Also make the whole script sound like ONE connected story told by real people: fix choppy, isolated or label-like lines by joining them naturally with the neighbouring lines using everyday connecting words (ព្រោះ, ដូច្នេះ, ប៉ុន្តែ, ហើយ, ទើប), while keeping one sentence per item and the same meaning. "
     "Return JSON {\"translations\": [...]} with exactly one item per input."
 )
 
@@ -4042,7 +4047,7 @@ def lip_budgets(segs):
     return out
 
 
-def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0, gender_fn=None):
+def merge_for_translate(segs, max_chars=260, max_gap=1.5, max_len=14.0, gender_fn=None):
     """បញ្ចូលបំណែក Whisper ដែលដាច់កណ្តាលប្រយោគ ឱ្យទៅជាប្រយោគពេញ មុនបកប្រែ
     (បកទាំងប្រយោគ ត្រឹមត្រូវជាងបកបំណែកខ្លីៗ)។"""
     strong_end = ".!?។…。！？"
@@ -4055,8 +4060,8 @@ def merge_for_translate(segs, max_chars=200, max_gap=1.0, max_len=11.0, gender_f
             ps, pe, pt = out[-1]
             last = pt.rstrip()[-1:]
             ended = last in strong_end
-            tiny_prev = len(pt.strip()) < 14           # បំណែកខ្លីពេក មិនអាចបកឱ្យត្រូវ
-            tiny_cur = len(t) < 8
+            tiny_prev = len(pt.strip()) < 24           # បំណែកខ្លីពេក មិនអាចបកឱ្យត្រូវ
+            tiny_cur = len(t) < 12
             starts_lower = t[:1].islower()              # ចាប់ផ្តើមអក្សរតូច = បន្តប្រយោគមុន
             cont = (not ended) or tiny_prev or tiny_cur or starts_lower
             if _spk_differs(gender_fn, ps, pe, s, e):
@@ -9798,8 +9803,6 @@ with tab_out:
         running = job.running()
         if not running and not job.zip_done:
             job.zip = build_zip(job.items, job.folder)
-            with st.spinner("កំពុងរួមវីដេអូទាំងអស់ជាវីដេអូតែមួយ..."):
-                job.merged = build_merged(job.items, job.folder)
             job.zip_done = True
         reviewing = job.reviewing()
         refresh = REFRESH_SECONDS if (running and not reviewing) else None
