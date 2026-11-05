@@ -6775,6 +6775,21 @@ def _kv_component():
     return components.declare_component("kvai_local_storage", path=folder)
 
 
+GEMINI_OAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
+GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+GEMINI_LABEL = "Gemini ⚠️ មិនណែនាំ"
+
+
+def xk_cfg_for_session():
+    """CodeCraft Key មុន បើគ្មាន ប្រើ Gemini Key (តាមរយៈ OpenAI-compatible endpoint របស់ Google)។"""
+    ss = st.session_state
+    if ss.get("user_oai_key"):
+        return (ss.get("user_oai_key", ""), ss.get("user_oai_base", ""), ss.get("user_oai_model", ""))
+    if ss.get("user_gemini_key"):
+        return (ss["user_gemini_key"], GEMINI_OAI_BASE, ss.get("user_gemini_model") or GEMINI_DEFAULT_MODEL)
+    return ("", "", "")
+
+
 def _ls_persist():
     """រៀបចំទិន្នន័យ Key ដើម្បីសរសេរចូល localStorage នៅពេល rerun បន្ទាប់។"""
     ss = st.session_state
@@ -6786,10 +6801,11 @@ def _ls_persist():
               "model": ss.get("user_claude_model", "claude-sonnet-5-5")}
     hongguo = {"app_id": ss.get("user_hg_app_id", ""),
                "app_secret": ss.get("user_hg_app_secret", "")}
-    if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"] or hongguo["app_id"] or hongguo["app_secret"]):
+    gemini = {"key": ss.get("user_gemini_key", ""), "model": ss.get("user_gemini_model", "")}
+    if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"] or gemini["key"] or hongguo["app_id"] or hongguo["app_secret"]):
         payload = ""
     else:
-        payload = json.dumps({"groq": groq, "oai": oai, "claude": claude, "hongguo": hongguo})
+        payload = json.dumps({"groq": groq, "oai": oai, "claude": claude, "hongguo": hongguo, "gemini": gemini})
     ss["_ls_payload"] = payload
     ss["_ls_nonce"] = ss.get("_ls_nonce", 0) + 1
 
@@ -6830,6 +6846,10 @@ def ls_sync():
                 st.session_state["user_claude_base"] = str(cl.get("base")).strip()
             if cl.get("model") and not st.session_state.get("user_claude_model"):
                 st.session_state["user_claude_model"] = str(cl.get("model")).strip()
+    gm = data.get("gemini") or {}
+    if isinstance(gm, dict) and gm.get("key") and not st.session_state.get("user_gemini_key"):
+        st.session_state["user_gemini_key"] = str(gm.get("key", "")).strip()
+        st.session_state["user_gemini_model"] = str(gm.get("model", "") or "").strip() or GEMINI_DEFAULT_MODEL
     hg = data.get("hongguo") or {}
     if isinstance(hg, dict):
         if hg.get("app_id") and not st.session_state.get("user_hg_app_id"):
@@ -6840,7 +6860,7 @@ def ls_sync():
 
 def has_user_keys():
     ss = st.session_state
-    return bool(ss.get("user_groq_keys") or ss.get("user_oai_key") or ss.get("user_claude_keys"))
+    return bool(ss.get("user_groq_keys") or ss.get("user_oai_key") or ss.get("user_claude_keys") or ss.get("user_gemini_key"))
 
 
 def effective_groq_key():
@@ -6948,6 +6968,10 @@ def key_check_targets():
         _cfg = (ss["user_oai_key"], ss.get("user_oai_base", ""),
                 ss.get("user_oai_model", ""))
         rows.append(("CodeCraft ផ្ទាល់ខ្លួន", mask_key(_cfg[0]), "openai", _cfg, _cfg[2]))
+    if ss.get("user_gemini_key"):
+        _gm = ss.get("user_gemini_model") or GEMINI_DEFAULT_MODEL
+        rows.append(("Gemini ផ្ទាល់ខ្លួន (មិនណែនាំ)", mask_key(ss["user_gemini_key"]), "openai",
+                     (ss["user_gemini_key"], GEMINI_OAI_BASE, _gm), _gm))
     return rows
 
 
@@ -6975,6 +6999,7 @@ def user_key_box():
         st.session_state.pop("user_key_input", None)
         st.session_state.pop("user_keys_bulk", None)
         st.session_state.pop("user_claude_bulk", None)
+        st.session_state.pop("user_gemini_input", None)
         st.session_state.pop("user_hg_app_id_input", None)
         st.session_state.pop("user_hg_app_secret_input", None)
     with st.container(border=True):
@@ -7006,7 +7031,15 @@ def user_key_box():
                     st.session_state.pop(_k, None)
                 _ls_persist()
                 st.rerun()
-        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft"], horizontal=True, key="user_key_provider")
+        if st.session_state.get("user_gemini_key"):
+            any_saved = True
+            st.warning(f"⚠️ កំពុងប្រើ Gemini Key (…{st.session_state['user_gemini_key'][-4:]}) — មិនណែនាំឱ្យប្រើ")
+            if st.button("🗑 ឈប់ប្រើ Gemini Key", key="remove_user_gemini_key"):
+                for _k in ("user_gemini_key", "user_gemini_model"):
+                    st.session_state.pop(_k, None)
+                _ls_persist()
+                st.rerun()
+        provider = st.radio("ប្រភេទ Key", ["Claude", "Groq", "CodeCraft", GEMINI_LABEL], horizontal=True, key="user_key_provider")
         oai_base_in = oai_model_in = ""
         typed = ""
         if provider == "Claude":
@@ -7055,6 +7088,16 @@ def user_key_box():
                     key="user_oai_model_input",
                 )
             st.caption("CodeCraft ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទ។ ការសម្គាល់សំឡេងវីដេអូនៅតែត្រូវការ Groq ព្រោះ CodeCraft មិនមាន Speech-to-Text API។")
+        elif provider == GEMINI_LABEL:
+            st.warning("⚠️ **មិនណែនាំឱ្យប្រើ Gemini** — ការបកប្រែជាភាសាខ្មែរមិនសូវត្រឹមត្រូវ និងមិនធម្មជាតិដូច Claude ឬ CodeCraft ទេ "
+                       "ហើយ Key ឥតគិតថ្លៃអាចអស់កូតាលឿន។ សូមប្រើ Claude ឬ CodeCraft ជំនួស បើអាច។ "
+                       "ប្រើ Gemini ក្នុងករណីគ្មាន Key ផ្សេងប៉ុណ្ណោះ។")
+            typed = st.text_input("Gemini API Key", type="password", placeholder="AIza...", key="user_gemini_input")
+            oai_model_in = st.text_input("ឈ្មោះម៉ូដែល Gemini",
+                                         value=st.session_state.get("user_gemini_model", GEMINI_DEFAULT_MODEL),
+                                         key="user_gemini_model_input")
+            st.caption("Gemini ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទប៉ុណ្ណោះ។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq Key។ "
+                       "បើមាន CodeCraft Key រួចហើយ កម្មវិធីប្រើ CodeCraft មុន។")
         else:
             typed = st.text_area("Groq API Key (មួយបន្ទាត់ ១ Key ឬបំបែកដោយក្បៀស — ដាក់បានច្រើន)",
                                  placeholder="gsk_...\ngsk_...", height=120, key="user_keys_bulk")
@@ -7099,6 +7142,23 @@ def user_key_box():
                     if _added:
                         st.session_state["_clear_key_input"] = True
                     st.rerun()
+            elif provider == GEMINI_LABEL:
+                _gk = str(typed or "").strip()
+                _gm = (oai_model_in or GEMINI_DEFAULT_MODEL).strip()
+                if len(_gk) < 20 or any(_c.isspace() for _c in _gk):
+                    st.error("Gemini Key មិនត្រឹមត្រូវ។ សូមបិទភ្ជាប់ Key ឱ្យពេញ (ចាប់ផ្តើមដោយ AIza)។")
+                else:
+                    with st.spinner("កំពុងពិនិត្យ Gemini Key..."):
+                        _gst, _gmsg, _gms = check_openai_key((_gk, GEMINI_OAI_BASE, _gm))
+                    if _gst in ("ok", "limit"):
+                        st.session_state["user_gemini_key"] = _gk
+                        st.session_state["user_gemini_model"] = _gm
+                        _ls_persist()
+                        st.session_state["_clear_key_input"] = True
+                        st.session_state["_key_msg"] = ("ok", "បានបន្ថែម Gemini Key ✅ (⚠️ មិនណែនាំឱ្យប្រើ)")
+                        st.rerun()
+                    else:
+                        st.error("Gemini Key ប្រើមិនបាន៖ " + str(_gmsg))
             elif provider == "CodeCraft":
                 _cc_base = (oai_base_in or "https://codecraftapi.com/v1").strip().rstrip("/")
                 ok, msg = oai_test(typed, _cc_base, oai_model_in or "")
@@ -7169,7 +7229,7 @@ def user_key_box():
         if any_saved and st.button("🧹 លុប Key ផ្ទាល់ខ្លួនទាំងអស់ (រួមទាំងក្នុង Browser)", key="user_key_clear_all", use_container_width=True):
             for _k in ("user_groq_keys", "user_oai_key", "user_oai_base", "user_oai_model",
                        "user_claude_keys", "user_claude_base", "user_claude_model",
-                       "user_hg_app_id", "user_hg_app_secret"):
+                       "user_gemini_key", "user_gemini_model", "user_hg_app_id", "user_hg_app_secret"):
                 st.session_state.pop(_k, None)
             _ls_persist()
             st.rerun()
@@ -9707,11 +9767,7 @@ if run:
     settings = {
         "engine": "free",
         "gemini_key": "", "groq_key": effective_groq_key(), "fx": fx_settings,
-        "user_xk_cfg": (
-            st.session_state.get("user_oai_key", ""),
-            st.session_state.get("user_oai_base", ""),
-            st.session_state.get("user_oai_model", ""),
-        ),
+        "user_xk_cfg": xk_cfg_for_session(),
         "language": LANGUAGES[language_label], "quality": QUALITY[quality_label],
         "dub_on": dub_on, "voice": TTS_VOICES[voice_label],
         # Fixed internal defaults; no extra voice-tuning controls in the UI.
