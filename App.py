@@ -1593,29 +1593,59 @@ def _download_with_ssstik(url, path, progress):
 
 
 def download_social_video(url, path, progress):
-    """ទាញវីដេអូ TikTok៖ SSSTik មុន រួច yt-dlp រួច tikwm (មិនបង្ហាញតំណដល់អ្នកប្រើ)។"""
-    reasons = []
+    """ទាញវីដេអូ TikTok ដោយសាក SSSTik / yt-dlp / tikwm ស្របគ្នា — មួយណាបានមុន យកមួយនោះ (លឿនជាងសាកម្តងមួយៗ)។"""
     try:
         host = (urllib.parse.urlparse(url).hostname or "").lower()
     except Exception:
         host = ""
+    methods = []
     if host == "tiktok.com" or host.endswith(".tiktok.com"):
+        methods.append(("ssstik", _download_with_ssstik))
+    methods.append(("yt-dlp", _download_with_ytdlp))
+    methods.append(("tikwm", _download_with_tikwm))
+
+    import queue
+    results = queue.Queue()
+    work_dirs = []
+
+    def _run(name, fn):
+        d = tempfile.mkdtemp(prefix="kac_race_")
+        work_dirs.append(d)
+        target = os.path.join(d, "video.mp4")
         try:
-            _download_with_ssstik(url, path, progress)
-            return
+            fn(url, target, _NoProgress())
+            if os.path.isfile(target) and os.path.getsize(target) > 1000:
+                results.put((name, target, None))
+            else:
+                results.put((name, None, "empty file"))
         except Exception as e:
-            reasons.append("ssstik: " + (str(e) or type(e).__name__))
-    try:
-        _download_with_ytdlp(url, path, progress)
-        return
-    except Exception as e:
-        reasons.append("yt-dlp: " + (str(e) or type(e).__name__))
-    try:
-        _download_with_tikwm(url, path, progress)
-        return
-    except Exception as e:
-        reasons.append("tikwm: " + (str(e) or type(e).__name__))
-    raise UserError(" | ".join(reasons))
+            results.put((name, None, str(e) or type(e).__name__))
+
+    for name, fn in methods:
+        threading.Thread(target=_run, args=(name, fn), daemon=True).start()
+
+    reasons = []
+    deadline = time.time() + 150
+    got = 0
+    while got < len(methods) and time.time() < deadline:
+        try:
+            name, target, err = results.get(timeout=2)
+        except queue.Empty:
+            continue
+        got += 1
+        if target:
+            try:
+                shutil.move(target, path)
+            except Exception:
+                shutil.copyfile(target, path)
+            progress.progress(1.0)
+            for d in work_dirs:
+                shutil.rmtree(d, ignore_errors=True)
+            return
+        reasons.append(f"{name}: {err}")
+    for d in work_dirs:
+        shutil.rmtree(d, ignore_errors=True)
+    raise UserError(" | ".join(reasons) or "ទាញយកវីដេអូមិនបាន (អស់ពេល)។")
 
 
 def _download_with_tikwm(url, path, progress):
@@ -6075,7 +6105,7 @@ def extract_links(text):
     return out
 
 
-LINK_RETRIES = _env_int("LINK_RETRIES", 8)   # ចំនួនលើកព្យាយាមអតិបរមាក្នុងមួយតំណ
+LINK_RETRIES = _env_int("LINK_RETRIES", 4)   # ចំនួនលើកព្យាយាមអតិបរមាក្នុងមួយតំណ
 
 
 def _fetch_one(url, on_try=None):
