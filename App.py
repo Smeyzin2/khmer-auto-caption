@@ -5621,6 +5621,7 @@ class Job:
         self.render_slots = threading.Semaphore(MAX_RENDER_AT_ONCE)
         self.zip = None
         self.zip_done = False
+        self.merged = None
         self.scrolled = False
         self.turn = 0
         self.turn_cv = threading.Condition()
@@ -5998,6 +5999,56 @@ def build_zip(items, folder):
             if os.path.isfile(it["video_path"]):
                 z.write(it["video_path"], f"{i:02d}_{safe_filename(it['name'])}_khmer.mp4")
     return zip_path
+
+
+def _video_size_and_audio(path):
+    """ត្រឡប់ (width, height, has_audio) តាម ffmpeg -i។"""
+    exe = imageio_ffmpeg.get_ffmpeg_exe()
+    r = subprocess.run([exe, "-i", path], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    err = r.stderr or ""
+    w = h = 0
+    m = re.search(r"Video:.*?,\s*(\d{2,5})x(\d{2,5})", err)
+    if m:
+        w, h = int(m.group(1)), int(m.group(2))
+    return w, h, ("Audio:" in err)
+
+
+def build_merged(items, folder):
+    """រួមវីដេអូដែលធ្វើរួចទាំងអស់ (តាមលំដាប់) ជាវីដេអូតែមួយ។ ត្រឡប់ path ឬ None។"""
+    ok = [it for it in items if it["state"] == "done" and it.get("video_path")
+          and os.path.isfile(it["video_path"])]
+    if len(ok) < 2:
+        return None
+    try:
+        paths = [it["video_path"] for it in ok]
+        sizes = [_video_size_and_audio(p) for p in paths]
+        W, H = sizes[0][0] or 720, sizes[0][1] or 1280
+        W -= W % 2
+        H -= H % 2
+        out = os.path.join(folder, "khmer_merged.mp4")
+        args = []
+        for p in paths:
+            args += ["-i", p]
+        parts = []
+        for i, (_w, _h, has_a) in enumerate(sizes):
+            parts.append(
+                f"[{i}:v]scale={W}:{H}:force_original_aspect_ratio=decrease,"
+                f"pad={W}:{H}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=30,format=yuv420p[v{i}]"
+            )
+            if has_a:
+                parts.append(f"[{i}:a]aresample=44100,aformat=sample_fmts=fltp:channel_layouts=stereo[a{i}]")
+            else:
+                parts.append(f"anullsrc=r=44100:cl=stereo,atrim=duration=0.1[a{i}]")
+        n = len(paths)
+        concat_in = "".join(f"[v{i}][a{i}]" for i in range(n))
+        parts.append(f"{concat_in}concat=n={n}:v=1:a=1[outv][outa]")
+        args += ["-filter_complex", ";".join(parts), "-map", "[outv]", "-map", "[outa]",
+                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23",
+                 "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out]
+        run_ffmpeg(args)
+        return out if os.path.isfile(out) else None
+    except Exception:
+        return None
 
 
 class _NoProgress:
@@ -6577,6 +6628,12 @@ def download_area(job):
         _all_txt = "\n\n".join(f"== {_it['name']} ==\n" + "\n".join(_it["captions"]) for _i, _it in done)
         dl_button("📝 ទាញយកអក្សរបកប្រែទាំងអស់ (.txt)", _all_txt.encode("utf-8"), "khmer_text.txt", "text/plain",
                   key=f"txt_{job.id}", use_container_width=True)
+    if getattr(job, "merged", None) and os.path.isfile(job.merged):
+        st.markdown("### 🎞 វីដេអូរួមតែមួយ")
+        st.video(job.merged)
+        if not browser_dl_link("🌐 🎞 ទាញយកវីដេអូរួម ក្នុង Browser", job.merged, "khmer_merged.mp4", "video/mp4", f"merged_{job.id}"):
+            with open(job.merged, "rb") as mf:
+                dl_button("🎞 ទាញយកវីដេអូរួមតែមួយ", mf, "khmer_merged.mp4", "video/mp4", key=f"merged_{job.id}", use_container_width=True)
     if job.zip and os.path.isfile(job.zip):
         if not browser_dl_link("🌐 📦 ទាញយកទាំងអស់ (ZIP) ក្នុង Browser", job.zip, "khmer_videos.zip", "application/zip", f"zip_{job.id}"):
             with open(job.zip, "rb") as zf:
@@ -9741,6 +9798,8 @@ with tab_out:
         running = job.running()
         if not running and not job.zip_done:
             job.zip = build_zip(job.items, job.folder)
+            with st.spinner("កំពុងរួមវីដេអូទាំងអស់ជាវីដេអូតែមួយ..."):
+                job.merged = build_merged(job.items, job.folder)
             job.zip_done = True
         reviewing = job.reviewing()
         refresh = REFRESH_SECONDS if (running and not reviewing) else None
