@@ -1592,12 +1592,40 @@ def _download_with_ssstik(url, path, progress):
     raise last or RuntimeError("no downloadable link")
 
 
+def _resolve_social_url(url):
+    """តំណខ្លី (vt.tiktok.com ...) → តំណពេញ https://www.tiktok.com/@x/video/ID ដើម្បីឱ្យ tikwm/yt-dlp អានបាន។"""
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower()
+    except Exception:
+        return url
+    if not (host.endswith("tiktok.com")):
+        return url
+    if re.search(r"/video/\d+", url):
+        return url.split("?")[0]
+    try:
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1"})
+        with urllib.request.urlopen(req, timeout=15) as r:
+            final = r.geturl() or ""
+            m = re.search(r"/video/(\d+)", final)
+            if m:
+                return final.split("?")[0]
+            body = r.read(200000).decode("utf-8", "ignore")
+        m = re.search(r"tiktok\.com/@[^/\"'\s]+/video/\d+", body)
+        if m:
+            return "https://www." + m.group(0)
+    except Exception:
+        pass
+    return url
+
+
 def download_social_video(url, path, progress):
     """ទាញវីដេអូ TikTok ដោយសាក SSSTik / yt-dlp / tikwm ស្របគ្នា — មួយណាបានមុន យកមួយនោះ (លឿនជាងសាកម្តងមួយៗ)។"""
     try:
         host = (urllib.parse.urlparse(url).hostname or "").lower()
     except Exception:
         host = ""
+    full_url = _resolve_social_url(url)
     methods = []
     if host == "tiktok.com" or host.endswith(".tiktok.com"):
         methods.append(("ssstik", _download_with_ssstik))
@@ -1613,7 +1641,13 @@ def download_social_video(url, path, progress):
         work_dirs.append(d)
         target = os.path.join(d, "video.mp4")
         try:
-            fn(url, target, _NoProgress())
+            try:
+                fn(full_url, target, _NoProgress())
+            except Exception:
+                if full_url != url:
+                    fn(url, target, _NoProgress())
+                else:
+                    raise
             if os.path.isfile(target) and os.path.getsize(target) > 1000:
                 results.put((name, target, None))
             else:
@@ -1649,10 +1683,24 @@ def download_social_video(url, path, progress):
 
 
 def _download_with_tikwm(url, path, progress):
-    api = "https://www.tikwm.com/api/?" + urllib.parse.urlencode({"url": url, "hd": 1})
-    req = urllib.request.Request(api, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        data = json.loads(r.read().decode("utf-8", "ignore"))
+    data = {}
+    for _mode in ("post", "get"):
+        try:
+            if _mode == "post":
+                req = urllib.request.Request(
+                    "https://www.tikwm.com/api/",
+                    data=urllib.parse.urlencode({"url": url, "hd": 1}).encode(),
+                    headers={"User-Agent": "Mozilla/5.0", "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8"})
+            else:
+                req = urllib.request.Request(
+                    "https://www.tikwm.com/api/?" + urllib.parse.urlencode({"url": url, "hd": 1}),
+                    headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read().decode("utf-8", "ignore"))
+            if ((data or {}).get("data") or {}).get("play") or ((data or {}).get("data") or {}).get("hdplay"):
+                break
+        except Exception:
+            data = {}
     d = (data or {}).get("data") or {}
     play = d.get("hdplay") or d.get("play")
     if not play:
