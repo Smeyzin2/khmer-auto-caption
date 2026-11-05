@@ -5,4 +5,4 @@ imageio-ffmpeg
 fonttools
 edge-tts
 numpy
-yt-dlp[default]
+yt-dlp
