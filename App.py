@@ -8056,6 +8056,40 @@ def _hg_normalize_row(item):
     }
 
 
+def _hg_rows_from_items(items, label=""):
+    """បម្លែងលទ្ធផល Actor ជា rows។ បើទទេ → raise ដើម្បីកុំ cache លទ្ធផលទទេ ១ ម៉ោង និងបង្ហាញមូលហេតុពិត។"""
+    flat = []
+
+    def _collect(o, depth=0):
+        if isinstance(o, dict):
+            flat.append(o)
+            if depth < 2:
+                for k in ("results", "items", "list", "dramas", "series", "books", "data"):
+                    v = o.get(k)
+                    if isinstance(v, list):
+                        for x in v:
+                            _collect(x, depth + 1)
+        elif isinstance(o, list):
+            for x in o:
+                _collect(x, depth + 1)
+
+    _collect(items)
+    rows = [_hg_normalize_row(x) for x in flat]
+    rows = [x for x in rows if x.get("series_id")]
+    seen, out = set(), []
+    for r in rows:
+        if r["series_id"] not in seen:
+            seen.add(r["series_id"])
+            out.append(r)
+    if not out:
+        n = len(items) if isinstance(items, list) else 0
+        keys = ""
+        if n and isinstance(items[0], dict):
+            keys = " · keys: " + ", ".join(list(items[0].keys())[:10])
+        raise RuntimeError(f"Actor ត្រឡប់ {n} records តែគ្មានរឿងដែលប្រើបាន ({label}){keys}")
+    return out
+
+
 _HG_MAX_PAGES = 5   # Actor ផ្តល់អតិបរមា 100 រឿង = 5 ទំព័រ × 20
 
 
@@ -8068,8 +8102,7 @@ def _hg_rank_all():
          "includeDetails": False},
         timeout=180,
     )
-    rows = [_hg_normalize_row(x) for x in items]
-    return [x for x in rows if x.get("series_id")]
+    return _hg_rows_from_items(items, "hot")
 
 
 def _hg_rank(page=1):
@@ -8404,8 +8437,7 @@ def _hg_category_all(category):
          "includeDetails": False},
         timeout=180,
     )
-    rows = [_hg_normalize_row(x) for x in items]
-    return [x for x in rows if x.get("series_id")]
+    return _hg_rows_from_items(items, category)
 
 
 def _hg_category_list(category, page=1):
@@ -8422,8 +8454,7 @@ def _hg_category_list(category, page=1):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _hg_search(keyword, page=1):
     items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
-    rows = [_hg_normalize_row(x) for x in items]
-    return [x for x in rows if x.get("series_id")]
+    return _hg_rows_from_items(items, "search:" + str(keyword))
 
 
 def _hg_load_page(mode, page):
@@ -8682,6 +8713,11 @@ with tab_drama:
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
                 _HG_CAT_FN.clear()
+                for _fn in (_hg_rank_all, _hg_category_all, _hg_search):
+                    try:
+                        _fn.clear()
+                    except Exception:
+                        pass
                 st.rerun()
         with _hg_c2:
             st.write("")
@@ -8729,7 +8765,13 @@ with tab_drama:
                     st.rerun()
                 else:
                     with st.spinner("កំពុងស្វែងរករឿង..."):
-                        st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+                        try:
+                            st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+                        except RuntimeError as _se:
+                            if "Actor ត្រឡប់" in str(_se):
+                                st.session_state["_hg_rows"] = []
+                            else:
+                                raise
                     st.session_state.pop("_hg_selected", None)
                     if not st.session_state["_hg_rows"]:
                         st.info("រកមិនឃើញរឿងទេ។ សូមបិទភ្ជាប់ Link ទំព័ររឿង (…/detail?series_id=…) ឬ series_id ។ Link /player/… អាចជាលេខភាព មិនមែនលេខរឿង។")
