@@ -6,3 +6,4 @@ fonttools
 edge-tts
 numpy
 yt-dlp
+playwright
