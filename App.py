@@ -8276,15 +8276,70 @@ def _hg_detail(series_id):
     }
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _hg_fetch_cover(url):
+    """ទាញរូប poster នៅខាង Server (ដាក់ User-Agent/Referer) ហើយបម្លែងជា JPEG
+    ដើម្បីជៀសវាងបញ្ហា hotlink / referrer / ទ្រង់ទ្រាយ heic-avif ក្នុង Browser។ ត្រឡប់ (bytes, error)។"""
+    u = str(url or "").strip()
+    if u.startswith("//"):
+        u = "https:" + u
+    if not u.startswith(("http://", "https://")):
+        return None, "bad url"
+    last = ""
+    for ref in ("https://hongguoduanju.com/", ""):
+        try:
+            headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36",
+                       "Accept": "image/avif,image/webp,image/jpeg,image/*;q=0.8"}
+            if ref:
+                headers["Referer"] = ref
+            r = requests.get(u, headers=headers, timeout=8)
+            if r.status_code != 200 or len(r.content) < 500:
+                last = f"HTTP {r.status_code}"
+                continue
+            data = r.content
+            try:
+                from PIL import Image
+                try:
+                    import pillow_heif
+                    pillow_heif.register_heif_opener()
+                except Exception:
+                    pass
+                im = Image.open(io.BytesIO(data))
+                im = im.convert("RGB")
+                im.thumbnail((480, 640))
+                out = io.BytesIO()
+                im.save(out, format="JPEG", quality=82)
+                return out.getvalue(), ""
+            except Exception as e:
+                last = "decode: " + str(e)[:80]
+                ctype = (r.headers.get("Content-Type") or "").lower()
+                if ctype.startswith("image/") and any(x in ctype for x in ("jpeg", "png", "webp", "gif")):
+                    return data, ""
+                continue
+        except Exception as e:
+            last = str(e)[:80]
+    return None, last or "failed"
+
+
 def _hg_show_cover(url):
-    """បង្ហាញ poster ដោយប្រើ st.image (ដូចដើម)។"""
+    """បង្ហាញ poster តាម Server (មិនពឹង Browser ទាញពី CDN ផ្ទាល់)។"""
     u = str(url or "").strip()
     if not u:
         return
-    try:
-        st.image(u, use_container_width=True)
-    except Exception:
-        pass
+    data, err = _hg_fetch_cover(u)
+    if data:
+        try:
+            st.image(data, use_container_width=True)
+            return
+        except Exception:
+            pass
+    st.markdown(
+        '<div style="aspect-ratio:3/4;border-radius:10px;background:#1a2050;display:flex;align-items:center;'
+        'justify-content:center;font-size:34px;">🎬</div>',
+        unsafe_allow_html=True,
+    )
+    if _is_admin_session():
+        st.caption("🖼 " + str(err)[:60])
 
 
 def _hg_enrich_rows(rows):
