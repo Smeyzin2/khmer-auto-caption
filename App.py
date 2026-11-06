@@ -1,3 +1,29 @@
+# ====================================================================
+# 📖 មាតិកា (INDEX) — ឯកសារនេះវែង ប្រើ Ctrl+F ស្វែងរក «ពាក្យស្វែងរក» ដើម្បីរកផ្នែក
+# (លេខបន្ទាត់ប្រហែល ព្រោះពេលកែអាចរំកិល)
+# ====================================================================
+#  ~    98  កំពុង UPDATE (MAINTENANCE_MODE)   → ស្វែងរក: MAINTENANCE_MODE
+#  ~   178  រូបរាង / Theme / CSS   → ស្វែងរក: apply_theme
+#  ~  1116  Secrets, Setting, ffmpeg, ទាញវីដេអូ (TikTok/Link)   → ស្វែងរក: def download_video
+#  ~  1840  Gemini ច្រើន Key   → ស្វែងរក: _GEM_COOL
+#  ~  2029  ស្តាប់សំឡេង → អត្ថបទ (Transcribe)   → ស្វែងរក: def transcribe
+#  ~  2538  បកប្រែ (Google, Groq, Claude, CodeCraft)   → ស្វែងរក: def groq_translate_chunk
+#  ~  3269  បកប្រែខ្មែរ / កែសម្រួលភាសា   → ស្វែងរក: def gemini_translate_khmer
+#  ~  5521  Logo + Blur លើវីដេអូ   → ស្វែងរក: def out_dims
+#  ~  6795  API Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ   → ស្វែងរក: API Key ផ្ទាល់ខ្លួន
+#  ~  7552  Login / Admin / គណនី VIP   → ស្វែងរក: ADMIN_USERNAME
+#  ~  7885  Hongguo → Khmer Auto Caption   → ស្វែងរក: Hongguo Drama
+#  ~  9060  រឿងឥតគិតថ្លៃ neatidrama (Free Drama + មើលសាកល្បង)   → ស្វែងរក: def _nd_preview
+#  ~  9648  ផ្ទាំង ១: វីដេអូ   → ស្វែងរក: ផ្ទាំង ១: វីដេអូ
+#  ~  9820  ផ្ទាំង កាត់វីដេអូ   → ស្វែងរក: ផ្ទាំង កាត់វីដេអូ
+#  ~ 10017  ផ្ទាំង ២: បកប្រែ / ៣: សំឡេង / ៤: អក្សរ   → ស្វែងរក: ផ្ទាំង ២: បកប្រែ
+#  ~ 10099  ផ្ទាំង Logo + Blur   → ស្វែងរក: ផ្ទាំង Logo + Blur
+#  ~ 10321  ប៊ូតុងចាប់ផ្តើម + ផ្ទាំង ៥: ធ្វើការ/ទាញយក   → ស្វែងរក: ប៊ូតុងចាប់ផ្តើម
+#  ~ 10581  CSS ចុងក្រោយ (Mobile/Desktop layout)   → ស្វែងរក: FINAL MOBILE
+# ====================================================================
+# ចំណាំ៖ នេះជា comment ទាំងអស់ — មិនប៉ះពាល់ដំណើរការ app ទេ
+
+
 import os
 import io
 import re
@@ -31,11 +57,55 @@ import streamlit.components.v1 as components
 import imageio_ffmpeg
 import edge_tts
 
+# ---- កត់ត្រាកំហុសដែលធ្លាប់ត្រូវបានលាក់ (មើលក្នុង Logs របស់ Posit) ----
+_SWALLOW_SEEN = {}
+
+
+def _log_swallowed(err):
+    """មិនធ្វើឱ្យ app គាំង តែសរសេរមូលហេតុទៅ Logs (ម្តងគត់ក្នុងមួយប្រភេទ ជៀសវាងពេញ Logs)។"""
+    try:
+        import traceback as _tb
+        _frame = _tb.extract_tb(err.__traceback__)[-1] if err.__traceback__ else None
+        _where = f"line {_frame.lineno} in {_frame.name}" if _frame else "?"
+        _key = (type(err).__name__, _where)
+        _SWALLOW_SEEN[_key] = _SWALLOW_SEEN.get(_key, 0) + 1
+        if _SWALLOW_SEEN[_key] <= 2:
+            print(f"[KVAI warn] {type(err).__name__}: {str(err)[:200]} @ {_where}", file=sys.stderr, flush=True)
+    except Exception:
+        pass
+
+
 st.set_page_config(
     page_title="TikTok Short Drama + Khmer Auto Caption",
     page_icon="🎬",
     layout="wide",
 )
+
+
+# ---- សម្អាតឯកសារបណ្តោះអាសន្នចាស់ៗ (ចាស់ជាង ៣ ម៉ោង) ម្តងពេល app ចាប់ផ្តើម ----
+@st.cache_resource(show_spinner=False)
+def _sweep_old_temp():
+    _prefixes = ("kac_", "hongguo_batch_", "free_batch_", "kcut_", "kclone_", "kfx_", "kfxu_")
+    _now = time.time()
+    _removed = 0
+    try:
+        _root = tempfile.gettempdir()
+        for _name in os.listdir(_root):
+            if not _name.startswith(_prefixes):
+                continue
+            _full = os.path.join(_root, _name)
+            try:
+                if os.path.isdir(_full) and _now - os.path.getmtime(_full) > 3 * 3600:
+                    shutil.rmtree(_full, ignore_errors=True)
+                    _removed += 1
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
+    return _removed
+
+
+_sweep_old_temp()
 
 # ---- ជៀសវាង heading ក្នុង Markdown (កំណែ Streamlit ថ្មីលើ Posit បាន SyntaxError លើ heading) ----
 import re as _re_hd
@@ -53,8 +123,8 @@ def _no_heading_markdown(body, *args, **kwargs):
                         f'{txt}</span>\n')
             body = _re_hd.sub(r"(?m)^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$", _sub, body)
             kwargs["unsafe_allow_html"] = True
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     return _orig_st_markdown(body, *args, **kwargs)
 
 
@@ -161,8 +231,8 @@ for _k, _v in {
 }.items():
     try:
         st._config.set_option(_k, _v)
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
 
 THEME_CSS = """
 <style>
@@ -1325,8 +1395,8 @@ def run_ffmpeg_progress(args, cwd=None, env=None, total=0.0, on_pct=None):
             last_cb = now
             try:
                 on_pct(max(0.0, min(0.99, sec / total)), now - t0)
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
     proc.wait()
     th.join(timeout=3)
     if proc.returncode != 0:
@@ -1393,8 +1463,8 @@ def prepare_home_font(fonts_data):
         if not os.path.exists(dst):
             with open(dst, "wb") as f:
                 f.write(fonts_data[0][1])
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
 
 
 def install_fonts(folder, fonts_data):
@@ -1416,8 +1486,8 @@ def get_font_family(path, default):
                 name = record.toUnicode().strip()
                 if name:
                     return name
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     return default
 
 
@@ -1486,8 +1556,8 @@ def _ss_decode_link(u):
         decoded = base64.b64decode("/".join(parts[5:])).decode("utf-8")
         if decoded.startswith("http"):
             return decoded
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     return u
 
 
@@ -1588,8 +1658,8 @@ def _download_with_ssstik(url, path, progress):
             last = e
             try:
                 os.remove(path)
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
     raise last or RuntimeError("no downloadable link")
 
 
@@ -1615,8 +1685,8 @@ def _resolve_social_url(url):
         m = re.search(r"tiktok\.com/@[^/\"'\s]+/video/\d+", body)
         if m:
             return "https://www." + m.group(0)
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     return url
 
 
@@ -1725,8 +1795,8 @@ def _download_with_ytdlp(url, path, progress):
                 total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
                 if total:
                     progress.progress(min(1.0, (d.get("downloaded_bytes") or 0) / total))
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
 
     opts = {
         "outtmpl": base + ".%(ext)s",
@@ -1986,8 +2056,8 @@ def _get_available_models_uncached(client):
             if any(x in low for x in ("tts", "live", "embedding", "image", "imagen", "veo", "robotics")):
                 continue
             found.append(name)
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     ordered = [m for m in PREFERRED_MODELS if m in found]
     rest = [m for m in found if m not in ordered]
     rest.sort(key=lambda m: ("lite" in m.lower(), "flash" not in m.lower()))
@@ -2585,8 +2655,8 @@ def groq_chat_models(api_key):
             if any(x in low for x in ("whisper", "tts", "guard", "prompt", "orpheus", "allam", "safeguard")):
                 continue
             found.append(mid)
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     if found:
         ordered = [m for m in GROQ_CHAT_PREFERRED if m in found]
         ordered += [m for m in found if m not in ordered]
@@ -2880,8 +2950,8 @@ def claude_translate_chunk(texts, budgets=None, system=None, to_english=False, c
             detail = ""
             try:
                 detail = e.read().decode("utf-8", "ignore")[:220]
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
             last = f"Claude HTTP {e.code}: {detail}".strip()
             if e.code == 400 and use_temp and attempt < 2:
                 use_temp = False          # ម៉ូដែលខ្លះមិនទទួល temperature → សាកដោយគ្មាន
@@ -3351,14 +3421,14 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
                         model_cool(model, "ចំនួនបន្ទាត់មិនត្រូវគ្នា")
                     except Exception as e:
                         model_cool(model, str(e))
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
         if groq_key:
             try:
                 res = groq_translate_chunk(groq_key, rows, None, system=REFINE_SYSTEM + " " + story, rotate=shift)
                 return idxs, res
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
         return idxs, None
 
     done = 0
@@ -3372,8 +3442,8 @@ def refine_khmer(texts, englishes, drafts, gemini_key, groq_key, progress=None, 
             if progress:
                 try:
                     progress(f"កំពុងកែសម្រួលអត្ថន័យខ្មែរ {done}/{n} ឃ្លា...")
-                except Exception:
-                    pass
+                except Exception as _swallow_e:
+                    _log_swallowed(_swallow_e)
     return result
 
 
@@ -3427,13 +3497,13 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
                 res = gemini_lines(gemini_key, JUDGE_SYSTEM + " " + ctx, rows)
                 if res:
                     return idxs, res
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
         if groq_key:
             try:
                 return idxs, groq_translate_chunk(groq_key, rows, None, system=JUDGE_SYSTEM + " " + ctx, rotate=shift)
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
         return idxs, None
 
     done = 0
@@ -3447,8 +3517,8 @@ def judge_khmer(texts, englishes, cand_a, cand_b, gemini_key, groq_key, progress
             if progress:
                 try:
                     progress(f"កំពុងជ្រើសការបកប្រែល្អបំផុត {done}/{n} ឃ្លា...")
-                except Exception:
-                    pass
+                except Exception as _swallow_e:
+                    _log_swallowed(_swallow_e)
     return result
 
 
@@ -3477,8 +3547,8 @@ def make_synopsis(english, texts, gemini_key, groq_key):
                         return t[:900]
                 except Exception:
                     continue
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     if groq_key:
         try:
             for model in groq_chat_models(groq_key)[:3]:
@@ -3494,8 +3564,8 @@ def make_synopsis(english, texts, gemini_key, groq_key):
                         return t[:900]
                 except Exception:
                     continue
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
     return ""
 
 
@@ -3536,13 +3606,13 @@ def llm_lines(rows, system, gemini_key=None, groq_key=None, khmer=True):
     if gemini_key:
         try:
             return gemini_lines(gemini_key, system, rows, khmer=khmer)
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
     if groq_key:
         try:
             return groq_translate_chunk(groq_key, rows, None, system=system, to_english=(not khmer), rotate=True)
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
     return None
 
 
@@ -3591,8 +3661,8 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
                             if (has_khmer(r) and khmer_dominant(r) and len(r) > len(str(outs[i]))
                                     and len(r) <= budgets[i] * 1.4):
                                 result[i] = r
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
     if not over:
         return result
     groups = [over[k:k + LLM_GROUP] for k in range(0, len(over), LLM_GROUP)]
@@ -3613,8 +3683,8 @@ def fit_to_budget(texts, outs, budgets, gemini_key, groq_key, progress=None):
             if progress:
                 try:
                     progress(f"កំពុងតម្រឹមប្រវែងឃ្លាឱ្យត្រូវមាត់ {done}/{len(over)} ឃ្លា...")
-                except Exception:
-                    pass
+                except Exception as _swallow_e:
+                    _log_swallowed(_swallow_e)
     return result
 
 
@@ -3645,8 +3715,8 @@ def translate_texts(texts, groq_key=None, budgets=None, gemini_key=None, progres
         if progress:
             try:
                 progress(msg)
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
 
     # ជំហាន ១: បកទៅអង់គ្លេសជាមុន (ធ្វើស្របគ្នា ៣ បាច់ក្នុងពេលតែមួយ)
     if (groq_key or oai_enabled()) and not FAST_TRANSLATE:
@@ -3919,8 +3989,8 @@ def _translate_texts_old(texts, groq_key=None):
                 for i, flat in batch:
                     try:
                         outs[i] = clean_translation(google_translate_request(flat))
-                    except Exception:
-                        pass
+                    except Exception as _swallow_e:
+                        _log_swallowed(_swallow_e)
                     time.sleep(0.4)
             fails = 0
         except Exception as e:
@@ -4025,8 +4095,8 @@ def transcribe_khmer_chunks(groq_key, audio_path, duration, speech, status):
             text = fix_khmer(" ".join(texts))
             if text:
                 out.extend(retime_by_speech([(a, b, text)], speech, duration, pad=0.0))
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
         status.write(f"៣/៤ កំពុងស្តាប់ភាសាខ្មែរ... ({i + 1}/{len(chunks)})")
         wait = 3.2 - (time.time() - t0)
         if wait > 0:
@@ -4956,8 +5026,8 @@ def label_emotions(texts, groq_key, gemini_key):
         out = _run(_via_oai)
         if out:
             return out
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
 
     if groq_key and time.time() < t_end:
         def _via_groq(p):
@@ -4971,16 +5041,16 @@ def label_emotions(texts, groq_key, gemini_key):
             out = _run(_via_groq)
             if out:
                 return out
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
 
     if gemini_key and not groq_key and time.time() < t_end:
         try:
             out = gemini_emotion_labels(gemini_key, texts)
             if out and len(out) == len(texts):
                 return out
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
     return None
 
 
@@ -5201,8 +5271,8 @@ def condense_for_slot(text, slot, client, model, groq_key):
             out = shorten_groq(groq_key, text, slot)
             if out and out != text and has_khmer(out) and len(out) < len(text):
                 return out
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     return text
 
 
@@ -6026,8 +6096,8 @@ def run_worker(job, item, settings, fonts_data):
         try:
             if item.get("path") and os.path.exists(item["path"]):
                 os.remove(item["path"])
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
         _PIPELINE_SLOTS.release()
         gc.collect()
 
@@ -6164,8 +6234,8 @@ def _fetch_one(url, on_try=None):
         if on_try:
             try:
                 on_try(attempt)
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
         folder = tempfile.mkdtemp(prefix="kac_link_")
         path = os.path.join(folder, "video.mp4")
         try:
@@ -7000,8 +7070,8 @@ def _http_probe(url, headers, payload=None, timeout=30, secret=""):
         detail = ""
         try:
             detail = e.read().decode("utf-8", "ignore")[:160].replace("\n", " ")
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
         if secret:
             detail = detail.replace(secret, "***")
         if detail and state in ("error", "bad", "limit"):
@@ -7474,8 +7544,8 @@ def _hg_admin_panel():
                                     _old_exp = _old_exp.replace(tzinfo=timezone.utc)
                                 if _old_exp > _base:
                                     _base = _old_exp
-                            except Exception:
-                                pass
+                            except Exception as _swallow_e:
+                                _log_swallowed(_swallow_e)
                             _new_exp = (_base + timedelta(days=int(_extend_days))).isoformat()
                             _hg_sb_request("PATCH", params={"id": "eq." + str(_u["id"])},
                                            payload={"expires_at": _new_exp, "is_active": True})
@@ -7880,8 +7950,8 @@ def _hg_walk_secrets():
 
     try:
         _walk(st.secrets)
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     return out
 
 
@@ -8364,8 +8434,8 @@ def _hg_fetch_cover(url):
                 try:
                     import pillow_heif
                     pillow_heif.register_heif_opener()
-                except Exception:
-                    pass
+                except Exception as _swallow_e:
+                    _log_swallowed(_swallow_e)
                 im = Image.open(io.BytesIO(data))
                 im = im.convert("RGB")
                 im.thumbnail((480, 640))
@@ -8393,8 +8463,8 @@ def _hg_show_cover(url):
         try:
             st.image(data, use_container_width=True)
             return
-        except Exception:
-            pass
+        except Exception as _swallow_e:
+            _log_swallowed(_swallow_e)
     # Server ទាញមិនបាន (ឧ. CDN រារាំង IP Server) → ឱ្យ Browser របស់អ្នកប្រើសាកទាញផ្ទាល់ (វិធីដើម)
     try:
         st.image(u, use_container_width=True)
@@ -8573,8 +8643,8 @@ def _hg_extract_series_id(value):
         match = re.search(r"/(?:detail|player|series|drama)/(\d+)", parsed.path)
         if match:
             return match.group(1)
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     # User may paste only the numeric series_id.
     if value.isdigit():
         return value
@@ -8731,8 +8801,8 @@ with tab_drama:
                 for _fn in (_hg_rank_all, _hg_category_all, _hg_search):
                     try:
                         _fn.clear()
-                    except Exception:
-                        pass
+                    except Exception as _swallow_e:
+                        _log_swallowed(_swallow_e)
                 st.rerun()
         with _hg_c2:
             st.write("")
@@ -9207,8 +9277,8 @@ def _nd_info(url):
         out["poster"] = _nd_meta(h).get("poster", "").strip()
         if re.search(r'/genre/paid-movies', h, re.I):
             out["free"] = False
-    except Exception:
-        pass
+    except Exception as _swallow_e:
+        _log_swallowed(_swallow_e)
     return out
 
 
@@ -9236,8 +9306,8 @@ def _nd_preview(media, referer=""):
             try:
                 if _v.get("path"):
                     shutil.rmtree(os.path.dirname(_v["path"]), ignore_errors=True)
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
             cache.pop(_k, None)
         with st.spinner("កំពុងរៀបចំវីដេអូសម្រាប់មើលសាកល្បង... (រង់ចាំបន្តិច)"):
             ent = _nd_clip(media, referer)
@@ -9380,8 +9450,8 @@ def _nd_sniff(url, max_eps=60):
             pg.wait_for_timeout(2500)
             try:
                 pg.get_by_text(re.compile("ទស្សនាភាគ|Watch")).first.click(timeout=3000)
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
             pg.wait_for_timeout(3500)
             if cur["hits"]:
                 found.append({"label": "ភាគ 1", "url": url, "media": cur["hits"][0], "locked": False})
@@ -9682,14 +9752,14 @@ with tab_vid:
                                 if _ssec and _dur > _ssec + 20:
                                     _np = int(-(-_dur // _ssec))
                                     _info += f" · ✂️ នឹងបំបែកជា {_np} ផ្នែក (ក្នុងមួយផ្នែក {fmt_len(_ssec)})"
-                            except Exception:
-                                pass
+                            except Exception as _swallow_e:
+                                _log_swallowed(_swallow_e)
                             st.caption(_info)
                             if _mb <= PREVIEW_MAX_MB:
                                 try:
                                     st.video(_ent["path"])
-                                except Exception:
-                                    pass
+                                except Exception as _swallow_e:
+                                    _log_swallowed(_swallow_e)
                             if _mb <= 300:
                                 with open(_ent["path"], "rb") as _fh:
                                     dl_button(f"⬇️ ទាញយកវីដេអូទី {_n}", _fh, f"video_{_n}.mp4", "video/mp4",
@@ -9836,8 +9906,8 @@ with tab_cut:
                     _info_c = f"📦 {os.path.getsize(cut_path) / (1024 * 1024):.0f}MB"
                     try:
                         _info_c += f" · ⏱ {fmt_clock(probe_media(cut_path)[0])}"
-                    except Exception:
-                        pass
+                    except Exception as _swallow_e:
+                        _log_swallowed(_swallow_e)
                     st.success("✅ រកឃើញវីដេអូហើយ · " + _info_c)
                 else:
                     st.error("រកតំណមិនឃើញទេ។ សូមសាកម្តងទៀត។")
@@ -9853,8 +9923,8 @@ with tab_cut:
             try:
                 _cd, _cw, _ch = probe_media(cut_path)
                 st.caption(f"⏱ {fmt_clock(_cd)}")
-            except Exception:
-                pass
+            except Exception as _swallow_e:
+                _log_swallowed(_swallow_e)
         _cut_opts = list(SPLIT_PRESETS.keys()) + ["✏️ កំណត់ខ្លួនឯង"]
         _cut_default = next((i for i, v in enumerate(_cut_opts) if "១ នាទី" in v or "1 នាទី" in v or "60" in v), 0)
         _cut_lbl = st.selectbox("ប្រវែងមួយផ្នែក", _cut_opts, index=_cut_default, key="cut_len_pick")
