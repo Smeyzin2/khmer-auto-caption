@@ -17,6 +17,7 @@ import tempfile
 import threading
 import statistics
 import subprocess
+import sys
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -9292,6 +9293,27 @@ def _nd_fetch(media, referer=""):
         return {"path": None, "ok": False, "err": str(e)[:400], "tries": 1}
 
 
+_PW_INSTALL_LOCK = threading.Lock()
+_PW_INSTALLED = {"done": False, "err": ""}
+
+
+def _nd_install_browser():
+    """ដំឡើង Chromium របស់ Playwright ម្តងគត់ (host ថ្មីមិនមាន browser ស្រាប់)។"""
+    with _PW_INSTALL_LOCK:
+        if _PW_INSTALLED["done"]:
+            return True
+        try:
+            r = subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"],
+                               capture_output=True, text=True, timeout=420)
+            if r.returncode == 0:
+                _PW_INSTALLED["done"] = True
+                return True
+            _PW_INSTALLED["err"] = (r.stderr or r.stdout or "")[-300:]
+        except Exception as e:
+            _PW_INSTALLED["err"] = str(e)[:300]
+        return False
+
+
 def _nd_sniff(url, max_eps=60):
     """បើកទំព័ររឿងក្នុង browser ពិត (Playwright) ហើយចាប់តំណ mp4/m3u8 ដែល player ហៅពេលចុចលេងភាគ។
     ភាគបង់ប្រាក់/ត្រូវ login នឹងមិនមាន video ដូច្នេះត្រូវរំលងដោយស្វ័យប្រវត្តិ។ ត្រូវការ: pip install playwright && playwright install chromium"""
@@ -9303,7 +9325,15 @@ def _nd_sniff(url, max_eps=60):
     pat = re.compile(r"\.(?:m3u8|mp4)(?:[?#]|$)", re.I)
     try:
         with sync_playwright() as pw:
-            br = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            try:
+                br = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            except Exception as _le:
+                if "Executable doesn't exist" in str(_le) or "playwright install" in str(_le):
+                    if not _nd_install_browser():
+                        raise RuntimeError("ដំឡើង Chromium មិនបាន: " + _PW_INSTALLED["err"])
+                    br = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+                else:
+                    raise
             pg = br.new_context(user_agent=_ND_UA, viewport={"width": 1000, "height": 800}).new_page()
             cur = {"hits": []}
 
