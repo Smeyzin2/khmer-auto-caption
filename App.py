@@ -5213,10 +5213,10 @@ VOICE_POLISH = ("highpass=f=70,"
 
 # ល្បឿនអតិបរមា ដើម្បីឱ្យសំឡេងច្បាស់ មិនលឿនពេកស្តាប់មិនទាន់ (ប្តូរបានក្នុង Secrets)
 try:
-    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.25") or 1.25)))
+    MAX_DUB_SPEEDUP = max(1.0, min(1.6, float(get_secret("MAX_DUB_SPEEDUP", "1.4") or 1.4)))
     MAX_TTS_RATE = max(0, min(60, int(get_secret("MAX_TTS_RATE", "25") or 25)))
 except Exception:
-    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.25, 25
+    MAX_DUB_SPEEDUP, MAX_TTS_RATE = 1.4, 25
 
 
 def assign_characters(dub_segments, chars, info):
@@ -5425,7 +5425,7 @@ def make_dub(folder, segments, voice, duration, keep_bg, client, model,
         cursor = max(cursor, start + d / speed + 0.02)
         target = targets[i] if (targets is not None and i < len(targets) and targets[i]) else None
         maxdur = None
-        if hard_cut and d / speed > slot * 1.04:
+        if hard_cut and d / speed > slot * 1.2:
             maxdur = slot
         plan.append({"name": f"tts_{i}.mp3", "start": start, "speed": speed, "maxdur": maxdur,
                      "voice": voices_[i], "f0": f0 if target else None, "target": target,
@@ -5971,7 +5971,7 @@ def run_worker(job, item, settings, fonts_data):
                             item["warn"].append("វិភាគអារម្មណ៍មិនបាន ប្រើសំឡេងធម្មតា។")
                     rep.write("🎙 កំពុងបង្កើតសំឡេងខ្មែរ...")
                     match_notes = []
-                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=float(settings.get("dub_offset", 0.0) or 0.0), tight=True, hard_cut=bool(settings.get("tight_sync", True)), bg_vol=settings.get("bg_vol", 0.08), seg_char=seg_char, char_bands=char_bands)
+                    dub_ok = make_dub(folder, dub_segments, settings["voice"], duration, settings["keep_bg"], client, dub_model, seg_voices=seg_voices, targets=targets, notes=match_notes, emotions=emotions, groq_key=settings["groq_key"], ref_bands=ref_bands, offset=float(settings.get("dub_offset", 0.0) or 0.0), tight=False, hard_cut=bool(settings.get("tight_sync", True)), bg_vol=settings.get("bg_vol", 0.08), seg_char=seg_char, char_bands=char_bands)
                     item["voice_lines"] = match_notes + voice_notes
                 except Exception:
                     dub_ok = False
@@ -9291,7 +9291,7 @@ with tab_vid:
             st.caption("AI បង្កើតសំឡេងខ្មែរដោយស្វ័យប្រវត្តិ")
             dub_offset = st.slider("⏱ កែពេលសំឡេងខ្មែរ (វិនាទី)", -1.0, 1.0, 0.0, 0.05, key="dub_offset_pick",
                                    help="សំឡេងមកយឺតជាងមាត់ → ទាញទៅ − (មុន) | សំឡេងមកមុនមាត់ → ទាញទៅ + (ក្រោយ)")
-            tight_sync = st.toggle("✂️ កាត់សំឡេងឱ្យចប់ត្រឹមមាត់", value=True, key="tight_sync_pick",
+            tight_sync = st.toggle("✂️ កាត់សំឡេងឱ្យចប់ត្រឹមមាត់ (អាចកាត់ពាក្យចុង)", value=False, key="tight_sync_pick",
                                    help="កាត់ស្ងាត់ដើមឃ្លា និងកាត់ចុងឃ្លាខ្មែរបើវែងលើសពេលមាត់និយាយ")
         with st.expander("🔤 កំណត់ Subtitle និងរូបរាងអក្សរ", expanded=False):
             review_on = st.toggle("✏️ ពិនិត្យអក្សរមុនបង្កើត", value=False, key="review_toggle")
