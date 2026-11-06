@@ -8687,17 +8687,26 @@ with tab_drama:
             st.write("")
             _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
         _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
+        # ប្តូរប្រភេទក្នុង selectbox → ផ្ទុកភ្លាមៗ (មិនចាំបាច់ចុច «បង្ហាញរឿង» ទៀត)
+        _hg_cat_changed = _hg_cat_choice != st.session_state.get("_hg_last_cat_choice", "🔥 កំពុងពេញនិយម")
+        st.session_state["_hg_last_cat_choice"] = _hg_cat_choice
+        if _hg_home_click:
+            st.session_state["_hg_last_cat_choice"] = "🔥 កំពុងពេញនិយម"
+        _hg_load_category = _hg_load_category or (_hg_cat_changed and not _hg_home_click and not _hg_search_click)
         if _hg_load_category:
             st.session_state["_hg_page"] = 1
             st.session_state["_hg_catalog_mode"] = ("hot" if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
                                                       else "category:" + _hg_cat_map.get(_hg_cat_choice, ""))
             st.session_state.pop("_hg_selected", None)
+            st.session_state["_hg_rows"] = []
             try:
-                with st.spinner("កំពុងទាញយករឿងតាមប្រភេទ..."):
+                with st.spinner(f"កំពុងទាញយករឿង: {_hg_cat_choice} ..."):
                     st.session_state["_hg_rows"] = (
                         _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
                         else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
                     )
+                if not st.session_state["_hg_rows"]:
+                    st.warning(f"រកមិនឃើញរឿងក្នុងប្រភេទ «{_hg_cat_choice}» ទេ។ សាកប្រភេទផ្សេង ឬពិនិត្យ Run log របស់ Actor ក្នុង Apify Console។")
             except Exception as e:
                 st.error(_hg_error_khmer(e))
         if _hg_search_click and _hg_keyword.strip():
@@ -8726,7 +8735,9 @@ with tab_drama:
                         st.info("រកមិនឃើញរឿងទេ។ សូមបិទភ្ជាប់ Link ទំព័ររឿង (…/detail?series_id=…) ឬ series_id ។ Link /player/… អាចជាលេខភាព មិនមែនលេខរឿង។")
             except Exception as e:
                 st.error(str(e))
-        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APIFY_TOKEN):
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APIFY_TOKEN
+                                and not _hg_load_category
+                                and st.session_state.get("_hg_catalog_mode", "hot") == "hot"):
             try:
                 st.session_state["_hg_page"] = 1
                 st.session_state["_hg_catalog_mode"] = "hot"
