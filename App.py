@@ -8056,7 +8056,7 @@ def _hg_normalize_row(item):
     }
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _hg_rank(page=1):
     """Fetch Hongguo hot-ranking records through the Apify listing Actor."""
     page = max(1, int(page))
@@ -8340,12 +8340,21 @@ def _hg_show_cover(url):
             return
         except Exception:
             pass
-    st.markdown(
-        '<div style="aspect-ratio:3/4;border-radius:10px;background:#1a2050;display:flex;align-items:center;'
-        'justify-content:center;font-size:34px;">🎬</div>',
-        unsafe_allow_html=True,
-    )
-    st.caption("🖼 " + str(err)[:70])
+    # Server ទាញមិនបាន (ឧ. CDN រារាំង IP Server) → ឱ្យ Browser របស់អ្នកប្រើសាកទាញផ្ទាល់ (វិធីដើម)
+    try:
+        st.image(u, use_container_width=True)
+    except Exception:
+        st.markdown(
+            '<div style="aspect-ratio:3/4;border-radius:10px;background:#1a2050;display:flex;'
+            'align-items:center;justify-content:center;font-size:34px;">🎬</div>',
+            unsafe_allow_html=True,
+        )
+    if _is_admin_session():
+        try:
+            _host = urllib.parse.urlparse(u).hostname or "?"
+        except Exception:
+            _host = "?"
+        st.caption(f"🖼 {str(err)[:30]} · {_host[:28]}")
 
 
 def _hg_enrich_rows(rows):
@@ -8379,7 +8388,7 @@ def _hg_enrich_rows(rows):
         return list(ex.map(_fix, rows))
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _hg_category_list(category, page=1):
     """Fetch a supported category listing via Apify and paginate its returned rows."""
     page = max(1, int(page))
@@ -8400,7 +8409,7 @@ def _hg_category_list(category, page=1):
     return rows[(page - 1) * 20:page * 20]
 
 
-@st.cache_data(ttl=21600, show_spinner=False)
+@st.cache_data(ttl=3600, show_spinner=False)
 def _hg_search(keyword, page=1):
     items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
     rows = [_hg_normalize_row(x) for x in items]
