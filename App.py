@@ -8004,14 +8004,25 @@ def _hg_shared_store():
 _HG_APP_ID = _hg_shared_store().get("app_id") or _hg_secret("XIAOYING_APPID", "APPID", "HONGGUO_APPID")
 _HG_APP_SECRET = _hg_shared_store().get("app_secret") or _hg_secret("XIAOYING_APPSECRET", "APPSECRET", "HONGGUO_APPSECRET")
 _HG_API_READY = bool(_HG_APP_ID and _HG_APP_SECRET)
+
+
+def _hg_ready():
+    ss = st.session_state
+    return bool(_HG_API_READY or (ss.get("user_hg_app_id") and ss.get("user_hg_app_secret")))
 _HG_API_BASE = "https://www.xiaoyingapi.com"
 
 
 def _hg_signed_params(biz=None, method="GET", path=""):
     """Build XiaoYingAPI HMAC-SHA256 auth params per its integration guide."""
     import hashlib, hmac, secrets as _secrets
-    app_id = str(_HG_APP_ID or st.session_state.get("user_hg_app_id") or "").strip()
-    app_secret = str(_HG_APP_SECRET or st.session_state.get("user_hg_app_secret") or "").strip()
+    def _clean(v):
+        v = str(v or "")
+        for ch in ("\u200b", "\u200c", "\u200d", "\ufeff", "\xa0", "\n", "\r", "\t", " ", '"', "'"):
+            v = v.replace(ch, "")
+        return v
+    # លំដាប់៖ Key ផ្ទាល់ខ្លួនរបស់អ្នកប្រើ → Admin store/Secrets
+    app_id = _clean(st.session_state.get("user_hg_app_id") or _HG_APP_ID)
+    app_secret = _clean(st.session_state.get("user_hg_app_secret") or _HG_APP_SECRET)
     if not app_id or not app_secret:
         raise RuntimeError("មិនទាន់កំណត់ XiaoYingAPI APPID និង APPSECRET ក្នុង Streamlit Secrets ទេ។")
     params = {str(k): v for k, v in dict(biz or {}).items() if v is not None and v != ""}
@@ -8520,7 +8531,7 @@ def _hg_guest_preview():
         _hg_no_vip_dialog()
 
     rows = ss.get("_hgg_rows")
-    if rows is None and _HG_API_READY:
+    if rows is None and _hg_ready():
         try:
             rows = _hg_guest_hot()
         except Exception:
@@ -8551,7 +8562,7 @@ with tab_drama:
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
         if _is_admin_session():
           with st.expander("🔑 Admin: ដាក់ API Key របស់ Hongguo (ប្រើបានសម្រាប់អ្នកប្រើគ្រប់គ្នា)",
-                         expanded=not _HG_API_READY):
+                         expanded=not _hg_ready()):
             _hg_st = _hg_shared_store()
             st.caption("Key ដែលរក្សាទុកនៅទីនេះ ប្រើបានសម្រាប់អ្នកប្រើទាំងអស់ ហើយមិនបង្ហាញដល់អ្នកផ្សេងទេ។ "
                        "⚠️ វារក្សាក្នុង memory របស់ server — បើ App Restart/Reboot ត្រូវដាក់ម្តងទៀត។ "
@@ -8568,11 +8579,30 @@ with tab_drama:
                 _hg_st["app_id"] = (_hg_in_id or "").strip()
                 _hg_st["app_secret"] = (_hg_in_sec or "").strip()
                 st.rerun()
-        if not _HG_API_READY:
+        with st.expander("🔑 ដាក់ APPID / APPSECRET ផ្ទាល់ខ្លួន (XiaoYingAPI)", expanded=bool(not _hg_ready())):
+            _u_id = st.text_input("APPID (ចាប់ផ្តើមដោយ app_)", key="hg_user_appid_in",
+                                  value=st.session_state.get("user_hg_app_id", ""))
+            _u_sec = st.text_input("APPSECRET (ចាប់ផ្តើមដោយ sk_)", key="hg_user_secret_in", type="password",
+                                   value=st.session_state.get("user_hg_app_secret", ""))
+            _uc1, _uc2 = st.columns(2)
+            if _uc1.button("💾 រក្សាទុក", key="hg_user_save", use_container_width=True):
+                st.session_state["user_hg_app_id"] = (_u_id or "").strip()
+                st.session_state["user_hg_app_secret"] = (_u_sec or "").strip()
+                st.session_state.pop("_hg_rows", None)
+                st.rerun()
+            if _uc2.button("🧪 តេស្តការតភ្ជាប់", key="hg_user_test", use_container_width=True):
+                try:
+                    _t = _hg_api("rank", {"type": "hot-drama", "page": 1})
+                    st.success("✅ APPID/APPSECRET ត្រឹមត្រូវ ភ្ជាប់បានហើយ")
+                except Exception as _te:
+                    st.error(str(_te))
+                    _cid = str(st.session_state.get("user_hg_app_id") or _HG_APP_ID or "")
+                    st.caption(f"APPID ដែលកំពុងប្រើ៖ {_cid[:8]}…{_cid[-4:]} (ប្រវែង {len(_cid)}) — ត្រូវតែ 'app_' + 28 តួ = 32")
+        if not _hg_ready():
             st.warning("មិនទាន់កំណត់ XiaoYingAPI APPID និង APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin បន្ថែមព័ត៌មាន API ដើម្បីប្រើ Hongguo។")
             if _is_admin_session():
                 with st.expander("🔧 Admin: មើលមូលហេតុ (មិនបង្ហាញតម្លៃ Secret)"):
-                    st.write("XiaoYingAPI APPID/APPSECRET រកឃើញ:", "✅" if _HG_API_READY else "❌")
+                    st.write("XiaoYingAPI APPID/APPSECRET រកឃើញ:", "✅" if _hg_ready() else "❌")
                     _names = _hg_secret_key_names()
                     st.write("ឈ្មោះ key ដែលកម្មវិធីឃើញក្នុង Secrets:", ", ".join(_names) if _names else "(គ្មានសោះ)")
                     st.caption("ឈ្មោះដែលទទួល៖ XIAOYING_APPID / APPID / HONGGUO_APPID និង XIAOYING_APPSECRET / APPSECRET / HONGGUO_APPSECRET។ ត្រូវដាក់នៅផ្នែកខាងលើបំផុតនៃ Secrets មុនបន្ទាត់ [section] ណាមួយ។")
@@ -8591,7 +8621,7 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_cat_list_data = _HG_CAT_FN() if _HG_API_READY else []
+                _hg_cat_list_data = _HG_CAT_FN() if _hg_ready() else []
             except Exception as _cat_err:
                 _hg_cat_list_data = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
@@ -8664,7 +8694,7 @@ with tab_drama:
                         st.info("រកមិនឃើញរឿងទេ។ សូមបិទភ្ជាប់ Link ទំព័ររឿង (…/detail?series_id=…) ឬ series_id ។ Link /player/… អាចជាលេខភាព មិនមែនលេខរឿង។")
             except Exception as e:
                 st.error(str(e))
-        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_API_READY
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _hg_ready()
                                 and not _hg_load_category
                                 and st.session_state.get("_hg_catalog_mode", "hot") == "hot"):
             try:
