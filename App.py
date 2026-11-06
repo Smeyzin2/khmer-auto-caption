@@ -9118,22 +9118,38 @@ def _nd_catalog(path, page=1):
         if did in seen:
             continue
         poster = ""
-        # 1) poster ឈ្មោះមាន id រឿង (/uploads/posters/d-xxxx-poster_...)
-        pm = re.search(r'/uploads/posters/' + re.escape(did) + r'[^\s"\'<>()\\]*', html)
+        _inner = inner.replace("&amp;", "&")
+        # 1) poster ឈ្មោះមាន id រឿង (ក្នុងកាតខ្លួនឯងមុន)
+        pm = re.search(r'/uploads/posters/' + re.escape(did) + r'[^\s"\'<>()\\,]*', html)
         if pm:
             poster = pm.group(0)
-        # 2) img/srcset/background នៅក្នុងកាត
+        # 2) img: src / data-src / data-lazy-src / data-original / srcset / background-image (តែក្នុងកាតនេះ)
         if not poster:
-            for blob in (inner, html[max(0, m.start() - 1200):m.start()], html[m.end():m.end() + 600]):
-                for im in _img_pat.finditer(blob.replace("&amp;", "&")):
-                    u = im.group(0)
-                    if "logo" in u.lower() or "banner" in u.lower() or "icon" in u.lower():
+            for _im in re.finditer(r'<img\b[^>]*>', _inner, re.I):
+                _tag = _im.group(0)
+                for _attr in ("data-src", "data-lazy-src", "data-original", "data-lazy", "src", "data-srcset", "srcset"):
+                    _am = re.search(r'\b' + _attr + r'\s*=\s*["\']([^"\']+)["\']', _tag, re.I)
+                    if not _am:
                         continue
-                    poster = u
-                    if blob is inner:
-                        break
+                    _u = _am.group(1).strip().split(",")[0].strip().split(" ")[0]
+                    if not _u or _u.startswith("data:") or re.search(r"(logo|banner|icon|placeholder|blank|spacer)", _u, re.I):
+                        continue
+                    poster = _u
+                    break
                 if poster:
                     break
+        if not poster:
+            _bg = re.search(r'url\(\s*["\']?([^"\')\s]+)', _inner, re.I)
+            if _bg and not _bg.group(1).startswith("data:"):
+                poster = _bg.group(1)
+        if not poster:
+            for im in _img_pat.finditer(_inner):
+                u = im.group(0)
+                if re.search(r"(logo|banner|icon)", u, re.I):
+                    continue
+                poster = u
+                break
+        _card_locked = bool(re.search(r"(🔒|lock|\bvip\b|premium|paid|coin|បង់ប្រាក់|កាក់)", inner, re.I))
         al = re.search(r'<img[^>]+alt=["\']([^"\']*)["\']', inner, re.I)
         txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", inner)).strip()
         title = (al.group(1) if al and al.group(1).strip() else txt)
@@ -9152,6 +9168,47 @@ def _nd_catalog(path, page=1):
             gs.add(m.group(1))
             genres.append((lab[:30], m.group(1)))
     return {"items": items, "genres": genres}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _nd_info(url):
+    """ពិនិត្យរឿងមួយ៖ poster (og:image) និងថាមានភាគឥតគិតថ្លៃឬអត់ (រឿងមានសោ = free False)។"""
+    out = {"poster": "", "free": False}
+    try:
+        res = _nd_scan(url)
+        out["poster"] = (res["meta"].get("poster") or "").strip()
+        if res["page_media"]:
+            out["free"] = True
+            return out
+        _n = 0
+        for e in res["eps"]:
+            if e.get("locked"):
+                continue
+            _n += 1
+            if _nd_probe_free(e):
+                out["free"] = True
+                break
+            if _n >= 3:
+                break
+    except Exception:
+        out["free"] = True  # បើពិនិត្យមិនបាន កុំលាក់ចោល
+    return out
+
+
+def _nd_enrich(items):
+    """បំពេញ poster ដែលបាត់ + ដកចេញរឿងមានសោ។"""
+    from concurrent.futures import ThreadPoolExecutor
+    items = [x for x in items if not x.get("card_locked")]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        infos = list(ex.map(lambda x: _nd_info(x["url"]), items))
+    res = []
+    for it, inf in zip(items, infos):
+        if not inf["free"]:
+            continue
+        if not it["poster"].startswith(("http://", "https://")) and inf["poster"].startswith(("http://", "https://")):
+            it["poster"] = inf["poster"]
+        res.append(it)
+    return res
 
 
 def _nd_open(url):
@@ -9200,7 +9257,9 @@ with tab_free:
                 st.warning(f"ទាញបញ្ជីរឿងមិនបាន៖ {_ex}")
             _nd_filter = st.text_input("🔎 ស្វែងរកឈ្មោះរឿង", key="nd_filter", placeholder="វាយឈ្មោះរឿង...")
             if _nd_data and _nd_data["items"]:
-                _nd_items = [x for x in _nd_data["items"] if not _nd_filter or _nd_filter.lower() in x["title"].lower()]
+                with st.spinner("កំពុងរៀបចំ poster និងរឿងឥតគិតថ្លៃ..."):
+                    _nd_all = _nd_enrich([dict(x) for x in _nd_data["items"]])
+                _nd_items = [x for x in _nd_all if not _nd_filter or _nd_filter.lower() in x["title"].lower()]
                 for _row in range(0, len(_nd_items), 3):
                     _cols = st.columns(3, gap="small")
                     for _c, _it in zip(_cols, _nd_items[_row:_row + 3]):
@@ -9214,6 +9273,8 @@ with tab_free:
                                         _nd_open(_it["url"])
                                     except Exception as _ex:
                                         st.error(f"បើករឿងមិនបាន៖ {_ex}")
+                if not _nd_items:
+                    st.info("មិនមានរឿងឥតគិតថ្លៃដែលត្រូវនឹងការស្វែងរកទេ។")
                 _pc1, _pc2 = st.columns(2, gap="small")
                 with _pc1:
                     if st.button("⬅️ មុន", key="nd_prev", use_container_width=True, disabled=(_nd_page <= 1)):
