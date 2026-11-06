@@ -7920,13 +7920,13 @@ _HG_ACTOR_PLAY = _hg_secret(
 _HG_ACTOR_FEED = "bovi~hongguo-scraper"
 
 
-def _hg_apify_actor(actor_id, actor_input, timeout=180):
-    if not _HG_APIFY_TOKEN:
+def _hg_apify_actor_one(token, actor_id, actor_input, timeout=180):
+    if not token:
         raise RuntimeError("មិនទាន់កំណត់ APIFY_API_TOKEN ក្នុង Streamlit Secrets ទេ។")
     url = f"{_HG_APIFY_BASE}/{actor_id}/run-sync-get-dataset-items"
     try:
         response = requests.post(
-            url, params={"token": _HG_APIFY_TOKEN}, json=actor_input, timeout=timeout,
+            url, params={"token": token}, json=actor_input, timeout=timeout,
             headers={"Accept": "application/json", "Content-Type": "application/json",
                      "User-Agent": "KhmerVideoAI/1.0"}
         )
@@ -7961,6 +7961,36 @@ def _hg_apify_actor(actor_id, actor_input, timeout=180):
             raise RuntimeError(f"Apify Actor error: {result.get('error')}")
         raise RuntimeError("Apify Actor មិនបានត្រឡប់បញ្ជីលទ្ធផលទេ។")
     return result
+
+
+_APIFY_DEAD = {}   # token -> ម៉ោងដែលអាចសាកវិញ
+_APIFY_LOCK = threading.Lock()
+_APIFY_KEY_ERRORS = ("HTTP 401", "HTTP 402", "HTTP 403", "HTTP 429", "usage", "limit", "credit", "quota")
+
+
+def _hg_apify_actor(actor_id, actor_input, timeout=180):
+    """Apify ដាក់បានច្រើន Token (APIFY_API_TOKEN ជាបញ្ជី បំបែកដោយបន្ទាត់/ក្បៀស)។
+    Token មួយអស់ credit/Limit → ប្តូរទៅ Token បន្ទាប់ស្វ័យប្រវត្តិ។"""
+    keys = split_keys(_HG_APIFY_TOKEN)
+    if not keys:
+        raise RuntimeError("មិនទាន់កំណត់ APIFY_API_TOKEN ក្នុង Streamlit Secrets ទេ។")
+    now = time.time()
+    with _APIFY_LOCK:
+        ready = [k for k in keys if _APIFY_DEAD.get(k, 0) <= now]
+        cooling = sorted([k for k in keys if _APIFY_DEAD.get(k, 0) > now], key=lambda k: _APIFY_DEAD[k])
+    last = None
+    for k in ready + cooling:
+        try:
+            return _hg_apify_actor_one(k, actor_id, actor_input, timeout)
+        except RuntimeError as e:
+            last = e
+            msg = str(e)
+            if len(keys) > 1 and any(x in msg for x in _APIFY_KEY_ERRORS) and "HTTP 400" not in msg and "HTTP 404" not in msg:
+                with _APIFY_LOCK:
+                    _APIFY_DEAD[k] = time.time() + 1800   # พัก Token នេះ ៣០ នាទី
+                continue
+            raise
+    raise last or RuntimeError("Apify មិនអាចប្រើបាន។")
 
 
 def _hg_normalize_row(item):
