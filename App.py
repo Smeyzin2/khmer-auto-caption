@@ -9094,11 +9094,11 @@ def _nd_free_media(res):
 
 _ND_BASE = "https://neatidrama.com"
 _ND_CATS = {
-    "🔥 ពេញនិយម": "/neatidrama?sort=popular",
-    "🆕 ថ្មីៗ": "/neatidrama?sort=updated",
-    "✅ ចប់ហើយ": "/neatidrama?status=completed",
-    "⏳ ឆាប់ៗនេះ": "/neatidrama?status=upcoming",
-    "📚 ទាំងអស់": "/neatidrama",
+    "🎁 ឥតគិតថ្លៃ — ទើបអាប់ដេត": "/neatidrama?sort=latest&genre=free-movies&access=free",
+    "🇰🇭 ឥតគិតថ្លៃ — និយាយខ្មែរ": "/neatidrama?sort=latest&audio=Khmer+Dub&genre=free-movies&access=free",
+    "🔥 ឥតគិតថ្លៃ — ពេញនិយម": "/neatidrama?sort=popular&genre=free-movies&access=free",
+    "⭐ ឥតគិតថ្លៃ — ពិន្ទុខ្ពស់": "/neatidrama?sort=rating&genre=free-movies&access=free",
+    "✅ ឥតគិតថ្លៃ — ចប់បរិបូណ៌": "/neatidrama?status=completed&sort=latest&genre=free-movies&access=free",
 }
 
 
@@ -9106,6 +9106,7 @@ _ND_CATS = {
 def _nd_catalog(path, page=1):
     """ទាញបញ្ជីរឿង (poster + ចំណងជើង) និងប្រភេទ (genre) ពីទំព័រកាតាឡុក។"""
     url = path if path.startswith("http") else _ND_BASE + path
+    url = re.sub(r"([?&])page=\d+&?", r"\1", url).rstrip("?&")
     if page > 1:
         url += ("&" if "?" in url else "?") + f"page={page}"
     r = requests.get(url, headers={"User-Agent": _ND_UA}, timeout=20)
@@ -9115,7 +9116,7 @@ def _nd_catalog(path, page=1):
     _img_pat = re.compile(r'(?:https?:)?//[^\s"\'<>()\\]+?\.(?:webp|jpe?g|png)|/uploads/[^\s"\'<>()\\]+?\.(?:webp|jpe?g|png)', re.I)
     _by = {}
     _order = []
-    for m in re.finditer(r'<a[^>]+href=[\"\']([^\"\']*?/neatidrama/(d-[\w-]+))[^\"\']*[\"\'][^>]*>(.*?)</a>', html, re.I | re.S):
+    for m in re.finditer(r'<a[^>]+href=[\"\']([^\"\']*?/neatidrama/([A-Za-z0-9][\w-]*))[\"\'?#][^>]*>(.*?)</a>', html, re.I | re.S):
         _did = m.group(2)
         if _did not in _by:
             _by[_did] = {"inner": "", "pos": m.start(), "end": m.end()}
@@ -9156,7 +9157,7 @@ def _nd_catalog(path, page=1):
                     continue
                 poster = u
                 break
-        _card_locked = bool(re.search(r"(🔒|lock|\bvip\b|premium|paid|coin|បង់ប្រាក់|កាក់)", inner, re.I))
+        _card_locked = False
         al = re.search(r'<img[^>]+alt=["\']([^"\']*)["\']', inner, re.I)
         txt = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", inner)).strip()
         title = (al.group(1) if al and al.group(1).strip() else txt)
@@ -9169,48 +9170,36 @@ def _nd_catalog(path, page=1):
                       "exclusive": bool(re.search(r"exclusive", inner, re.I)),
                       "card_locked": _card_locked})
     genres, gs = [], set()
-    for m in re.finditer(r'<a[^>]+href=["\']([^"\']*?/genre/[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
-        lab = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(2))).strip()
-        if lab and m.group(1) not in gs:
-            gs.add(m.group(1))
-            genres.append((lab[:30], m.group(1)))
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']*?neatidrama\?[^"\']*?genre=([^&"\']+)[^"\']*)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
+        href = m.group(1).replace("&amp;", "&")
+        slug = m.group(2)
+        lab = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(3))).strip()
+        if not lab or slug in gs or slug in ("paid-movies", "free-movies"):
+            continue
+        gs.add(slug)
+        if "access=free" not in href:
+            href += "&access=free"
+        genres.append((lab[:30], href))
     return {"items": items, "genres": genres}
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def _nd_info(url):
-    """ពិនិត្យរឿងមួយ៖ poster (og:image) និងថាមានភាគឥតគិតថ្លៃឬអត់ (រឿងមានសោ = free False)។"""
-    out = {"poster": "", "free": False}
+    """ពិនិត្យទំព័ររឿង៖ poster (og:image) និងថាជា "Paid Movies" ឬអត់ (រឿងបង់ប្រាក់ = free False)។"""
+    out = {"poster": "", "free": True}
     try:
-        res = _nd_scan(url)
-        out["poster"] = (res["meta"].get("poster") or "").strip()
-        if not out["poster"]:
-            _h = requests.get(url, headers={"User-Agent": _ND_UA}, timeout=20).text[:1_500_000]
-            _pm = re.search(r'(?:https?:)?//[^\s"\'<>()\\]+?/uploads/posters/[^\s"\'<>()\\]+|/uploads/posters/[^\s"\'<>()\\]+', _h)
-            if _pm:
-                out["poster"] = requests.compat.urljoin(url, _pm.group(0))
-        if res["page_media"]:
-            out["free"] = True
-            return out
-        _n = 0
-        for e in res["eps"]:
-            if e.get("locked"):
-                continue
-            _n += 1
-            if _nd_probe_free(e):
-                out["free"] = True
-                break
-            if _n >= 3:
-                break
+        h = requests.get(url, headers={"User-Agent": _ND_UA}, timeout=20).text[:1_500_000]
+        out["poster"] = _nd_meta(h).get("poster", "").strip()
+        if re.search(r'/genre/paid-movies', h, re.I):
+            out["free"] = False
     except Exception:
-        out["free"] = True  # បើពិនិត្យមិនបាន កុំលាក់ចោល
+        pass
     return out
 
 
 def _nd_enrich(items):
-    """បំពេញ poster ដែលបាត់ + ដកចេញរឿងមានសោ។"""
+    """បំពេញ poster ដែលបាត់ ហើយដកចេញរឿងដែលដាក់ប្រភេទ Paid Movies (ស្របគ្នា ៨ រឿង)។"""
     from concurrent.futures import ThreadPoolExecutor
-    items = [x for x in items if not x.get("card_locked")]
     with ThreadPoolExecutor(max_workers=8) as ex:
         infos = list(ex.map(lambda x: _nd_info(x["url"]), items))
     res = []
@@ -9218,10 +9207,9 @@ def _nd_enrich(items):
         if not inf["free"]:
             continue
         if not it["poster"].startswith(("http://", "https://")) and inf["poster"].startswith(("http://", "https://")):
-            it["poster"] = inf["poster"]
+            it["poster"] = requests.compat.urljoin(it["url"], inf["poster"])
         res.append(it)
     return res
-
 
 def _nd_preview(media):
     """ចាក់សាកល្បង៖ mp4 → st.video · m3u8 → hls.js (browser ភាគច្រើនមិនចាក់ m3u8 ផ្ទាល់)។"""
@@ -9236,6 +9224,58 @@ if(window.Hls&&Hls.isSupported()){{var h=new Hls();h.loadSource(u);h.attachMedia
 else{{v.src=u;}}</script>""", height=330)
     else:
         st.video(media)
+
+
+def _nd_headers(referer=""):
+    ref = referer or (_ND_BASE + "/")
+    return {"User-Agent": _ND_UA, "Referer": ref, "Origin": _ND_BASE, "Accept": "*/*"}
+
+
+def _nd_diag(media, referer=""):
+    """ពិនិត្យតំណវីដេអូ៖ HTTP status, ប្រភេទ, ទំហំ (ដើម្បីដឹងមូលហេតុពិត)។"""
+    try:
+        r = requests.get(media, headers=_nd_headers(referer), stream=True, timeout=20, allow_redirects=True)
+        info = f"HTTP {r.status_code} · {r.headers.get('Content-Type', '?')} · {r.headers.get('Content-Length', '?')} bytes"
+        r.close()
+        return info
+    except Exception as e:
+        return "ភ្ជាប់មិនបាន: " + type(e).__name__ + " " + str(e)[:150]
+
+
+def _nd_fetch(media, referer=""):
+    """ទាញវីដេអូឥតគិតថ្លៃ ដោយផ្ញើ Referer/Origin របស់ site (ដោះស្រាយ hotlink 403) និងគាំទ្រ m3u8។"""
+    limit = MAX_DOWNLOAD_MB * 1024 * 1024
+    folder = tempfile.mkdtemp(prefix="kac_free_")
+    path = os.path.join(folder, "video.mp4")
+    try:
+        if re.search(r"\.m3u8", media, re.I):
+            import subprocess
+            hdr = f"Referer: {referer or _ND_BASE + '/'}\r\nUser-Agent: {_ND_UA}\r\n"
+            cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-headers", hdr,
+                   "-i", media, "-c", "copy", "-bsf:a", "aac_adtstoasc", "-fs", str(limit), path]
+            pr = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            if pr.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) < 1000:
+                raise RuntimeError("ffmpeg: " + (pr.stderr or "")[-300:])
+        else:
+            with requests.get(media, headers=_nd_headers(referer), stream=True, timeout=30) as r:
+                if r.status_code >= 400:
+                    raise RuntimeError(f"HTTP {r.status_code}")
+                ct = (r.headers.get("Content-Type") or "").lower()
+                if "text/html" in ct:
+                    raise RuntimeError("តំណនេះជាទំព័រ HTML មិនមែនវីដេអូទេ")
+                done = 0
+                with open(path, "wb") as f:
+                    for ch in r.iter_content(1024 * 1024):
+                        f.write(ch)
+                        done += len(ch)
+                        if done > limit:
+                            raise RuntimeError(f"វីដេអូធំជាង {MAX_DOWNLOAD_MB}MB")
+            if os.path.getsize(path) < 1000:
+                raise RuntimeError("ឯកសារតូចពេក (មិនមែនវីដេអូ)")
+        return {"path": path, "ok": True, "tries": 1}
+    except Exception as e:
+        shutil.rmtree(folder, ignore_errors=True)
+        return {"path": None, "ok": False, "err": str(e)[:400], "tries": 1}
 
 
 def _nd_open(url):
@@ -9357,20 +9397,30 @@ with tab_free:
                         _nd_preview(_nd_free[_nd_labels.index(_nd_prev)]["media"])
                     except Exception:
                         st.caption("ចាក់ក្នុងកម្មវិធីមិនបាន — សាកទាញយកជំនួស។")
+                    _pv = _nd_free[_nd_labels.index(_nd_prev)]
+                    st.caption("🔗 " + _pv["media"])
                     if st.button("📥 ទាញមកម៉ាស៊ីនមេរួចចាក់មើល", key="nd_prev_dl", use_container_width=True, disabled=busy):
                         with st.spinner("កំពុងទាញ..."):
-                            _pr = _fetch_one(_nd_free[_nd_labels.index(_nd_prev)]["media"])
-                        if _pr.get("ok") and _pr.get("path") and os.path.isfile(_pr["path"]):
+                            _pr = _nd_fetch(_pv["media"], _pv.get("url", ""))
+                        if _pr.get("ok"):
                             with open(_pr["path"], "rb") as _pf:
                                 st.video(_pf.read())
                             shutil.rmtree(os.path.dirname(_pr["path"]), ignore_errors=True)
                         else:
-                            st.error("ទាញមិនបាន៖ " + str(_pr.get("err") or "មិនស្គាល់ហេតុផល"))
+                            st.error("ទាញមិនបាន៖ " + str(_pr.get("err")))
+                            st.code(_nd_diag(_pv["media"], _pv.get("url", "")))
                     _nd_cap_col, _nd_zip_col = st.columns(2, gap="small")
                     with _nd_cap_col:
                         if st.button("✨ បញ្ជូនទៅ Khmer Auto Caption", key="nd_to_caption", type="primary",
                                      use_container_width=True, disabled=not _nd_sel):
                             _urls = [e["media"] for e in _nd_sel]
+                            _lc = st.session_state.setdefault("link_cache", {})
+                            for _e in _nd_sel:
+                                if _e["media"] not in _lc:
+                                    with st.spinner("កំពុងទាញ " + _e["label"]):
+                                        _rr = _nd_fetch(_e["media"], _e.get("url", ""))
+                                    if _rr.get("ok"):
+                                        _lc[_e["media"]] = _rr
                             st.session_state["mode_pick"] = "🔗 Link"
                             st.session_state["link_text_area"] = "\n".join(_urls)
                             st.session_state["link_searched"] = _urls
@@ -9391,7 +9441,7 @@ with tab_free:
                             for _i, _e in enumerate(_nd_sel, start=1):
                                 _tmp = None
                                 try:
-                                    _fr = _fetch_one(_e["media"])
+                                    _fr = _nd_fetch(_e["media"], _e.get("url", ""))
                                     if not _fr.get("ok") or not _fr.get("path"):
                                         raise RuntimeError(_fr.get("err") or "ទាញយកមិនបាន")
                                     _tmp = _fr["path"]
