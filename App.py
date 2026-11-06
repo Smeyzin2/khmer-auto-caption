@@ -8003,6 +8003,7 @@ def _hg_shared_store():
 
 _HG_APP_ID = _hg_shared_store().get("app_id") or _hg_secret("XIAOYING_APPID", "APPID", "HONGGUO_APPID")
 _HG_APP_SECRET = _hg_shared_store().get("app_secret") or _hg_secret("XIAOYING_APPSECRET", "APPSECRET", "HONGGUO_APPSECRET")
+_HG_API_READY = bool(_HG_APP_ID and _HG_APP_SECRET)
 _HG_API_BASE = "https://www.xiaoyingapi.com"
 
 
@@ -8519,7 +8520,7 @@ def _hg_guest_preview():
         _hg_no_vip_dialog()
 
     rows = ss.get("_hgg_rows")
-    if rows is None and _HG_APIFY_TOKEN:
+    if rows is None and _HG_API_READY:
         try:
             rows = _hg_guest_hot()
         except Exception:
@@ -8550,15 +8551,15 @@ with tab_drama:
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
         if _is_admin_session():
           with st.expander("🔑 Admin: ដាក់ API Key របស់ Hongguo (ប្រើបានសម្រាប់អ្នកប្រើគ្រប់គ្នា)",
-                         expanded=not _HG_APIFY_TOKEN):
+                         expanded=not _HG_API_READY):
             _hg_st = _hg_shared_store()
             st.caption("Key ដែលរក្សាទុកនៅទីនេះ ប្រើបានសម្រាប់អ្នកប្រើទាំងអស់ ហើយមិនបង្ហាញដល់អ្នកផ្សេងទេ។ "
                        "⚠️ វារក្សាក្នុង memory របស់ server — បើ App Restart/Reboot ត្រូវដាក់ម្តងទៀត។ "
                        "ចង់ឱ្យនៅអចិន្ត្រៃយ៍ សូមដាក់ក្នុង Streamlit Secrets ដូចគ្នា។")
             st.caption("Hongguo ពេលនេះដំណើរការតាម **Apify Token** (ដាក់ច្រើនបាន មួយបន្ទាត់មួយ Token)។ "
                        "APPID/APPSECRET ត្រូវបានរក្សាទុក តែ backend មិនទាន់ប្រើទេ។")
-            _hg_in_tok = st.text_area("Apify API Token", key="hg_admin_apify", height=80,
-                                      placeholder="apify_api_xxxxxxxx", value=_hg_st.get("apify", ""))
+            _hg_in_tok = st.text_area("XiaoYingAPI API credentials", key="hg_admin_apify", height=80,
+                                      placeholder="APPID / APPSECRET", value=_hg_st.get("apify", ""))
             _hg_in_id = st.text_input("APPID", key="hg_admin_appid", value=_hg_st.get("app_id", ""))
             _hg_in_sec = st.text_input("APPSECRET", key="hg_admin_appsecret", type="password",
                                        value=_hg_st.get("app_secret", ""))
@@ -8567,11 +8568,11 @@ with tab_drama:
                 _hg_st["app_id"] = (_hg_in_id or "").strip()
                 _hg_st["app_secret"] = (_hg_in_sec or "").strip()
                 st.rerun()
-        if not _HG_APIFY_TOKEN:
-            st.warning("មិនទាន់កំណត់ APIFY_API_TOKEN ក្នុង Streamlit Secrets ទេ។ សូម Admin បន្ថែម Apify API Token ដើម្បីប្រើ Hongguo។")
+        if not _HG_API_READY:
+            st.warning("មិនទាន់កំណត់ XiaoYingAPI APPID និង APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin បន្ថែមព័ត៌មាន API ដើម្បីប្រើ Hongguo។")
             if _is_admin_session():
                 with st.expander("🔧 Admin: មើលមូលហេតុ (មិនបង្ហាញតម្លៃ Secret)"):
-                    st.write("Apify API Token រកឃើញ:", "✅" if _HG_APIFY_TOKEN else "❌")
+                    st.write("XiaoYingAPI APPID/APPSECRET រកឃើញ:", "✅" if _HG_API_READY else "❌")
                     _names = _hg_secret_key_names()
                     st.write("ឈ្មោះ key ដែលកម្មវិធីឃើញក្នុង Secrets:", ", ".join(_names) if _names else "(គ្មានសោះ)")
                     st.caption("ឈ្មោះដែលទទួល៖ XIAOYING_APPID / APPID / HONGGUO_APPID និង XIAOYING_APPSECRET / APPSECRET / HONGGUO_APPSECRET។ ត្រូវដាក់នៅផ្នែកខាងលើបំផុតនៃ Secrets មុនបន្ទាត់ [section] ណាមួយ។")
@@ -8590,7 +8591,7 @@ with tab_drama:
         _hg_c1, _hg_c2 = st.columns([3, 1])
         with _hg_c1:
             try:
-                _hg_cat_list_data = _HG_CAT_FN() if _HG_APIFY_TOKEN else []
+                _hg_cat_list_data = _HG_CAT_FN() if _HG_API_READY else []
             except Exception as _cat_err:
                 _hg_cat_list_data = []
                 st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
@@ -8663,7 +8664,7 @@ with tab_drama:
                         st.info("រកមិនឃើញរឿងទេ។ សូមបិទភ្ជាប់ Link ទំព័ររឿង (…/detail?series_id=…) ឬ series_id ។ Link /player/… អាចជាលេខភាព មិនមែនលេខរឿង។")
             except Exception as e:
                 st.error(str(e))
-        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APIFY_TOKEN
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_API_READY
                                 and not _hg_load_category
                                 and st.session_state.get("_hg_catalog_mode", "hot") == "hot"):
             try:
