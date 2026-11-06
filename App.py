@@ -6961,9 +6961,10 @@ def _ls_persist():
               "base": ss.get("user_claude_base", "https://api.laalaa.me"),
               "model": ss.get("user_claude_model", "claude-sonnet-5-5")}
     hongguo = {"app_id": ss.get("user_hg_app_id", ""),
-               "app_secret": ss.get("user_hg_app_secret", "")}
+               "app_secret": ss.get("user_hg_app_secret", ""),
+               "apify_token": ss.get("user_hg_apify", "")}
     gemini = {"key": ss.get("user_gemini_key", ""), "model": ss.get("user_gemini_model", "")}
-    if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"] or gemini["key"] or hongguo["app_id"] or hongguo["app_secret"]):
+    if not ss.get("remember_keys", True) or not (groq or oai["key"] or claude["keys"] or gemini["key"] or hongguo["app_id"] or hongguo["app_secret"] or hongguo["apify_token"]):
         payload = ""
     else:
         payload = json.dumps({"groq": groq, "oai": oai, "claude": claude, "hongguo": hongguo, "gemini": gemini})
@@ -7017,6 +7018,8 @@ def ls_sync():
             st.session_state["user_hg_app_id"] = str(hg.get("app_id")).strip()
         if hg.get("app_secret") and not st.session_state.get("user_hg_app_secret"):
             st.session_state["user_hg_app_secret"] = str(hg.get("app_secret")).strip()
+        if hg.get("apify_token") and not st.session_state.get("user_hg_apify"):
+            st.session_state["user_hg_apify"] = str(hg.get("apify_token")).strip()
 
 
 def has_user_keys():
@@ -7163,6 +7166,7 @@ def user_key_box():
         st.session_state.pop("user_gemini_input", None)
         st.session_state.pop("user_hg_app_id_input", None)
         st.session_state.pop("user_hg_app_secret_input", None)
+        st.session_state.pop("user_hg_apify_input", None)
     with st.container(border=True):
         st.markdown("**🔑 API Key ផ្ទាល់ខ្លួន (ដាក់បានច្រើន Key)**")
         st.caption("បើ API របស់កម្មវិធីអស់កូតា ឬបរាជ័យ សូមដាក់ Groq Key សម្រាប់សម្គាល់សំឡេង និង CodeCraft Key សម្រាប់បកប្រែ។ "
@@ -7392,7 +7396,7 @@ def user_key_box():
         if any_saved and st.button("🧹 លុប Key ផ្ទាល់ខ្លួនទាំងអស់ (រួមទាំងក្នុង Browser)", key="user_key_clear_all", use_container_width=True):
             for _k in ("user_groq_keys", "user_oai_key", "user_oai_base", "user_oai_model",
                        "user_claude_keys", "user_claude_base", "user_claude_model",
-                       "user_gemini_key", "user_gemini_model", "user_hg_app_id", "user_hg_app_secret"):
+                       "user_gemini_key", "user_gemini_model", "user_hg_app_id", "user_hg_app_secret", "user_hg_apify"):
                 st.session_state.pop(_k, None)
             _ls_persist()
             st.rerun()
@@ -7992,7 +7996,17 @@ def _hg_secret_key_names():
 
 # Hongguo backend: Apify Actors (replaces XiaoYingAPI app_id/app_secret signing).
 # Keep the token server-side in Streamlit Secrets; never render it in the UI.
-_HG_APIFY_TOKEN = _hg_secret("APIFY_API_TOKEN", "APIFY_TOKEN")
+@st.cache_resource
+def _hg_shared_store():
+    """ទុក Key ដែល Admin ដាក់ក្នុងកម្មវិធី ចែករំលែកដល់អ្នកប្រើគ្រប់គ្នា (ក្នុង memory របស់ server)។"""
+    return {"apify": "", "app_id": "", "app_secret": ""}
+
+
+_HG_APIFY_TOKEN = "\n".join(split_keys([st.session_state.get("user_hg_apify", ""),
+                                        _hg_shared_store().get("apify", ""),
+                                        _hg_secret("APIFY_API_TOKEN", "APIFY_TOKEN")]))
+_HG_APP_ID = _hg_shared_store().get("app_id") or _hg_secret("XIAOYING_APPID", "APPID", "HONGGUO_APPID")
+_HG_APP_SECRET = _hg_shared_store().get("app_secret") or _hg_secret("XIAOYING_APPSECRET", "APPSECRET", "HONGGUO_APPSECRET")
 _HG_APIFY_BASE = "https://api.apify.com/v2/acts"
 _HG_ACTOR_SEARCH = "spider_studio~hongguo-search"
 _HG_ACTOR_DETAIL = "spider_studio~hongguo-series-detail"
@@ -8766,6 +8780,25 @@ with tab_drama:
     if _hg_access:
         st.markdown("### 🍎 ស្វែងរករឿង Hongguo")
         st.caption("ជ្រើសរើសរឿង និងភាគ រួចផ្ញើវីដេអូទៅ Khmer Auto Caption ដោយផ្ទាល់។")
+        if _is_admin_session():
+          with st.expander("🔑 Admin: ដាក់ API Key របស់ Hongguo (ប្រើបានសម្រាប់អ្នកប្រើគ្រប់គ្នា)",
+                         expanded=not _HG_APIFY_TOKEN):
+            _hg_st = _hg_shared_store()
+            st.caption("Key ដែលរក្សាទុកនៅទីនេះ ប្រើបានសម្រាប់អ្នកប្រើទាំងអស់ ហើយមិនបង្ហាញដល់អ្នកផ្សេងទេ។ "
+                       "⚠️ វារក្សាក្នុង memory របស់ server — បើ App Restart/Reboot ត្រូវដាក់ម្តងទៀត។ "
+                       "ចង់ឱ្យនៅអចិន្ត្រៃយ៍ សូមដាក់ក្នុង Streamlit Secrets ដូចគ្នា។")
+            st.caption("Hongguo ពេលនេះដំណើរការតាម **Apify Token** (ដាក់ច្រើនបាន មួយបន្ទាត់មួយ Token)។ "
+                       "APPID/APPSECRET ត្រូវបានរក្សាទុក តែ backend មិនទាន់ប្រើទេ។")
+            _hg_in_tok = st.text_area("Apify API Token", key="hg_admin_apify", height=80,
+                                      placeholder="apify_api_xxxxxxxx", value=_hg_st.get("apify", ""))
+            _hg_in_id = st.text_input("APPID", key="hg_admin_appid", value=_hg_st.get("app_id", ""))
+            _hg_in_sec = st.text_input("APPSECRET", key="hg_admin_appsecret", type="password",
+                                       value=_hg_st.get("app_secret", ""))
+            if st.button("💾 រក្សាទុកសម្រាប់អ្នកប្រើគ្រប់គ្នា", key="hg_keys_save", use_container_width=True):
+                _hg_st["apify"] = "\n".join(split_keys([_hg_in_tok]))
+                _hg_st["app_id"] = (_hg_in_id or "").strip()
+                _hg_st["app_secret"] = (_hg_in_sec or "").strip()
+                st.rerun()
         if not _HG_APIFY_TOKEN:
             st.warning("មិនទាន់កំណត់ APIFY_API_TOKEN ក្នុង Streamlit Secrets ទេ។ សូម Admin បន្ថែម Apify API Token ដើម្បីប្រើ Hongguo។")
             if _is_admin_session():
