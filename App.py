@@ -8501,7 +8501,7 @@ def _hg_extract_series_id(value):
         ids = query.get("series_id") or query.get("seriesId") or []
         if ids and str(ids[0]).strip().isdigit():
             return str(ids[0]).strip()
-        match = re.search(r"/detail/(\d+)", parsed.path)
+        match = re.search(r"/(?:detail|player|series|drama)/(\d+)", parsed.path)
         if match:
             return match.group(1)
     except Exception:
@@ -8700,7 +8700,7 @@ with tab_drama:
                         st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
                     st.session_state.pop("_hg_selected", None)
                     if not st.session_state["_hg_rows"]:
-                        st.info("រកមិនឃើញរឿងទេ។ អ្នកអាចបិទភ្ជាប់ Link Hongguo ឬ series_id ដើម្បីបើករឿងផ្ទាល់។")
+                        st.info("រកមិនឃើញរឿងទេ។ សូមបិទភ្ជាប់ Link ទំព័ររឿង (…/detail?series_id=…) ឬ series_id ។ Link /player/… អាចជាលេខភាព មិនមែនលេខរឿង។")
             except Exception as e:
                 st.error(str(e))
         elif _hg_home_click or (not st.session_state["_hg_rows"] and _HG_APIFY_TOKEN):
