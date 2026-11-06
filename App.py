@@ -8056,19 +8056,26 @@ def _hg_normalize_row(item):
     }
 
 
+_HG_MAX_PAGES = 5   # Actor ផ្តល់អតិបរមា 100 រឿង = 5 ទំព័រ × 20
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
-def _hg_rank(page=1):
-    """Fetch Hongguo hot-ranking records through the Apify listing Actor."""
-    page = max(1, int(page))
+def _hg_rank_all():
+    """ទាញបញ្ជីពេញនិយមម្តងគត់ (100 រឿង) រួច cache ទុក → ទំព័របន្ទាប់ៗលោតភ្លាម មិនហៅ Apify ម្តងទៀត។"""
     items = _hg_apify_actor(
         _HG_ACTOR_FEED,
-        {"listings": ["rank/hot-drama"], "maxResults": min(100, page * 20),
+        {"listings": ["rank/hot-drama"], "maxResults": _HG_MAX_PAGES * 20,
          "includeDetails": False},
         timeout=180,
     )
     rows = [_hg_normalize_row(x) for x in items]
-    rows = [x for x in rows if x.get("series_id")]
-    return rows[(page - 1) * 20:page * 20]
+    return [x for x in rows if x.get("series_id")]
+
+
+def _hg_rank(page=1):
+    """Fetch Hongguo hot-ranking records (sliced from the cached full list)."""
+    page = max(1, int(page))
+    return _hg_rank_all()[(page - 1) * 20:page * 20]
 
 
 @st.cache_data(ttl=600, show_spinner=False)
@@ -8389,6 +8396,18 @@ def _hg_enrich_rows(rows):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
+def _hg_category_all(category):
+    """ទាញបញ្ជីប្រភេទម្តងគត់ (100 រឿង) រួច cache ទុក។"""
+    items = _hg_apify_actor(
+        _HG_ACTOR_FEED,
+        {"listings": [category], "maxResults": _HG_MAX_PAGES * 20,
+         "includeDetails": False},
+        timeout=180,
+    )
+    rows = [_hg_normalize_row(x) for x in items]
+    return [x for x in rows if x.get("series_id")]
+
+
 def _hg_category_list(category, page=1):
     """Fetch a supported category listing via Apify and paginate its returned rows."""
     page = max(1, int(page))
@@ -8396,17 +8415,8 @@ def _hg_category_list(category, page=1):
     if not category:
         return []
     if category.startswith("kw:"):
-        _kw_rows = _hg_search(category[3:])[(page - 1) * 20:page * 20]
-        return _kw_rows
-    items = _hg_apify_actor(
-        _HG_ACTOR_FEED,
-        {"listings": [category], "maxResults": min(100, page * 20),
-         "includeDetails": False},
-        timeout=180,
-    )
-    rows = [_hg_normalize_row(x) for x in items]
-    rows = [x for x in rows if x.get("series_id")]
-    return rows[(page - 1) * 20:page * 20]
+        return _hg_search(category[3:])[(page - 1) * 20:page * 20]
+    return _hg_category_all(category)[(page - 1) * 20:page * 20]
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -8414,6 +8424,19 @@ def _hg_search(keyword, page=1):
     items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
     rows = [_hg_normalize_row(x) for x in items]
     return [x for x in rows if x.get("series_id")]
+
+
+def _hg_load_page(mode, page):
+    """ផ្ទុកទំព័រមួយតាម Mode (hot / category: / search:) — search ត្រូវ slice តាមទំព័រផង។"""
+    mode = mode or "hot"
+    page = max(1, int(page))
+    if mode == "hot":
+        return _hg_rank(page)
+    if mode.startswith("category:"):
+        return _hg_category_list(mode.split(":", 1)[1], page)
+    if mode.startswith("search:"):
+        return _hg_search(mode.split(":", 1)[1])[(page - 1) * 20:page * 20]
+    return []
 
 
 def _hg_get(endpoint, params=None, timeout=45):
@@ -8909,43 +8932,33 @@ with tab_drama:
             _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
             _hg_page_end = _hg_page_start + len(_hg_rows) - 1
             st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
+            _hg_cur_page = st.session_state.get("_hg_page", 1)
             _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
+            _hg_goto = None
             with _hg_prev:
                 if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
-                             disabled=st.session_state.get("_hg_page", 1) <= 1):
-                    st.session_state["_hg_page"] -= 1
-                    _p = st.session_state["_hg_page"]
-                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
-                    try:
-                        if _mode == "hot":
-                            st.session_state["_hg_rows"] = _hg_rank(_p)
-                        elif _mode.startswith("category:"):
-                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
-                        elif _mode.startswith("search:"):
-                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
-                    except Exception as e:
-                        st.error(str(e))
-                    st.rerun()
+                             disabled=_hg_cur_page <= 1):
+                    _hg_goto = _hg_cur_page - 1
             with _hg_page_label:
-                st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {st.session_state.get('_hg_page',1)}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {_hg_cur_page}</div>", unsafe_allow_html=True)
             with _hg_next:
                 if st.button("បន្ទាប់ ➡️", key="hg_page_next", use_container_width=True,
-                             disabled=len(_hg_rows) < 20):
-                    st.session_state["_hg_page"] += 1
-                    _p = st.session_state["_hg_page"]
-                    _mode = st.session_state.get("_hg_catalog_mode", "hot")
-                    try:
-                        if _mode == "hot":
-                            st.session_state["_hg_rows"] = _hg_rank(_p)
-                        elif _mode.startswith("category:"):
-                            st.session_state["_hg_rows"] = _hg_category_list(_mode.split(":",1)[1], _p)
-                        elif _mode.startswith("search:"):
-                            st.session_state["_hg_rows"] = _hg_search(_mode.split(":",1)[1], _p)
-                    except Exception as e:
-                        st.error(str(e))
+                             disabled=(len(_hg_rows) < 20 or _hg_cur_page >= _HG_MAX_PAGES)):
+                    _hg_goto = _hg_cur_page + 1
+            if _hg_goto:
+                _mode = st.session_state.get("_hg_catalog_mode", "hot")
+                _hg_new_rows = None
+                try:
+                    with st.spinner(f"កំពុងបើកទំព័រ {_hg_goto}... (លើកដំបូងអាចយូរបន្តិច)"):
+                        _hg_new_rows = _hg_load_page(_mode, _hg_goto)
+                except Exception as e:
+                    st.error(str(e))
+                if _hg_new_rows:
+                    st.session_state["_hg_page"] = _hg_goto
+                    st.session_state["_hg_rows"] = _hg_new_rows
                     st.rerun()
-
-
+                elif _hg_new_rows is not None:
+                    st.info("គ្មានរឿងបន្ថែមទៀតទេ។")
 
 
 
