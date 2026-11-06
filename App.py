@@ -8033,26 +8033,59 @@ def _hg_signed_params(biz=None, method="GET", path=""):
     return params
 
 
+def _hg_prefixes():
+    """Path prefix ដែលអាចកំណត់ដោយខ្លួនឯង (ប្រអប់ក្នុង UI) ឬសាកល្បងស្វ័យប្រវត្តិ។"""
+    custom = str(st.session_state.get("hg_path_prefix") or "").strip()
+    out = []
+    if custom:
+        out.append("/" + custom.strip("/") + "/")
+    out += ["/api/dramas/hongguo/", "/api/hongguo/", "/api/v1/hongguo/", "/api/v1/dramas/hongguo/",
+            "/api/drama/hongguo/", "/hongguo/", "/api/dramas/"]
+    seen, res = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x); res.append(x)
+    return res
+
+
 def _hg_api(endpoint, params=None, timeout=45):
-    """Call XiaoYingAPI Hongguo endpoint and unwrap its {code,msg,data} envelope."""
-    path = "/api/dramas/hongguo/" + str(endpoint).strip("/") + "/"
-    try:
-        response = requests.get(_HG_API_BASE + path, params=_hg_signed_params(params, "GET", path), timeout=timeout,
-                                headers={"Accept": "application/json", "User-Agent": "KhmerVideoAI/1.0"})
-    except requests.RequestException as exc:
-        raise RuntimeError(f"XiaoYingAPI មិនអាចភ្ជាប់បាន៖ {exc}") from exc
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: មិនមែន JSON ត្រឹមត្រូវ។") from exc
-    if not response.ok:
-        raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {str(payload)[:500]}")
-    if isinstance(payload, dict) and payload.get("code") not in (None, 10000, "10000"):
-        code, msg = payload.get("code"), payload.get("msg") or "API error"
-        if str(code) == "20011":
-            msg += " (សូមពិនិត្យ APPID/APPSECRET, timestamp និង signature)"
-        raise RuntimeError(f"XiaoYingAPI {code}: {msg}")
-    return payload.get("data", payload) if isinstance(payload, dict) else payload
+    """Call XiaoYingAPI Hongguo endpoint and unwrap its {code,msg,data} envelope.
+    បើ path 404 (code 20030) សាកល្បង prefix/slash ផ្សេងៗ ហើយចងចាំ path ដែលដំណើរការ។"""
+    ep = str(endpoint).strip("/")
+    good = st.session_state.get("_hg_good_prefix")
+    prefixes = ([good] if good else []) + [x for x in _hg_prefixes() if x != good]
+    last_err = None
+    tried = []
+    for prefix in prefixes:
+        for slash in ("/", ""):
+            path = prefix + ep + slash
+            tried.append(path)
+            try:
+                response = requests.get(_HG_API_BASE + path, params=_hg_signed_params(params, "GET", path), timeout=timeout,
+                                        headers={"Accept": "application/json", "User-Agent": "KhmerVideoAI/1.0"})
+            except requests.RequestException as exc:
+                raise RuntimeError(f"XiaoYingAPI មិនអាចភ្ជាប់បាន៖ {exc}") from exc
+            try:
+                payload = response.json()
+            except ValueError:
+                last_err = f"XiaoYingAPI HTTP {response.status_code}: មិនមែន JSON ត្រឹមត្រូវ។ ({path})"
+                continue
+            code = payload.get("code") if isinstance(payload, dict) else None
+            if response.status_code == 404 or str(code) == "20030":
+                last_err = f"XiaoYingAPI HTTP 404: {str(payload)[:300]} ({path})"
+                continue
+            if not response.ok:
+                raise RuntimeError(f"XiaoYingAPI HTTP {response.status_code}: {str(payload)[:500]}")
+            if isinstance(payload, dict) and code not in (None, 10000, "10000"):
+                msg = payload.get("msg") or "API error"
+                if str(code) == "20011":
+                    msg += " (សូមពិនិត្យ APPID/APPSECRET, timestamp និង signature)"
+                raise RuntimeError(f"XiaoYingAPI {code}: {msg}")
+            st.session_state["_hg_good_prefix"] = prefix
+            return payload.get("data", payload) if isinstance(payload, dict) else payload
+    raise RuntimeError((last_err or "XiaoYingAPI: រកមិនឃើញ endpoint") +
+                       " · បានសាកល្បង: " + ", ".join(tried[:6]) +
+                       " · សូមសួរអ្នកលក់រក API docs ដើម្បីដឹង path ត្រឹមត្រូវ ហើយដាក់ក្នុងប្រអប់ API path prefix។")
 
 
 def _hg_results(data):
@@ -8584,6 +8617,8 @@ with tab_drama:
                                   value=st.session_state.get("user_hg_app_id", ""))
             _u_sec = st.text_input("APPSECRET (ចាប់ផ្តើមដោយ sk_)", key="hg_user_secret_in", type="password",
                                    value=st.session_state.get("user_hg_app_secret", ""))
+            st.text_input("API path prefix (ជម្រើស · ពី docs របស់អ្នកលក់ ឧ. /api/dramas/hongguo/)",
+                          key="hg_path_prefix")
             _uc1, _uc2 = st.columns(2)
             if _uc1.button("💾 រក្សាទុក", key="hg_user_save", use_container_width=True):
                 st.session_state["user_hg_app_id"] = (_u_id or "").strip()
