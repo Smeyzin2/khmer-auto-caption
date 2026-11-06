@@ -9278,6 +9278,58 @@ def _nd_fetch(media, referer=""):
         return {"path": None, "ok": False, "err": str(e)[:400], "tries": 1}
 
 
+def _nd_sniff(url, max_eps=60):
+    """បើកទំព័ររឿងក្នុង browser ពិត (Playwright) ហើយចាប់តំណ mp4/m3u8 ដែល player ហៅពេលចុចលេងភាគ។
+    ភាគបង់ប្រាក់/ត្រូវ login នឹងមិនមាន video ដូច្នេះត្រូវរំលងដោយស្វ័យប្រវត្តិ។ ត្រូវការ: pip install playwright && playwright install chromium"""
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return None  # មិនទាន់ដំឡើង
+    found = []
+    pat = re.compile(r"\.(?:m3u8|mp4)(?:[?#]|$)", re.I)
+    try:
+        with sync_playwright() as pw:
+            br = pw.chromium.launch(headless=True, args=["--no-sandbox"])
+            pg = br.new_context(user_agent=_ND_UA, viewport={"width": 1000, "height": 800}).new_page()
+            cur = {"hits": []}
+
+            def _on_req(rq):
+                if pat.search(rq.url) and rq.url not in cur["hits"]:
+                    cur["hits"].append(rq.url)
+            pg.on("request", _on_req)
+            pg.goto(url, wait_until="domcontentloaded", timeout=30000)
+            pg.wait_for_timeout(2500)
+            try:
+                pg.get_by_text(re.compile("ទស្សនាភាគ|Watch")).first.click(timeout=3000)
+            except Exception:
+                pass
+            pg.wait_for_timeout(3500)
+            if cur["hits"]:
+                found.append({"label": "ភាគ 1", "url": url, "media": cur["hits"][0], "locked": False})
+            # ចុចលេខភាគម្តងមួយៗ
+            labels = []
+            for el in pg.locator("button, a, div").all()[:600]:
+                try:
+                    t = (el.inner_text(timeout=200) or "").strip()
+                except Exception:
+                    continue
+                if re.fullmatch(r"\d{1,3}", t) and t not in labels:
+                    labels.append(t)
+            for t in labels[:max_eps]:
+                cur["hits"] = []
+                try:
+                    pg.get_by_text(t, exact=True).first.click(timeout=2500)
+                except Exception:
+                    continue
+                pg.wait_for_timeout(3500)
+                if cur["hits"] and not any(cur["hits"][0] == f["media"] for f in found):
+                    found.append({"label": "ភាគ " + t, "url": url, "media": cur["hits"][0], "locked": False})
+            br.close()
+    except Exception as e:
+        st.session_state["_nd_sniff_err"] = str(e)[:300]
+    return found
+
+
 def _nd_open(url):
     """បើករឿងមួយ៖ អានទំព័រ + រកភាគឥតគិតថ្លៃ។"""
     res = _nd_scan(url.strip())
@@ -9290,6 +9342,12 @@ def _nd_open(url):
     for i, mm in enumerate(res["page_media"]):
         if not any(mm == x.get("media") for x in free):
             free.append({"label": f"ភាគឥតគិតថ្លៃ {i+1}", "url": res["url"], "media": mm, "locked": False})
+    if not free:
+        _sn = _nd_sniff(res["url"])
+        if _sn:
+            free = _sn
+        elif _sn is None:
+            st.session_state["_nd_sniff_err"] = "Playwright មិនទាន់ដំឡើង"
     res["free"] = free
     st.session_state["_nd_result"] = res
 
@@ -9377,6 +9435,8 @@ with tab_free:
                     st.caption(_nd_r["meta"]["description"][:300])
                 _nd_free = _nd_r.get("free", [])
                 st.caption(f"រកឃើញភាគ {len(_nd_r['eps'])} · ឥតគិតថ្លៃអាចទាញបាន {len(_nd_free)}")
+                if not _nd_free and st.session_state.get("_nd_sniff_err"):
+                    st.caption("🔧 ចាប់វីដេអូស្វ័យប្រវត្តិមិនបាន៖ " + st.session_state["_nd_sniff_err"])
                 if not _nd_free:
                     st.warning("រកមិនឃើញភាគឥតគិតថ្លៃដែលមាន video សាធារណៈទេ។ ប្រហែលភាគទាំងអស់ត្រូវការកាក់ ឬ site លាក់ video ក្នុង JavaScript។ បើអ្នកមាន Media URL ឥតគិតថ្លៃ (mp4/m3u8) អាចបិទភ្ជាប់ខាងក្រោម។")
                 with st.expander(f"🔍 ភាគដែលរកឃើញក្នុងទំព័រ ({len(_nd_r['eps'])})"):
