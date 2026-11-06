@@ -9006,6 +9006,71 @@ with tab_drama:
                                 use_container_width=True
                             )
 
+                    # ---- Direct links for many episodes (no server download / no ZIP) ----
+                    st.markdown("#### 🔗 យកតំណផ្ទាល់ច្រើនភាគ (លឿន — មិនឆ្លងម៉ាស៊ីនមេ)")
+                    st.caption("បើកតំណក្នុង browser ដើម្បីចាក់ពេញ និងចុច Download ដូចវីដេអូផ្ទាល់។ ឬចម្លងតំណទាំងអស់ទៅ 1DM / ADM ដើម្បីទាញម្ដងច្រើនភាគ។")
+                    _lk_sid = _hg_selected["series_id"]
+                    _lk_all = st.checkbox(f"ជ្រើសរើសភាគទាំងអស់ ({len(_hg_ep_map)} ភាគ)", value=False, key=f"hg_lk_all_{_lk_sid}")
+                    _lk_labels = st.multiselect(
+                        "ឬជ្រើសរើសតែភាគដែលចង់បាន",
+                        list(_hg_ep_map.keys()),
+                        default=list(_hg_ep_map.keys()) if _lk_all else [],
+                        key=f"hg_lk_eps_{_lk_sid}"
+                    )
+                    _lk_chosen = list(_hg_ep_map.keys()) if _lk_all else list(_lk_labels)
+                    if st.button(
+                        f"🔗 យកតំណ {len(_lk_chosen)} ភាគ",
+                        key=f"hg_lk_start_{_lk_sid}",
+                        disabled=(not _lk_chosen or busy),
+                        use_container_width=True
+                    ):
+                        _lk_chosen = _lk_chosen[:100]
+                        _lk_bar = st.progress(0, text="កំពុងយកតំណ...")
+                        _lk_items, _lk_errs = [], []
+
+                        def _lk_one(_lbl):
+                            _n = _hg_ep_map[_lbl]
+                            try:
+                                _r = _hg_get("play", {"series_id": _lk_sid, "ep": _n, "q": _hg_quality, "codec": _hg_codec})
+                                _u = str(_r.get("url") or "").strip()
+                                if not _u:
+                                    return (_n, "", "API មិនបានផ្ដល់តំណវីដេអូ")
+                                return (_n, _u, "")
+                            except Exception as _e:
+                                return (_n, "", str(_e)[:160])
+
+                        _lk_done = 0
+                        with ThreadPoolExecutor(max_workers=4) as _lk_ex:
+                            for _n, _u, _er in _lk_ex.map(_lk_one, _lk_chosen):
+                                _lk_done += 1
+                                if _u:
+                                    _lk_items.append((_n, _u))
+                                else:
+                                    _lk_errs.append(f"ភាគ {_n}: {_er}")
+                                _lk_bar.progress(_lk_done / max(1, len(_lk_chosen)), text=f"យកតំណបាន {len(_lk_items)}/{len(_lk_chosen)}")
+                        _lk_bar.empty()
+                        _lk_items.sort(key=lambda x: x[0])
+                        st.session_state[f"_hg_links_{_lk_sid}"] = {
+                            "items": _lk_items, "errs": _lk_errs,
+                            "name": safe_filename(_hg_selected.get("name") or "hongguo")
+                        }
+                    _lk_saved = st.session_state.get(f"_hg_links_{_lk_sid}")
+                    if _lk_saved:
+                        if _lk_saved["items"]:
+                            st.success(f"បានតំណ {len(_lk_saved['items'])} ភាគ")
+                            _lk_text = "\n".join(u for _, u in _lk_saved["items"])
+                            st.text_area("តំណទាំងអស់ (មួយបន្ទាត់មួយភាគ — ចម្លងទៅ 1DM / ADM)", _lk_text, height=140, key=f"hg_lk_text_{_lk_sid}")
+                            dl_button("📄 ទាញយកបញ្ជីតំណ (.txt)", _lk_text.encode("utf-8"),
+                                      f"{_lk_saved['name']}_links.txt", "text/plain",
+                                      key=f"hg_lk_txt_{_lk_sid}", use_container_width=True)
+                            with st.expander("បើកតំណម្ដងមួយភាគ"):
+                                for _n, _u in _lk_saved["items"]:
+                                    st.link_button(f"⬇️ ភាគ {_n}", _u, use_container_width=True)
+                        if _lk_saved["errs"]:
+                            with st.expander(f"ភាគដែលមានបញ្ហា ({len(_lk_saved['errs'])})"):
+                                for _x in _lk_saved["errs"]:
+                                    st.warning(_x)
+
                     st.markdown("#### 🎞️ បកប្រែច្រើនភាគក្នុងពេលតែមួយ")
                     _hg_batch_labels = st.multiselect(
                         "ជ្រើសរើសភាគដែលចង់បកប្រែ",
@@ -9608,6 +9673,13 @@ with tab_free:
                         st.caption("ចាក់ក្នុងកម្មវិធីមិនបាន — សាកទាញយកជំនួស។")
                     _pv = _nd_free[_nd_labels.index(_nd_prev)]
                     st.caption("🔗 " + _pv["media"])
+                    st.link_button("🔗 បើកតំណផ្ទាល់ក្នុង browser (ចាក់ពេញ + Download)", _pv["media"], use_container_width=True)
+                    if _nd_sel:
+                        with st.expander(f"📋 តំណផ្ទាល់ទាំង {len(_nd_sel)} ភាគ (ចម្លងទៅ 1DM / ADM)"):
+                            _nd_links_txt = "\n".join(e["media"] for e in _nd_sel)
+                            st.text_area("មួយបន្ទាត់មួយភាគ", _nd_links_txt, height=120, key="nd_links_text")
+                            dl_button("📄 ទាញយកបញ្ជីតំណ (.txt)", _nd_links_txt.encode("utf-8"),
+                                      "neatidrama_links.txt", "text/plain", key="nd_links_txt_dl", use_container_width=True)
                     if st.button("📥 ទាញមកម៉ាស៊ីនមេរួចចាក់មើល", key="nd_prev_dl", use_container_width=True, disabled=busy):
                         with st.spinner("កំពុងទាញ..."):
                             _pr = _nd_fetch(_pv["media"], _pv.get("url", ""))
