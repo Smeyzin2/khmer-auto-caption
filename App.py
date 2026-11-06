@@ -7836,8 +7836,8 @@ tight_sync = False
 
 # ប៊ូតុងចាប់ផ្តើម៖ បង្កើត placeholder ក្រោយផ្ទាំងមុខងារ ដើម្បីកុំឱ្យវាទុកចន្លោះទទេនៅលើ Dashboard។
 
-tab_drama, tab_tiktok, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
-    ["🍎 Hongguo", "🎵 TikTok Short Drama", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
+tab_drama, tab_free, tab_vid, tab_cut, tab_trans, tab_voice, tab_text, tab_fx, tab_out = st.tabs(
+    ["🍎 Hongguo", "🎬 រឿងឥតគិតថ្លៃ", "🏠 វីដេអូ", "✂️ កាត់", "🌐 បកប្រែ", "🎙 សំឡេង", "🔤 អក្សរ", "🖼 Logo", "⬇️ ទាញយក"]
 )
 
 # ============================ Hongguo Drama → Khmer Auto Caption ============================
@@ -8056,6 +8056,40 @@ def _hg_normalize_row(item):
     }
 
 
+def _hg_rows_from_items(items, label=""):
+    """បម្លែងលទ្ធផល Actor ជា rows។ បើទទេ → raise ដើម្បីកុំ cache លទ្ធផលទទេ ១ ម៉ោង និងបង្ហាញមូលហេតុពិត។"""
+    flat = []
+
+    def _collect(o, depth=0):
+        if isinstance(o, dict):
+            flat.append(o)
+            if depth < 2:
+                for k in ("results", "items", "list", "dramas", "series", "books", "data"):
+                    v = o.get(k)
+                    if isinstance(v, list):
+                        for x in v:
+                            _collect(x, depth + 1)
+        elif isinstance(o, list):
+            for x in o:
+                _collect(x, depth + 1)
+
+    _collect(items)
+    rows = [_hg_normalize_row(x) for x in flat]
+    rows = [x for x in rows if x.get("series_id")]
+    seen, out = set(), []
+    for r in rows:
+        if r["series_id"] not in seen:
+            seen.add(r["series_id"])
+            out.append(r)
+    if not out:
+        n = len(items) if isinstance(items, list) else 0
+        keys = ""
+        if n and isinstance(items[0], dict):
+            keys = " · keys: " + ", ".join(list(items[0].keys())[:10])
+        raise RuntimeError(f"Actor ត្រឡប់ {n} records តែគ្មានរឿងដែលប្រើបាន ({label}){keys}")
+    return out
+
+
 _HG_MAX_PAGES = 5   # Actor ផ្តល់អតិបរមា 100 រឿង = 5 ទំព័រ × 20
 
 
@@ -8068,8 +8102,7 @@ def _hg_rank_all():
          "includeDetails": False},
         timeout=180,
     )
-    rows = [_hg_normalize_row(x) for x in items]
-    return [x for x in rows if x.get("series_id")]
+    return _hg_rows_from_items(items, "hot")
 
 
 def _hg_rank(page=1):
@@ -8404,8 +8437,7 @@ def _hg_category_all(category):
          "includeDetails": False},
         timeout=180,
     )
-    rows = [_hg_normalize_row(x) for x in items]
-    return [x for x in rows if x.get("series_id")]
+    return _hg_rows_from_items(items, category)
 
 
 def _hg_category_list(category, page=1):
@@ -8422,8 +8454,7 @@ def _hg_category_list(category, page=1):
 @st.cache_data(ttl=3600, show_spinner=False)
 def _hg_search(keyword, page=1):
     items = _hg_apify_actor(_HG_ACTOR_SEARCH, {"queries": [str(keyword)], "maxPages": 1}, timeout=180)
-    rows = [_hg_normalize_row(x) for x in items]
-    return [x for x in rows if x.get("series_id")]
+    return _hg_rows_from_items(items, "search:" + str(keyword))
 
 
 def _hg_load_page(mode, page):
@@ -8682,6 +8713,11 @@ with tab_drama:
             _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
             if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
                 _HG_CAT_FN.clear()
+                for _fn in (_hg_rank_all, _hg_category_all, _hg_search):
+                    try:
+                        _fn.clear()
+                    except Exception:
+                        pass
                 st.rerun()
         with _hg_c2:
             st.write("")
@@ -8729,7 +8765,13 @@ with tab_drama:
                     st.rerun()
                 else:
                     with st.spinner("កំពុងស្វែងរករឿង..."):
-                        st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+                        try:
+                            st.session_state["_hg_rows"] = _hg_search(_hg_keyword.strip())
+                        except RuntimeError as _se:
+                            if "Actor ត្រឡប់" in str(_se):
+                                st.session_state["_hg_rows"] = []
+                            else:
+                                raise
                     st.session_state.pop("_hg_selected", None)
                     if not st.session_state["_hg_rows"]:
                         st.info("រកមិនឃើញរឿងទេ។ សូមបិទភ្ជាប់ Link ទំព័ររឿង (…/detail?series_id=…) ឬ series_id ។ Link /player/… អាចជាលេខភាព មិនមែនលេខរឿង។")
@@ -8973,291 +9015,199 @@ with tab_drama:
 
 
 
-# ============================ TikTok Short Drama ============================
-# Episode navigator (prev/next), in-app player (when the video can be fetched),
-# and multi-episode ZIP download. TikTok has no public catalog API, so the series
-# is opened from one episode URL and the other episodes are built from series ID + number.
-def _tt_ep_url(series_id, ep):
-    return f"https://www.tiktok.com/shortdrama/episode/{series_id}/{int(ep)}?is_from_webapp=1&sender_device=pc"
+# ============================ Free Drama (free episodes only) ============================
+# Opens a neatidrama.com drama page, lists the episodes it can see, and only fetches the
+# ones that are publicly playable WITHOUT login/coins. Paid/locked episodes are skipped.
+_ND_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"
 
 
-def _tt_resolve(url):
-    """បំប្លែងតំណខ្លី (vt/vm.tiktok.com, tiktok.com/t/) ទៅជា URL ពេញ ដើម្បីរក series ID និងលេខភាគ។"""
-    url = (url or "").strip()
-    if re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", url):
-        return url
-    if not re.match(r"https?://", url):
-        return url
+def _nd_meta(html):
+    out = {"title": "", "poster": "", "description": ""}
+    for prop, key in (("og:title", "title"), ("og:image", "poster"), ("og:description", "description")):
+        m = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(prop) + r'["\'][^>]+content=["\']([^"\']*)', html, re.I) \
+            or re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']' + re.escape(prop) + r'["\']', html, re.I)
+        if m:
+            out[key] = m.group(1).replace("&amp;", "&")
+    return out
+
+
+def _nd_media_in(html):
+    """រកតំណវីដេអូ (mp4/m3u8) ដែលបង្ហាញជាសាធារណៈក្នុងទំព័រ។"""
+    txt = html.replace("\\u002F", "/").replace("\\/", "/")
+    urls = re.findall(r'https?://[^\s"\'<>\\]+?\.(?:mp4|m3u8)(?:\?[^\s"\'<>\\]*)?', txt, re.I)
+    seen, res = set(), []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            res.append(u)
+    return res
+
+
+def _nd_scan(url):
+    """ទាញទំព័ររឿង → meta + បញ្ជីភាគ (ឈ្មោះ, តំណទំព័រ, media ឥតគិតថ្លៃ)។"""
+    r = requests.get(url, headers={"User-Agent": _ND_UA}, timeout=20)
+    r.raise_for_status()
+    html = r.text[:3_000_000]
+    meta = _nd_meta(html)
+    base = r.url
+    eps, seen = [], set()
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
+        href, label = m.group(1), re.sub(r"<[^>]+>", " ", m.group(2))
+        label = re.sub(r"\s+", " ", label).strip()
+        if "neatidrama" not in href and not href.startswith("/"):
+            continue
+        full = requests.compat.urljoin(base, href)
+        if full in seen or full.rstrip("/") == base.rstrip("/"):
+            continue
+        if not re.search(r"(episode|ep|play|watch|/e-|/p-)", full, re.I):
+            continue
+        seen.add(full)
+        locked = bool(re.search(r"(lock|vip|paid|coin|premium|🔒)", m.group(0), re.I))
+        eps.append({"label": label[:40] or f"ភាគ {len(eps)+1}", "url": full, "locked": locked})
+    return {"url": base, "meta": meta, "eps": eps, "page_media": _nd_media_in(html)}
+
+
+def _nd_probe_free(ep):
+    """ពិនិត្យថាតើភាគនេះមាន media សាធារណៈ (ឥតគិតថ្លៃ) ឬអត់។ មិនឆ្លងកាត់ការបង់ប្រាក់ទេ។"""
+    if ep.get("locked"):
+        return None
     try:
-        _r = requests.get(
-            url, allow_redirects=True, timeout=15,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"},
-        )
-        _cands = [h.headers.get("Location", "") for h in _r.history] + [h.url for h in _r.history] + [_r.url]
-        for _c in _cands:
-            if re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", _c or ""):
-                return _c
-        _m = re.search(r"tiktok\.com/shortdrama/episode/\d+/\d+", _r.text[:2_000_000])
-        if _m:
-            return "https://www." + _m.group(0)
-        return _r.url
+        r = requests.get(ep["url"], headers={"User-Agent": _ND_UA}, timeout=20)
+        if not r.ok:
+            return None
+        html = r.text[:3_000_000]
+        if re.search(r"(unlock|top.?up|insufficient|ត្រូវការកាក់|please log ?in)", html, re.I) and not _nd_media_in(html):
+            return None
+        media = _nd_media_in(html)
+        return media[0] if media else None
     except Exception:
-        return url
+        return None
 
 
-def _tt_free_media(res):
-    """លុបឯកសារវីដេអូបណ្ដោះអាសន្នរបស់ភាគមុន។"""
+def _nd_free_media(res):
     _old = (res or {}).get("path") or ""
     if _old and os.path.isfile(_old):
         shutil.rmtree(os.path.dirname(_old), ignore_errors=True)
     if res is not None:
         res["path"] = ""
-        res["fetch_err"] = ""
 
 
-def _tt_go_ep(delta):
-    """Callback ប៊ូតុង ភាគមុន/បន្ទាប់ (ដំណើរការមុន rerun)។"""
-    _res = st.session_state.get("_tiktok_drama_result")
-    if not _res:
-        return
-    _total = int(st.session_state.get("tiktok_drama_total", 60) or 60)
-    _cur = int(st.session_state.get("tiktok_drama_episode_number", _res.get("episode", 1)) or 1)
-    _new = max(1, min(_total, _cur + delta))
-    _tt_free_media(_res)
-    _res["episode"] = _new
-    _res["url"] = _tt_ep_url(_res["series_id"], _new)
-    st.session_state["tiktok_drama_episode_number"] = _new
-    st.session_state["_tiktok_drama_result"] = _res
-    if st.session_state.get("tiktok_drama_auto", True):
-        st.session_state["_tt_want_fetch"] = True
-
-
-def _tt_apply_ep_input():
-    """Callback ពេលវាយលេខភាគដោយផ្ទាល់។"""
-    _res = st.session_state.get("_tiktok_drama_result")
-    if not _res:
-        return
-    _new = int(st.session_state.get("tiktok_drama_episode_number", 1) or 1)
-    _tt_free_media(_res)
-    _res["episode"] = _new
-    _res["url"] = _tt_ep_url(_res["series_id"], _new)
-    st.session_state["_tiktok_drama_result"] = _res
-    if st.session_state.get("tiktok_drama_auto", True):
-        st.session_state["_tt_want_fetch"] = True
-
-
-with tab_tiktok:
-    _tt_access = _hg_has_access()
-    if not _tt_access:
+with tab_free:
+    _nd_access = _hg_has_access()
+    if not _nd_access:
         st.info("🔒 ផ្ទាំងនេះសម្រាប់សមាជិក VIP។ សូមចូលគណនី VIP នៅផ្ទាំង 🍎 Hongguo មុន រួចត្រឡប់មកទីនេះ។\n\n📨 ទាក់ទងបើកគណនី៖ Telegram [@Smeytk](https://t.me/Smeytk)")
-    if _tt_access:
-        st.markdown("### 🎵 TikTok Short Drama")
-        st.caption("បិទភ្ជាប់ Episode URL មួយ រួចប្រើប៊ូតុង ⏮ ភាគមុន / ភាគបន្ទាប់ ⏭ ដើម្បីប្តូរភាគ ដូច Hongguo។")
-
-        _tt_default_url = "https://www.tiktok.com/shortdrama/episode/7699896495729808392/2?is_from_webapp=1&sender_device=pc"
+    if _nd_access:
+        st.markdown("### 🎬 រឿងខ្លី — ភាគឥតគិតថ្លៃ")
+        st.caption("បិទភ្ជាប់តំណរឿង។ កម្មវិធីយកតែភាគដែលបើកមើលបានដោយឥតគិតថ្លៃ (មិនត្រូវការកាក់/គណនី)។ ភាគបង់ប្រាក់ត្រូវរំលង។")
         with st.container(border=True):
-            _tt_query_col, _tt_search_col = st.columns([4, 1], gap="small")
-            with _tt_query_col:
-                _tt_query = st.text_input(
-                    "TikTok Short Drama Episode URL",
-                    key="tiktok_drama_query",
-                    value=st.session_state.get("tiktok_drama_query", _tt_default_url),
-                    placeholder="https://www.tiktok.com/shortdrama/episode/.../...",
-                )
-            with _tt_search_col:
+            _nd_c1, _nd_c2 = st.columns([4, 1], gap="small")
+            with _nd_c1:
+                _nd_q = st.text_input("តំណរឿង (URL)", key="nd_query", placeholder="https://...")
+            with _nd_c2:
                 st.write("")
-                _tt_search_click = st.button("🔎 បើករឿង", key="tiktok_drama_search", type="primary", use_container_width=True)
-
-        _tt_match = None
-        if _tt_search_click:
-            with st.spinner("កំពុងពិនិត្យតំណ..."):
-                _tt_resolved = _tt_resolve(_tt_query)
-            _tt_match = re.search(r"tiktok\.com/shortdrama/episode/(\d+)/(\d+)", _tt_resolved or "")
-            if not _tt_match:
-                st.warning("រកមិនឃើញ series ID និងលេខភាគក្នុងតំណនេះទេ។ សូមបើកភាគក្នុង TikTok រួចចម្លង URL ពេញ (tiktok.com/shortdrama/episode/…/…)។")
-                if _tt_resolved and _tt_resolved != (_tt_query or "").strip():
-                    st.caption("តំណដែលបានបើក៖ " + _tt_resolved[:300])
+                _nd_go = st.button("🔎 បើករឿង", key="nd_open", type="primary", use_container_width=True, disabled=busy)
+        if _nd_go:
+            if "neatidrama.com" not in (_nd_q or ""):
+                st.warning("សូមបញ្ចូលតំណរឿងត្រឹមត្រូវ។")
             else:
-                _tt_series_id, _tt_ep = _tt_match.group(1), int(_tt_match.group(2))
-                _tt_clean_url = _tt_ep_url(_tt_series_id, _tt_ep)
-                _tt_meta = {"title": f"TikTok Short Drama · {_tt_series_id}", "poster": "", "description": ""}
-                try:
-                    _tt_page = requests.get(
-                        _tt_clean_url,
-                        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0.0.0 Safari/537.36"},
-                        timeout=12,
-                    )
-                    if _tt_page.ok:
-                        _tt_html = _tt_page.text[:2_000_000]
-                        for _tt_prop, _tt_key in (("og:title", "title"), ("og:image", "poster"), ("og:description", "description")):
-                            _tt_m = re.search(r'<meta[^>]+(?:property|name)=["\']' + re.escape(_tt_prop) + r'["\'][^>]+content=["\']([^"\']*)', _tt_html, re.I)
-                            if not _tt_m:
-                                _tt_m = re.search(r'<meta[^>]+content=["\']([^"\']*)["\'][^>]+(?:property|name)=["\']' + re.escape(_tt_prop) + r'["\']', _tt_html, re.I)
-                            if _tt_m:
-                                _tt_meta[_tt_key] = requests.utils.unquote(_tt_m.group(1).replace("&amp;", "&"))
-                except Exception:
-                    pass
-                _tt_free_media(st.session_state.get("_tiktok_drama_result"))
-                st.session_state["tiktok_drama_episode_number"] = _tt_ep
-                st.session_state["_tiktok_drama_result"] = {
-                    "url": _tt_clean_url, "series_id": _tt_series_id, "episode": _tt_ep,
-                    "title": _tt_meta["title"], "poster_url": _tt_meta["poster"],
-                    "description": _tt_meta["description"], "path": "", "fetch_err": "",
-                }
-                st.rerun()
-
-        _tt_ready = st.session_state.get("_tiktok_drama_result")
-        if _tt_ready:
-            with st.container(border=True):
-                st.markdown("#### 🎬 " + str(_tt_ready.get("title", "TikTok Short Drama")))
-                _tt_poster_url = _tt_ready.get("poster_url", "")
-                if _tt_poster_url.startswith(("https://", "http://")):
-                    st.image(_tt_poster_url, use_container_width=True, caption="Drama Poster")
-                else:
-                    st.markdown(
-                        f"<div style='border:1px solid #087da5;border-radius:14px;padding:18px;text-align:center;background:linear-gradient(135deg,#101b45,#062d45);'>"
-                        f"<div style='font-size:42px'>🎬</div><b>TikTok Short Drama</b><br><small>Series ID: {_tt_ready.get('series_id','')}</small></div>",
-                        unsafe_allow_html=True,
-                    )
-                if _tt_ready.get("description"):
-                    st.caption(_tt_ready["description"])
-
-                # ---------- Episode navigator ----------
-                _tt_total = st.number_input(
-                    "ចំនួនភាគសរុប (សម្រាប់កំណត់ដែនប៊ូតុង)", min_value=1, max_value=9999,
-                    value=int(st.session_state.get("tiktok_drama_total", 60)), step=1, key="tiktok_drama_total",
-                )
-                _tt_cur_ep = int(st.session_state.get("tiktok_drama_episode_number", _tt_ready.get("episode", 1)))
-                _nav_prev, _nav_num, _nav_next = st.columns([1, 1, 1], gap="small")
-                with _nav_prev:
-                    st.write("")
-                    st.button("⏮ ភាគមុន", key="tiktok_drama_prev", use_container_width=True,
-                              disabled=(_tt_cur_ep <= 1), on_click=_tt_go_ep, args=(-1,))
-                with _nav_num:
-                    st.number_input("ភាគ", min_value=1, max_value=9999, step=1,
-                                    key="tiktok_drama_episode_number", on_change=_tt_apply_ep_input)
-                with _nav_next:
-                    st.write("")
-                    st.button("ភាគបន្ទាប់ ⏭", key="tiktok_drama_next", use_container_width=True,
-                              disabled=(_tt_cur_ep >= int(_tt_total)), on_click=_tt_go_ep, args=(1,))
-                st.checkbox("ចាក់ស្វ័យប្រវត្តិពេលប្តូរភាគ (ព្យាយាមទាញវីដេអូភាគនោះ)", value=True, key="tiktok_drama_auto")
-                st.caption(f"កំពុងស្ថិតនៅ ភាគ {_tt_cur_ep} / {int(_tt_total)}")
-
-                # ---------- Fetch current episode ----------
-                _tt_do_fetch = bool(st.session_state.pop("_tt_want_fetch", False))
-                if st.button("▶️ ទាញ និងចាក់ភាគនេះ", key="tiktok_drama_play", type="primary", use_container_width=True, disabled=busy):
-                    _tt_do_fetch = True
-                if _tt_do_fetch:
-                    _tt_free_media(_tt_ready)
-                    _tt_ready["episode"] = _tt_cur_ep
-                    _tt_ready["url"] = _tt_ep_url(_tt_ready["series_id"], _tt_cur_ep)
-                    with st.spinner(f"កំពុងទាញភាគ {_tt_cur_ep}..."):
-                        _tt_res = _fetch_one(_tt_ready["url"])
-                    if _tt_res.get("ok") and _tt_res.get("path"):
-                        _tt_ready["path"] = _tt_res["path"]
-                        _tt_ready["fetch_err"] = ""
-                    else:
-                        _tt_ready["fetch_err"] = _tt_res.get("err") or "ទាញយកវីដេអូមិនបាន"
-                    st.session_state["_tiktok_drama_result"] = _tt_ready
-
-                _tt_media_path = _tt_ready.get("path", "")
-                if _tt_media_path and os.path.isfile(_tt_media_path):
-                    st.video(_tt_media_path)
-                    with open(_tt_media_path, "rb") as _tt_file:
-                        dl_button("⬇️ ទាញយកភាគនេះ", _tt_file.read(), f"tiktok_drama_{_tt_ready.get('series_id','')}_ep_{_tt_ready.get('episode',1)}.mp4",
-                                  "video/mp4", key="tiktok_drama_download", use_container_width=True)
-                else:
-                    if _tt_ready.get("fetch_err"):
-                        st.warning("ទាញវីដេអូភាគនេះមិនបាន។ ប្រហែល TikTok មិនអនុញ្ញាតទាញពី URL ប្រភេទ shortdrama នេះ។")
-                        with st.expander("មើលមូលហេតុ"):
-                            st.code(_tt_ready["fetch_err"])
-                    _tt_direct_media = st.text_input(
-                        "Media URL ផ្ទាល់ (MP4/M3U8) — ជាជម្រើស",
-                        value=_tt_ready.get("media_url", ""),
-                        placeholder="https://.../video.mp4",
-                        key="tiktok_drama_direct_media_url",
-                    )
-                    if _tt_direct_media.strip().lower().startswith(("https://", "http://")):
-                        _tt_ready["media_url"] = _tt_direct_media.strip()
-                        st.session_state["_tiktok_drama_result"] = _tt_ready
-                        st.video(_tt_direct_media.strip())
-                    else:
-                        st.markdown("**តំណភាគ:** " + _tt_ready.get("url", ""))
-
-                if st.button("✨ បញ្ជូន Link ទៅ Khmer Auto Caption", type="primary", key="tiktok_drama_to_caption", use_container_width=True):
-                    st.session_state["mode_pick"] = "🔗 Link"
-                    st.session_state["link_text_area"] = _tt_ready["url"]
-                    st.session_state["link_searched"] = [_tt_ready["url"]]
-                    st.session_state["_hg_imported_caption_notice"] = True
-                    st.rerun()
-
-                # ---------- Multi-episode ZIP ----------
-                st.markdown("#### ⬇️ ទាញយកវីដេអូច្រើនភាគ (ZIP)")
-                _rg_a, _rg_b = st.columns(2, gap="small")
-                with _rg_a:
-                    _tt_from = st.number_input("ពីភាគ", min_value=1, max_value=int(_tt_total), value=1, step=1, key="tiktok_dl_from")
-                with _rg_b:
-                    _tt_to = st.number_input("ដល់ភាគ", min_value=1, max_value=int(_tt_total), value=min(5, int(_tt_total)), step=1, key="tiktok_dl_to")
-                _tt_dl_max = st.selectbox("ចំនួនអតិបរមាក្នុងមួយលើក", [5, 10, 20, 50, 100], index=1, key="tiktok_dl_limit")
-                _tt_lo, _tt_hi = int(min(_tt_from, _tt_to)), int(max(_tt_from, _tt_to))
-                _tt_eps = list(range(_tt_lo, _tt_hi + 1))[:_tt_dl_max]
-                if st.button(f"📦 ទាញយក {len(_tt_eps)} ភាគជា ZIP", key="tiktok_dl_start",
-                             disabled=(not _tt_eps or busy), use_container_width=True):
-                    _tt_old = st.session_state.get("_tt_dl_ready")
-                    if _tt_old:
-                        shutil.rmtree(_tt_old.get("folder", ""), ignore_errors=True)
-                    _tt_folder = tempfile.mkdtemp(prefix="tiktok_batch_")
-                    _tt_zip_path = os.path.join(_tt_folder, "tiktok_drama_episodes.zip")
-                    _tt_errors, _tt_ok = [], 0
-                    _tt_bar = st.progress(0, text="កំពុងរៀបចំភាគសម្រាប់ទាញយក...")
+                with st.spinner("កំពុងអានទំព័ររឿង..."):
                     try:
-                        with zipfile.ZipFile(_tt_zip_path, "w", compression=zipfile.ZIP_STORED) as _tt_zip:
-                            for _ti, _tep in enumerate(_tt_eps, start=1):
-                                _ttmp = None
+                        _nd_scan_res = _nd_scan(_nd_q.strip())
+                        _nd_free_found = []
+                        for _e in _nd_scan_res["eps"][:80]:
+                            _m = _nd_probe_free(_e)
+                            if _m:
+                                _e["media"] = _m
+                                _nd_free_found.append(_e)
+                        for _i, _m in enumerate(_nd_scan_res["page_media"]):
+                            if not any(_m == x.get("media") for x in _nd_free_found):
+                                _nd_free_found.append({"label": f"ភាគឥតគិតថ្លៃ {_i+1}", "url": _nd_scan_res["url"], "media": _m, "locked": False})
+                        _nd_scan_res["free"] = _nd_free_found
+                        st.session_state["_nd_result"] = _nd_scan_res
+                    except Exception as _ex:
+                        st.error(f"បើកទំព័រមិនបាន៖ {_ex}")
+        _nd_r = st.session_state.get("_nd_result")
+        if _nd_r:
+            with st.container(border=True):
+                st.markdown("#### 🎬 " + (_nd_r["meta"].get("title") or "រឿងឥតគិតថ្លៃ"))
+                if _nd_r["meta"].get("poster", "").startswith(("http://", "https://")):
+                    st.image(_nd_r["meta"]["poster"], use_container_width=True)
+                if _nd_r["meta"].get("description"):
+                    st.caption(_nd_r["meta"]["description"][:300])
+                _nd_free = _nd_r.get("free", [])
+                st.caption(f"រកឃើញភាគ {len(_nd_r['eps'])} · ឥតគិតថ្លៃអាចទាញបាន {len(_nd_free)}")
+                if not _nd_free:
+                    st.warning("រកមិនឃើញភាគឥតគិតថ្លៃដែលមាន video សាធារណៈទេ។ ប្រហែលភាគទាំងអស់ត្រូវការកាក់ ឬ site លាក់ video ក្នុង JavaScript។ បើអ្នកមាន Media URL ឥតគិតថ្លៃ (mp4/m3u8) អាចបិទភ្ជាប់ខាងក្រោម។")
+                _nd_manual = st.text_area("Media URL ឥតគិតថ្លៃ (មួយបន្ទាត់មួយភាគ) — ជាជម្រើស", key="nd_manual", height=80)
+                for _l in [x.strip() for x in (_nd_manual or "").splitlines() if x.strip().lower().startswith(("http://", "https://"))]:
+                    if not any(_l == x.get("media") for x in _nd_free):
+                        _nd_free = _nd_free + [{"label": f"Manual {len(_nd_free)+1}", "url": _l, "media": _l, "locked": False}]
+                if _nd_free:
+                    _nd_labels = [f"{i+1}. {e['label']}" for i, e in enumerate(_nd_free)]
+                    _nd_pick = st.multiselect("ជ្រើសភាគឥតគិតថ្លៃ", _nd_labels, default=_nd_labels, key="nd_pick")
+                    _nd_sel = [_nd_free[_nd_labels.index(p)] for p in _nd_pick]
+                    _nd_cap_col, _nd_zip_col = st.columns(2, gap="small")
+                    with _nd_cap_col:
+                        if st.button("✨ បញ្ជូនទៅ Khmer Auto Caption", key="nd_to_caption", type="primary",
+                                     use_container_width=True, disabled=not _nd_sel):
+                            _urls = [e["media"] for e in _nd_sel]
+                            st.session_state["mode_pick"] = "🔗 Link"
+                            st.session_state["link_text_area"] = "\n".join(_urls)
+                            st.session_state["link_searched"] = _urls
+                            st.session_state["_hg_imported_caption_notice"] = True
+                            st.rerun()
+                    with _nd_zip_col:
+                        _nd_zip_go = st.button(f"📦 ទាញយក {len(_nd_sel)} ភាគជា ZIP", key="nd_zip", use_container_width=True,
+                                               disabled=(not _nd_sel or busy))
+                    if _nd_zip_go:
+                        _old = st.session_state.get("_nd_dl_ready")
+                        if _old:
+                            shutil.rmtree(_old.get("folder", ""), ignore_errors=True)
+                        _fold = tempfile.mkdtemp(prefix="free_batch_")
+                        _zp = os.path.join(_fold, "free_drama.zip")
+                        _errs, _ok = [], 0
+                        _bar = st.progress(0, text="កំពុងរៀបចំ...")
+                        with zipfile.ZipFile(_zp, "w", compression=zipfile.ZIP_STORED) as _zf:
+                            for _i, _e in enumerate(_nd_sel, start=1):
+                                _tmp = None
                                 try:
-                                    _tr = _fetch_one(_tt_ep_url(_tt_ready["series_id"], _tep))
-                                    if not _tr.get("ok") or not _tr.get("path"):
-                                        raise RuntimeError(_tr.get("err") or "ទាញយកវីដេអូមិនបាន")
-                                    _ttmp = _tr["path"]
-                                    _tsz = os.path.getsize(_ttmp)
-                                    _tcur = sum(x.file_size for x in _tt_zip.filelist)
-                                    if _tcur + _tsz > MAX_ZIP_MB * 1024 * 1024:
+                                    _fr = _fetch_one(_e["media"])
+                                    if not _fr.get("ok") or not _fr.get("path"):
+                                        raise RuntimeError(_fr.get("err") or "ទាញយកមិនបាន")
+                                    _tmp = _fr["path"]
+                                    if sum(x.file_size for x in _zf.filelist) + os.path.getsize(_tmp) > MAX_ZIP_MB * 1024 * 1024:
                                         raise RuntimeError(f"ទំហំ ZIP លើសកំណត់ {MAX_ZIP_MB}MB")
-                                    _tt_zip.write(_ttmp, f"episode_{_tep:04d}.mp4")
-                                    _tt_ok += 1
-                                except Exception as _te:
-                                    _tt_errors.append(f"ភាគ {_tep}: {str(_te)[:180]}")
+                                    _zf.write(_tmp, f"episode_{_i:03d}.mp4")
+                                    _ok += 1
+                                except Exception as _ee:
+                                    _errs.append(f"{_e['label']}: {str(_ee)[:180]}")
                                 finally:
-                                    if _ttmp:
-                                        shutil.rmtree(os.path.dirname(_ttmp), ignore_errors=True)
-                                _tt_bar.progress(_ti / max(1, len(_tt_eps)), text=f"ទាញបាន {_tt_ok}/{len(_tt_eps)} ភាគ · កំពុងដំណើរការ {_ti}/{len(_tt_eps)}")
-                        _tt_bar.empty()
-                        if _tt_ok:
-                            st.session_state["_tt_dl_ready"] = {"path": _tt_zip_path, "folder": _tt_folder, "count": _tt_ok,
-                                                                "name": safe_filename(f"tiktok_drama_{_tt_ready['series_id']}")}
-                            st.success(f"រៀបចំបាន {_tt_ok} ភាគរួចរាល់។")
+                                    if _tmp:
+                                        shutil.rmtree(os.path.dirname(_tmp), ignore_errors=True)
+                                _bar.progress(_i / max(1, len(_nd_sel)), text=f"ទាញបាន {_ok}/{len(_nd_sel)}")
+                        _bar.empty()
+                        if _ok:
+                            st.session_state["_nd_dl_ready"] = {"path": _zp, "folder": _fold, "count": _ok,
+                                                                "name": safe_filename(_nd_r["meta"].get("title") or "free_drama")}
+                            st.success(f"រៀបចំបាន {_ok} ភាគ។")
                         else:
-                            shutil.rmtree(_tt_folder, ignore_errors=True)
+                            shutil.rmtree(_fold, ignore_errors=True)
                             st.error("មិនអាចទាញយកភាគណាមួយបានទេ។")
-                        if _tt_errors:
-                            with st.expander(f"មើលភាគដែលមានបញ្ហា ({len(_tt_errors)})"):
-                                for _tw in _tt_errors:
-                                    st.warning(_tw)
-                    except Exception as _tt_fatal:
-                        shutil.rmtree(_tt_folder, ignore_errors=True)
-                        st.error(f"រៀបចំ ZIP មិនបាន៖ {_tt_fatal}")
-                _tt_dl_ready = st.session_state.get("_tt_dl_ready")
-                if _tt_dl_ready and os.path.isfile(_tt_dl_ready.get("path", "")):
-                    with open(_tt_dl_ready["path"], "rb") as _tt_zf:
-                        dl_button(f"⬇️ ទាញយក ZIP ({_tt_dl_ready['count']} ភាគ)", _tt_zf, f"{_tt_dl_ready['name']}.zip",
-                                  "application/zip", key="tiktok_dl_file", use_container_width=True)
-
-                if st.button("🗑️ បិទរឿងនេះ", key="tiktok_drama_clear", use_container_width=True):
-                    _tt_free_media(_tt_ready)
-                    st.session_state.pop("_tiktok_drama_result", None)
+                        for _w in _errs:
+                            st.warning(_w)
+                _nd_dl = st.session_state.get("_nd_dl_ready")
+                if _nd_dl and os.path.isfile(_nd_dl.get("path", "")):
+                    with open(_nd_dl["path"], "rb") as _f:
+                        dl_button(f"⬇️ ទាញយក ZIP ({_nd_dl['count']} ភាគ)", _f, f"{_nd_dl['name']}.zip",
+                                  "application/zip", key="nd_dl_file", use_container_width=True)
+                if st.button("🗑️ បិទរឿងនេះ", key="nd_clear", use_container_width=True):
+                    _old = st.session_state.pop("_nd_dl_ready", None)
+                    if _old:
+                        shutil.rmtree(_old.get("folder", ""), ignore_errors=True)
+                    st.session_state.pop("_nd_result", None)
                     st.rerun()
+        st.caption("ចំណាំ៖ យកតែភាគឥតគិតថ្លៃដែលបើកសាធារណៈប៉ុណ្ណោះ។ ភាគបង់ប្រាក់/ត្រូវ login មិនត្រូវបានទាញទេ។ សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
 
-        st.caption("ចំណាំ៖ TikTok មិនមាន API បញ្ជីភាគទេ ដូច្នេះភាគត្រូវបានបង្កើតពី series ID + លេខភាគ។ ការទាញវីដេអូអាចមិនដំណើរការលើ URL shortdrama ទាំងអស់ — សូមប្រើតែវីដេអូដែលអ្នកមានសិទ្ធិប្រើ។")
 
 # ============================ ផ្ទាំង ១: វីដេអូ ============================
 link_limit = MAX_VIDEOS
