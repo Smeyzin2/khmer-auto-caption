@@ -6854,7 +6854,19 @@ def _kv_component():
 
 
 GEMINI_OAI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+GEMINI_DEFAULT_MODEL = "gemini-3.6-flash"   # gemini-2.5-flash លែងបើកឱ្យអ្នកប្រើថ្មី (HTTP 404)
+_GEMINI_RETIRED = ("gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.0", "gemini-1.5", "gemini-1.0", "gemini-pro")
+
+
+def _gm_fix(name):
+    """ប្តូរឈ្មោះម៉ូដែល Gemini ចាស់ៗដែលបិទហើយ ទៅម៉ូដែលលំនាំដើមថ្មី (រួមទាំងដែលចងចាំក្នុង Browser)។"""
+    n = str(name or "").strip()
+    if not n:
+        return GEMINI_DEFAULT_MODEL
+    base = n.replace("models/", "")
+    if base in ("gemini-2.5-flash", "gemini-2.5-pro") or base.startswith(("gemini-2.0", "gemini-1.5", "gemini-1.0")) or base == "gemini-pro":
+        return GEMINI_DEFAULT_MODEL
+    return n
 GEMINI_LABEL = "Gemini ⚠️ មិនណែនាំ"
 
 
@@ -6864,7 +6876,7 @@ def xk_cfg_for_session():
     if ss.get("user_oai_key"):
         return (ss.get("user_oai_key", ""), ss.get("user_oai_base", ""), ss.get("user_oai_model", ""))
     if ss.get("user_gemini_key"):
-        return (ss["user_gemini_key"], GEMINI_OAI_BASE, ss.get("user_gemini_model") or GEMINI_DEFAULT_MODEL)
+        return (ss["user_gemini_key"], GEMINI_OAI_BASE, _gm_fix(ss.get("user_gemini_model")))
     return ("", "", "")
 
 
@@ -6927,7 +6939,7 @@ def ls_sync():
     gm = data.get("gemini") or {}
     if isinstance(gm, dict) and gm.get("key") and not st.session_state.get("user_gemini_key"):
         st.session_state["user_gemini_key"] = str(gm.get("key", "")).strip()
-        st.session_state["user_gemini_model"] = str(gm.get("model", "") or "").strip() or GEMINI_DEFAULT_MODEL
+        st.session_state["user_gemini_model"] = _gm_fix(gm.get("model", ""))
     hg = data.get("hongguo") or {}
     if isinstance(hg, dict):
         if hg.get("app_id") and not st.session_state.get("user_hg_app_id"):
@@ -7047,7 +7059,7 @@ def key_check_targets():
                 ss.get("user_oai_model", ""))
         rows.append(("CodeCraft ផ្ទាល់ខ្លួន", mask_key(_cfg[0]), "openai", _cfg, _cfg[2]))
     if ss.get("user_gemini_key"):
-        _gm = ss.get("user_gemini_model") or GEMINI_DEFAULT_MODEL
+        _gm = _gm_fix(ss.get("user_gemini_model"))
         rows.append(("Gemini ផ្ទាល់ខ្លួន (មិនណែនាំ)", mask_key(ss["user_gemini_key"]), "openai",
                      (ss["user_gemini_key"], GEMINI_OAI_BASE, _gm), _gm))
     return rows
@@ -7171,8 +7183,10 @@ def user_key_box():
                        "ហើយ Key ឥតគិតថ្លៃអាចអស់កូតាលឿន។ សូមប្រើ Claude ឬ CodeCraft ជំនួស បើអាច។ "
                        "ប្រើ Gemini ក្នុងករណីគ្មាន Key ផ្សេងប៉ុណ្ណោះ។")
             typed = st.text_input("Gemini API Key", type="password", placeholder="AIza...", key="user_gemini_input")
+            if st.session_state.get("user_gemini_model_input"):
+                st.session_state["user_gemini_model_input"] = _gm_fix(st.session_state["user_gemini_model_input"])
             oai_model_in = st.text_input("ឈ្មោះម៉ូដែល Gemini",
-                                         value=st.session_state.get("user_gemini_model", GEMINI_DEFAULT_MODEL),
+                                         value=_gm_fix(st.session_state.get("user_gemini_model", GEMINI_DEFAULT_MODEL)),
                                          key="user_gemini_model_input")
             st.caption("Gemini ប្រើសម្រាប់បកប្រែ និងកែសម្រួលអត្ថបទប៉ុណ្ណោះ។ ការស្តាប់សំឡេងនៅតែត្រូវការ Groq Key។ "
                        "បើមាន CodeCraft Key រួចហើយ កម្មវិធីប្រើ CodeCraft មុន។")
@@ -7222,7 +7236,7 @@ def user_key_box():
                     st.rerun()
             elif provider == GEMINI_LABEL:
                 _gk = str(typed or "").strip()
-                _gm = (oai_model_in or GEMINI_DEFAULT_MODEL).strip()
+                _gm = _gm_fix(oai_model_in or GEMINI_DEFAULT_MODEL)
                 if len(_gk) < 20 or any(_c.isspace() for _c in _gk):
                     st.error("Gemini Key មិនត្រឹមត្រូវ។ សូមបិទភ្ជាប់ Key ឱ្យពេញ (ចាប់ផ្តើមដោយ AIza)។")
                 else:
