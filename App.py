@@ -9092,6 +9092,65 @@ def _nd_free_media(res):
         res["path"] = ""
 
 
+_ND_BASE = "https://neatidrama.com"
+_ND_CATS = {
+    "🔥 ពេញនិយម": "/neatidrama?sort=popular",
+    "🆕 ថ្មីៗ": "/neatidrama?sort=updated",
+    "✅ ចប់ហើយ": "/neatidrama?status=completed",
+    "⏳ ឆាប់ៗនេះ": "/neatidrama?status=upcoming",
+    "📚 ទាំងអស់": "/neatidrama",
+}
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _nd_catalog(path, page=1):
+    """ទាញបញ្ជីរឿង (poster + ចំណងជើង) និងប្រភេទ (genre) ពីទំព័រកាតាឡុក។"""
+    url = path if path.startswith("http") else _ND_BASE + path
+    if page > 1:
+        url += ("&" if "?" in url else "?") + f"page={page}"
+    r = requests.get(url, headers={"User-Agent": _ND_UA}, timeout=20)
+    r.raise_for_status()
+    html = r.text[:3_000_000]
+    items, seen = [], set()
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']*?/neatidrama/(d-[\w-]+))[^"\']*["\'][^>]*>(.*?)</a>', html, re.I | re.S):
+        href, did, inner = m.group(1), m.group(2), m.group(3)
+        if did in seen:
+            continue
+        im = re.search(r'<img[^>]+(?:data-src|src)=["\']([^"\']+)["\']', inner, re.I)
+        al = re.search(r'<img[^>]+alt=["\']([^"\']*)["\']', inner, re.I)
+        title = (al.group(1) if al else "") or re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", inner)).strip()
+        poster = requests.compat.urljoin(url, im.group(1)) if im else ""
+        if not poster and not title:
+            continue
+        seen.add(did)
+        items.append({"id": did, "title": title[:80] or did, "poster": poster,
+                      "url": requests.compat.urljoin(url, "/neatidrama/" + did),
+                      "exclusive": bool(re.search(r"exclusive", inner, re.I))})
+    genres, gs = [], set()
+    for m in re.finditer(r'<a[^>]+href=["\']([^"\']*?/genre/[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
+        lab = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(2))).strip()
+        if lab and m.group(1) not in gs:
+            gs.add(m.group(1))
+            genres.append((lab[:30], m.group(1)))
+    return {"items": items, "genres": genres}
+
+
+def _nd_open(url):
+    """បើករឿងមួយ៖ អានទំព័រ + រកភាគឥតគិតថ្លៃ។"""
+    res = _nd_scan(url.strip())
+    free = []
+    for e in res["eps"][:80]:
+        mm = _nd_probe_free(e)
+        if mm:
+            e["media"] = mm
+            free.append(e)
+    for i, mm in enumerate(res["page_media"]):
+        if not any(mm == x.get("media") for x in free):
+            free.append({"label": f"ភាគឥតគិតថ្លៃ {i+1}", "url": res["url"], "media": mm, "locked": False})
+    res["free"] = free
+    st.session_state["_nd_result"] = res
+
+
 with tab_free:
     _nd_access = _hg_has_access()
     if not _nd_access:
@@ -9099,33 +9158,64 @@ with tab_free:
     if _nd_access:
         st.markdown("### 🎬 រឿងខ្លី — ភាគឥតគិតថ្លៃ")
         st.caption("បិទភ្ជាប់តំណរឿង។ កម្មវិធីយកតែភាគដែលបើកមើលបានដោយឥតគិតថ្លៃ (មិនត្រូវការកាក់/គណនី)។ ភាគបង់ប្រាក់ត្រូវរំលង។")
-        with st.container(border=True):
-            _nd_c1, _nd_c2 = st.columns([4, 1], gap="small")
-            with _nd_c1:
-                _nd_q = st.text_input("តំណរឿង (URL)", key="nd_query", placeholder="https://...")
-            with _nd_c2:
-                st.write("")
-                _nd_go = st.button("🔎 បើករឿង", key="nd_open", type="primary", use_container_width=True, disabled=busy)
-        if _nd_go:
-            if "neatidrama.com" not in (_nd_q or ""):
-                st.warning("សូមបញ្ចូលតំណរឿងត្រឹមត្រូវ។")
-            else:
-                with st.spinner("កំពុងអានទំព័ររឿង..."):
-                    try:
-                        _nd_scan_res = _nd_scan(_nd_q.strip())
-                        _nd_free_found = []
-                        for _e in _nd_scan_res["eps"][:80]:
-                            _m = _nd_probe_free(_e)
-                            if _m:
-                                _e["media"] = _m
-                                _nd_free_found.append(_e)
-                        for _i, _m in enumerate(_nd_scan_res["page_media"]):
-                            if not any(_m == x.get("media") for x in _nd_free_found):
-                                _nd_free_found.append({"label": f"ភាគឥតគិតថ្លៃ {_i+1}", "url": _nd_scan_res["url"], "media": _m, "locked": False})
-                        _nd_scan_res["free"] = _nd_free_found
-                        st.session_state["_nd_result"] = _nd_scan_res
-                    except Exception as _ex:
-                        st.error(f"បើកទំព័រមិនបាន៖ {_ex}")
+        # ---------- Catalog (poster + category) ----------
+        _nd_cat_names = list(_ND_CATS.keys())
+        _nd_extra = []
+        _nd_cat = st.selectbox("📂 ប្រភេទ / Category", _nd_cat_names, key="nd_cat")
+        _nd_path = _ND_CATS[_nd_cat]
+        _nd_page = int(st.session_state.get("nd_page", 1))
+        if st.session_state.get("_nd_last_cat") != _nd_cat:
+            st.session_state["_nd_last_cat"] = _nd_cat
+            st.session_state["nd_page"] = _nd_page = 1
+        _nd_data = None
+        try:
+            _nd_data = _nd_catalog(_nd_path, _nd_page)
+            if _nd_data["genres"]:
+                _gl = ["— ជ្រើសតាមប្រភេទរឿង —"] + [g[0] for g in _nd_data["genres"]]
+                _gp = st.selectbox("🎭 Genre", _gl, key="nd_genre")
+                if _gp != _gl[0]:
+                    _nd_data = _nd_catalog(dict(_nd_data["genres"])[_gp], 1)
+        except Exception as _ex:
+            st.warning(f"ទាញបញ្ជីរឿងមិនបាន៖ {_ex}")
+        _nd_filter = st.text_input("🔎 ស្វែងរកឈ្មោះរឿង", key="nd_filter", placeholder="វាយឈ្មោះរឿង...")
+        if _nd_data and _nd_data["items"]:
+            _nd_items = [x for x in _nd_data["items"] if not _nd_filter or _nd_filter.lower() in x["title"].lower()]
+            for _row in range(0, len(_nd_items), 3):
+                _cols = st.columns(3, gap="small")
+                for _c, _it in zip(_cols, _nd_items[_row:_row + 3]):
+                    with _c:
+                        if _it["poster"].startswith(("http://", "https://")):
+                            st.image(_it["poster"], use_container_width=True)
+                        st.caption(("⭐ " if _it["exclusive"] else "") + _it["title"])
+                        if st.button("▶️ បើក", key=f"nd_pick_{_it['id']}", use_container_width=True, disabled=busy):
+                            with st.spinner("កំពុងអានរឿង..."):
+                                try:
+                                    _nd_open(_it["url"])
+                                except Exception as _ex:
+                                    st.error(f"បើករឿងមិនបាន៖ {_ex}")
+            _pc1, _pc2 = st.columns(2, gap="small")
+            with _pc1:
+                if st.button("⬅️ មុន", key="nd_prev", use_container_width=True, disabled=(_nd_page <= 1)):
+                    st.session_state["nd_page"] = _nd_page - 1
+                    st.rerun()
+            with _pc2:
+                if st.button("បន្ទាប់ ➡️", key="nd_next", use_container_width=True):
+                    st.session_state["nd_page"] = _nd_page + 1
+                    st.rerun()
+        elif _nd_data is not None:
+            st.info("រកមិនឃើញបញ្ជីរឿងក្នុងទំព័រនេះទេ។ អាចបិទភ្ជាប់តំណរឿងដោយដៃខាងក្រោម។")
+
+        with st.expander("🔗 ឬបិទភ្ជាប់តំណរឿងដោយដៃ"):
+            _nd_q = st.text_input("តំណរឿង (URL)", key="nd_query", placeholder="https://...")
+            if st.button("🔎 បើករឿង", key="nd_open", type="primary", use_container_width=True, disabled=busy):
+                if "neatidrama.com" not in (_nd_q or ""):
+                    st.warning("សូមបញ្ចូលតំណរឿងត្រឹមត្រូវ។")
+                else:
+                    with st.spinner("កំពុងអានទំព័ររឿង..."):
+                        try:
+                            _nd_open(_nd_q)
+                        except Exception as _ex:
+                            st.error(f"បើកទំព័រមិនបាន៖ {_ex}")
         _nd_r = st.session_state.get("_nd_result")
         if _nd_r:
             with st.container(border=True):
