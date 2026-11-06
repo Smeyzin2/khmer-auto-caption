@@ -9226,19 +9226,52 @@ def _nd_enrich(items):
         res.append(it)
     return res
 
-def _nd_preview(media):
-    """ចាក់សាកល្បង៖ mp4 → st.video · m3u8 → hls.js (browser ភាគច្រើនមិនចាក់ m3u8 ផ្ទាល់)។"""
-    import html as _html
-    import streamlit.components.v1 as _cv1
-    if re.search(r"\.m3u8", media, re.I):
-        _u = _html.escape(media, quote=True)
-        _cv1.html(f"""<video id=v controls playsinline style="width:100%;max-height:70vh;background:#000;border-radius:10px"></video>
-<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
-<script>var u="{_u}",v=document.getElementById('v');
-if(window.Hls&&Hls.isSupported()){{var h=new Hls();h.loadSource(u);h.attachMedia(v);}}
-else{{v.src=u;}}</script>""", height=330)
-    else:
-        st.video(media)
+def _nd_preview(media, referer=""):
+    """ចាក់សាកល្បង៖ ម៉ាស៊ីនមេទាញវីដេអូខ្លួនឯង (ដោយប្រើ Referer ត្រឹមត្រូវ) រួចបញ្ជូនមក browser។
+    ដោះស្រាយបញ្ហា browser/ទូរស័ព្ទបើកតំណផ្ទាល់មិនកើត (hotlink / ticket ចងជាមួយ IP ម៉ាស៊ីនមេ)។"""
+    cache = st.session_state.setdefault("_nd_prev_cache", {})
+    ent = cache.get(media)
+    if not (ent and ent.get("path") and os.path.isfile(ent["path"])):
+        for _k, _v in list(cache.items()):
+            try:
+                if _v.get("path"):
+                    shutil.rmtree(os.path.dirname(_v["path"]), ignore_errors=True)
+            except Exception:
+                pass
+            cache.pop(_k, None)
+        with st.spinner("កំពុងរៀបចំវីដេអូសម្រាប់មើលសាកល្បង... (រង់ចាំបន្តិច)"):
+            ent = _nd_clip(media, referer)
+            if not ent.get("ok"):
+                ent = _nd_fetch(media, referer)
+        if ent.get("ok"):
+            cache[media] = ent
+        else:
+            st.error("បើកវីដេអូមិនបាន៖ " + str(ent.get("err")))
+            st.code(_nd_diag(media, referer))
+            return
+    with open(ent["path"], "rb") as _f:
+        st.video(_f.read())
+
+
+def _nd_clip(media, referer=""):
+    """កាត់វីដេអូ ៦០ វិនាទីដំបូងមកម៉ាស៊ីនមេ (លឿន) សម្រាប់មើលសាកល្បង។"""
+    import subprocess
+    if not referer or referer == media:
+        referer = _ND_BASE + "/"
+    folder = tempfile.mkdtemp(prefix="kac_prev_")
+    path = os.path.join(folder, "preview.mp4")
+    try:
+        hdr = f"Referer: {referer}\r\nOrigin: {_ND_BASE}\r\nUser-Agent: {_ND_UA}\r\n"
+        cmd = [imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error", "-headers", hdr,
+               "-i", media, "-t", "60", "-c", "copy", "-bsf:a", "aac_adtstoasc",
+               "-movflags", "+faststart", path]
+        pr = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if pr.returncode != 0 or not os.path.isfile(path) or os.path.getsize(path) < 1000:
+            raise RuntimeError("ffmpeg: " + (pr.stderr or "")[-300:])
+        return {"path": path, "ok": True}
+    except Exception as e:
+        shutil.rmtree(folder, ignore_errors=True)
+        return {"path": None, "ok": False, "err": str(e)[:400]}
 
 
 def _nd_headers(referer=""):
@@ -9259,6 +9292,8 @@ def _nd_diag(media, referer=""):
 
 def _nd_fetch(media, referer=""):
     """ទាញវីដេអូឥតគិតថ្លៃ ដោយផ្ញើ Referer/Origin របស់ site (ដោះស្រាយ hotlink 403) និងគាំទ្រ m3u8។"""
+    if referer == media:
+        referer = ""
     limit = MAX_DOWNLOAD_MB * 1024 * 1024
     folder = tempfile.mkdtemp(prefix="kac_free_")
     path = os.path.join(folder, "video.mp4")
@@ -9498,7 +9533,7 @@ with tab_free:
                     _nd_sel = [_nd_free[_nd_labels.index(p)] for p in _nd_pick]
                     _nd_prev = st.selectbox("▶️ មើលសាកល្បង", _nd_labels, key="nd_preview")
                     try:
-                        _nd_preview(_nd_free[_nd_labels.index(_nd_prev)]["media"])
+                        _nd_preview(_nd_free[_nd_labels.index(_nd_prev)]["media"], _nd_free[_nd_labels.index(_nd_prev)].get("url", ""))
                     except Exception:
                         st.caption("ចាក់ក្នុងកម្មវិធីមិនបាន — សាកទាញយកជំនួស។")
                     _pv = _nd_free[_nd_labels.index(_nd_prev)]
