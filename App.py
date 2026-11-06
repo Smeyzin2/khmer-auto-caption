@@ -9154,6 +9154,32 @@ def _nd_catalog(path, page=1):
     return {"items": items, "genres": genres}
 
 
+@st.cache_data(ttl=900, show_spinner=False)
+def _nd_info(url):
+    """អានទំព័ររឿង៖ poster (og:image) + ពិនិត្យថាបង់ប្រាក់/ចាក់សោ ឬឥតគិតថ្លៃ។"""
+    out = {"poster": "", "locked": False, "ok": False}
+    try:
+        r = requests.get(url, headers={"User-Agent": _ND_UA}, timeout=15)
+        if not r.ok:
+            return out
+        html = r.text[:3_000_000]
+        meta = _nd_meta(html)
+        out["poster"] = requests.compat.urljoin(url, meta.get("poster", "")) if meta.get("poster") else ""
+        out["ok"] = True
+        if re.search(r"paid[\s_-]*movies?|premium|vip[\s_-]*only|members?[\s_-]*only", html, re.I):
+            out["locked"] = True
+        else:
+            eps = []
+            for m in re.finditer(r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
+                if re.search(r"(episode|/ep|play|watch|/e-|/p-)", m.group(1), re.I):
+                    eps.append(bool(re.search(r"(lock|paid|coin|premium|🔒)", m.group(0), re.I)))
+            if eps and all(eps) and not _nd_media_in(html):
+                out["locked"] = True
+    except Exception:
+        pass
+    return out
+
+
 def _nd_open(url):
     """បើករឿងមួយ៖ អានទំព័រ + រកភាគឥតគិតថ្លៃ។"""
     res = _nd_scan(url.strip())
@@ -9201,6 +9227,21 @@ with tab_free:
             _nd_filter = st.text_input("🔎 ស្វែងរកឈ្មោះរឿង", key="nd_filter", placeholder="វាយឈ្មោះរឿង...")
             if _nd_data and _nd_data["items"]:
                 _nd_items = [x for x in _nd_data["items"] if not _nd_filter or _nd_filter.lower() in x["title"].lower()]
+            _nd_items = _nd_items[:30]
+            from concurrent.futures import ThreadPoolExecutor
+            with st.spinner("កំពុងពិនិត្យរឿងឥតគិតថ្លៃ និង poster..."):
+                with ThreadPoolExecutor(max_workers=8) as _ex:
+                    _infos = list(_ex.map(lambda x: _nd_info(x["url"]), _nd_items))
+            _free_items, _hidden = [], 0
+            for _it, _inf in zip(_nd_items, _infos):
+                if _inf["locked"]:
+                    _hidden += 1
+                    continue
+                if _inf["poster"]:
+                    _it["poster"] = _inf["poster"]
+                _free_items.append(_it)
+            _nd_items = _free_items
+            st.caption(f"បង្ហាញរឿងឥតគិតថ្លៃ {len(_nd_items)} · លាក់រឿងចាក់សោ/បង់ប្រាក់ {_hidden}")
                 for _row in range(0, len(_nd_items), 3):
                     _cols = st.columns(3, gap="small")
                     for _c, _it in zip(_cols, _nd_items[_row:_row + 3]):
