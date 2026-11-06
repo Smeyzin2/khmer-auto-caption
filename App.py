@@ -9113,17 +9113,23 @@ def _nd_catalog(path, page=1):
     html = r.text[:3_000_000]
     items, seen = [], set()
     _img_pat = re.compile(r'(?:https?:)?//[^\s"\'<>()\\]+?\.(?:webp|jpe?g|png)|/uploads/[^\s"\'<>()\\]+?\.(?:webp|jpe?g|png)', re.I)
-    for m in re.finditer(r'<a[^>]+href=["\']([^"\']*?/neatidrama/(d-[\w-]+))[^"\']*["\'][^>]*>(.*?)</a>', html, re.I | re.S):
-        href, did, inner = m.group(1), m.group(2), m.group(3)
-        if did in seen:
-            continue
+    _by = {}
+    _order = []
+    for m in re.finditer(r'<a[^>]+href=[\"\']([^\"\']*?/neatidrama/(d-[\w-]+))[^\"\']*[\"\'][^>]*>(.*?)</a>', html, re.I | re.S):
+        _did = m.group(2)
+        if _did not in _by:
+            _by[_did] = {"inner": "", "pos": m.start(), "end": m.end()}
+            _order.append(_did)
+        _by[_did]["inner"] += " " + m.group(3)
+        _by[_did]["end"] = m.end()
+    for did in _order:
+        inner = _by[did]["inner"]
+        _m0 = _by[did]["pos"]
         poster = ""
         _inner = inner.replace("&amp;", "&")
-        # 1) poster ឈ្មោះមាន id រឿង (ក្នុងកាតខ្លួនឯងមុន)
         pm = re.search(r'/uploads/posters/' + re.escape(did) + r'[^\s"\'<>()\\,]*', html)
         if pm:
             poster = pm.group(0)
-        # 2) img: src / data-src / data-lazy-src / data-original / srcset / background-image (តែក្នុងកាតនេះ)
         if not poster:
             for _im in re.finditer(r'<img\b[^>]*>', _inner, re.I):
                 _tag = _im.group(0)
@@ -9143,7 +9149,8 @@ def _nd_catalog(path, page=1):
             if _bg and not _bg.group(1).startswith("data:"):
                 poster = _bg.group(1)
         if not poster:
-            for im in _img_pat.finditer(_inner):
+            # ជុំវិញកាត (ក្រោយ anchor ១ ដើម្បីកុំចាប់យក poster រឿងមុន)
+            for im in _img_pat.finditer(html[_by[did]["end"]:_by[did]["end"] + 500].replace("&amp;", "&")):
                 u = im.group(0)
                 if re.search(r"(logo|banner|icon)", u, re.I):
                     continue
@@ -9156,11 +9163,11 @@ def _nd_catalog(path, page=1):
         title = re.split(r"\s\d\.\d\s", title + " ")[0].strip() or title
         if not poster and not title:
             continue
-        seen.add(did)
         items.append({"id": did, "title": title[:80] or did,
                       "poster": requests.compat.urljoin(url, poster) if poster else "",
                       "url": requests.compat.urljoin(url, "/neatidrama/" + did),
-                      "exclusive": bool(re.search(r"exclusive", inner, re.I))})
+                      "exclusive": bool(re.search(r"exclusive", inner, re.I)),
+                      "card_locked": _card_locked})
     genres, gs = [], set()
     for m in re.finditer(r'<a[^>]+href=["\']([^"\']*?/genre/[^"\']+)["\'][^>]*>(.*?)</a>', html, re.I | re.S):
         lab = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(2))).strip()
@@ -9177,6 +9184,11 @@ def _nd_info(url):
     try:
         res = _nd_scan(url)
         out["poster"] = (res["meta"].get("poster") or "").strip()
+        if not out["poster"]:
+            _h = requests.get(url, headers={"User-Agent": _ND_UA}, timeout=20).text[:1_500_000]
+            _pm = re.search(r'(?:https?:)?//[^\s"\'<>()\\]+?/uploads/posters/[^\s"\'<>()\\]+|/uploads/posters/[^\s"\'<>()\\]+', _h)
+            if _pm:
+                out["poster"] = requests.compat.urljoin(url, _pm.group(0))
         if res["page_media"]:
             out["free"] = True
             return out
@@ -9209,6 +9221,21 @@ def _nd_enrich(items):
             it["poster"] = inf["poster"]
         res.append(it)
     return res
+
+
+def _nd_preview(media):
+    """ចាក់សាកល្បង៖ mp4 → st.video · m3u8 → hls.js (browser ភាគច្រើនមិនចាក់ m3u8 ផ្ទាល់)។"""
+    import html as _html
+    import streamlit.components.v1 as _cv1
+    if re.search(r"\.m3u8", media, re.I):
+        _u = _html.escape(media, quote=True)
+        _cv1.html(f"""<video id=v controls playsinline style="width:100%;max-height:70vh;background:#000;border-radius:10px"></video>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1.5.17/dist/hls.min.js"></script>
+<script>var u="{_u}",v=document.getElementById('v');
+if(window.Hls&&Hls.isSupported()){{var h=new Hls();h.loadSource(u);h.attachMedia(v);}}
+else{{v.src=u;}}</script>""", height=330)
+    else:
+        st.video(media)
 
 
 def _nd_open(url):
@@ -9327,9 +9354,18 @@ with tab_free:
                     _nd_sel = [_nd_free[_nd_labels.index(p)] for p in _nd_pick]
                     _nd_prev = st.selectbox("▶️ មើលសាកល្បង", _nd_labels, key="nd_preview")
                     try:
-                        st.video(_nd_free[_nd_labels.index(_nd_prev)]["media"])
+                        _nd_preview(_nd_free[_nd_labels.index(_nd_prev)]["media"])
                     except Exception:
                         st.caption("ចាក់ក្នុងកម្មវិធីមិនបាន — សាកទាញយកជំនួស។")
+                    if st.button("📥 ទាញមកម៉ាស៊ីនមេរួចចាក់មើល", key="nd_prev_dl", use_container_width=True, disabled=busy):
+                        with st.spinner("កំពុងទាញ..."):
+                            _pr = _fetch_one(_nd_free[_nd_labels.index(_nd_prev)]["media"])
+                        if _pr.get("ok") and _pr.get("path") and os.path.isfile(_pr["path"]):
+                            with open(_pr["path"], "rb") as _pf:
+                                st.video(_pf.read())
+                            shutil.rmtree(os.path.dirname(_pr["path"]), ignore_errors=True)
+                        else:
+                            st.error("ទាញមិនបាន៖ " + str(_pr.get("err") or "មិនស្គាល់ហេតុផល"))
                     _nd_cap_col, _nd_zip_col = st.columns(2, gap="small")
                     with _nd_cap_col:
                         if st.button("✨ បញ្ជូនទៅ Khmer Auto Caption", key="nd_to_caption", type="primary",
