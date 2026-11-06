@@ -8286,7 +8286,14 @@ def _hg_fetch_cover(url):
     if not u.startswith(("http://", "https://")):
         return None, "bad url"
     last = ""
-    for ref in ("https://hongguoduanju.com/", ""):
+    _cands = [u]
+    _base, _, _q = u.partition("?")
+    for _ext in (".heic", ".avif", ".awebp", ".image"):
+        if _base.lower().endswith(_ext):
+            for _alt in (".jpeg", ".webp", ".png"):
+                _cands.append(_base[:-len(_ext)] + _alt + (("?" + _q) if _q else ""))
+    _tries = [(c, ref) for c in _cands for ref in ("https://hongguoduanju.com/", "")]
+    for u, ref in _tries:
         try:
             headers = {"User-Agent": "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120 Mobile Safari/537.36",
                        "Accept": "image/avif,image/webp,image/jpeg,image/*;q=0.8"}
@@ -8311,7 +8318,7 @@ def _hg_fetch_cover(url):
                 im.save(out, format="JPEG", quality=82)
                 return out.getvalue(), ""
             except Exception as e:
-                last = "decode: " + str(e)[:80]
+                last = "decode: " + (r.headers.get("Content-Type") or "?")[:30] + " " + str(e)[:40]
                 ctype = (r.headers.get("Content-Type") or "").lower()
                 if ctype.startswith("image/") and any(x in ctype for x in ("jpeg", "png", "webp", "gif")):
                     return data, ""
@@ -8338,8 +8345,7 @@ def _hg_show_cover(url):
         'justify-content:center;font-size:34px;">🎬</div>',
         unsafe_allow_html=True,
     )
-    if _is_admin_session():
-        st.caption("🖼 " + str(err)[:60])
+    st.caption("🖼 " + str(err)[:70])
 
 
 def _hg_enrich_rows(rows):
