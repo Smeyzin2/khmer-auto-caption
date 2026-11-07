@@ -8048,9 +8048,15 @@ def _hg_prefixes():
     return res
 
 
+_HG_FAIL = {"until": 0.0, "msg": ""}
+
+
 def _hg_api(endpoint, params=None, timeout=45):
     """Call XiaoYingAPI Hongguo endpoint and unwrap its {code,msg,data} envelope.
     បើ path 404 (code 20030) សាកល្បង prefix/slash ផ្សេងៗ ហើយចងចាំ path ដែលដំណើរការ។"""
+    if _HG_FAIL["until"] > time.time() and not st.session_state.get("_hg_good_prefix"):
+        raise RuntimeError(_HG_FAIL["msg"])   # កុំសាកល្បងម្តងទៀតជាប់ៗគ្នា (ធ្វើឱ្យយឺត)
+    timeout = min(timeout, 12)
     ep = str(endpoint).strip("/")
     good = st.session_state.get("_hg_good_prefix")
     prefixes = ([good] if good else []) + [x for x in _hg_prefixes() if x != good]
@@ -8083,9 +8089,12 @@ def _hg_api(endpoint, params=None, timeout=45):
                 raise RuntimeError(f"XiaoYingAPI {code}: {msg}")
             st.session_state["_hg_good_prefix"] = prefix
             return payload.get("data", payload) if isinstance(payload, dict) else payload
-    raise RuntimeError((last_err or "XiaoYingAPI: រកមិនឃើញ endpoint") +
+    _msg = ((last_err or "XiaoYingAPI: រកមិនឃើញ endpoint") +
                        " · បានសាកល្បង: " + ", ".join(tried[:6]) +
-                       " · សូមសួរអ្នកលក់រក API docs ដើម្បីដឹង path ត្រឹមត្រូវ ហើយដាក់ក្នុងប្រអប់ API path prefix។")
+                       " · សូមសួរអ្នកលក់រក API docs ដើម្បីដឹង path ត្រឹមត្រូវ។")
+    _HG_FAIL["until"] = time.time() + 90
+    _HG_FAIL["msg"] = _msg
+    raise RuntimeError(_msg)
 
 
 def _hg_results(data):
