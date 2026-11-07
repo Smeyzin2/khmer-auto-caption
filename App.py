@@ -8033,9 +8033,17 @@ def _hg_signed_params(biz=None, method="GET", path=""):
     return params
 
 
+def _hg_prefix_secret():
+    try:
+        v = st.secrets.get("HONGGUO_PATH_PREFIX", "")
+    except Exception:
+        v = ""
+    return str(v or os.environ.get("HONGGUO_PATH_PREFIX", "")).strip()
+
+
 def _hg_prefixes():
     """Path prefix ដែលអាចកំណត់ដោយខ្លួនឯង (ប្រអប់ក្នុង UI) ឬសាកល្បងស្វ័យប្រវត្តិ។"""
-    custom = str(st.session_state.get("hg_path_prefix") or "").strip()
+    custom = str(st.session_state.get("hg_path_prefix") or _hg_prefix_secret() or "").strip()
     out = []
     if custom:
         out.append("/" + custom.strip("/") + "/")
@@ -8503,198 +8511,6 @@ def _hg_guest_search(keyword):
     return _hg_search(keyword)
 
 
-
-
-_HG_KM = {
-    "全部": "ទាំងអស់", "真人剧": "រឿងមនុស្សពិត", "漫剧": "រឿងគំនូរជីវចល", "AI剧": "រឿង AI", "漫画": "កំប្លែងគំនូរ",
-    "爱情": "ស្នេហា", "年代": "យុគសម័យ", "逆袭": "ងើបតបវិញ", "传奇": "រឿងព្រេង", "成长": "ការលូតលាស់",
-    "家庭": "គ្រួសារ", "家族": "ត្រកូល", "萌宝": "ទារកគួរឱ្យស្រលាញ់", "悬疑": "អាថ៌កំបាំង", "惊悚": "រន្ធត់",
-    "恐怖": "ភ័យរន្ធត់", "志怪": "រឿងអរូបី", "古装": "ឈុតបុរាណ", "玄幻": "ទេវកថា", "奇幻": "ផ្សងព្រេងអស្ចារ្យ",
-    "都市": "ទីក្រុង", "青春": "យុវវ័យ", "喜剧": "កំប្លែង", "科幻": "វិទ្យាសាស្ត្រប្រឌិត", "灾难": "គ្រោះមហន្តរាយ",
-    "动作冒险": "សកម្មភាព-ផ្សងព្រេង", "战争": "សង្គ្រាម", "综艺": "កម្សាន្ត", "剧情": "ខ្សែរឿង",
-    "穿越": "ឆ្លងកាលវេលា", "重生": "កើតជាថ្មី", "逆袭翻身": "ងើបតបវិញ", "都市爱情": "ស្នេហាទីក្រុង",
-    "古风爱情": "ស្នេហាបុរាណ", "异能": "ថាមពលពិសេស", "家庭伦理": "សីលធម៌គ្រួសារ", "家族振兴": "ស្តារត្រកូល",
-    "暗恋成真": "ស្នេហាសម្ងាត់បានសម្រេច", "轻喜剧": "កំប្លែងស្រាល", "反转": "ប្រែប្រួលភ្លាមៗ",
-    "都市日常": "ជីវិតទីក្រុង", "都市玄幻": "ទីក្រុងទេវកថា", "玄学": "អាថ៌កំបាំងវិញ្ញាណ", "大女主": "ស្រីខ្លាំង",
-    "重生逆袭": "កើតថ្មីងើបតប", "奇幻脑洞": "ការស្រមៃអស្ចារ្យ", "闪婚": "រៀបការរហ័ស", "闪婚": "រៀបការរហ័ស",
-    "热门": "ពេញនិយម", "推荐": "ណែនាំ", "穿越重生": "ឆ្លងកាលវេលា-កើតថ្មី", "甜宠": "ស្នេហាផ្អែម",
-    "虐恋": "ស្នេហាឈឺចាប់", "复仇": "សងសឹក", "总裁": "ប្រធានក្រុមហ៊ុន", "霸总": "ប្រធានក្រុមហ៊ុនអំណាច",
-    "战神": "ម្ចាស់សង្គ្រាម", "神医": "គ្រូពេទ្យអច្ឆរិយៈ", "赘婿": "កូនប្រសារស្នាក់នៅ", "宫斗": "ទំនាស់ក្នុងវាំង",
-}
-
-
-@st.cache_resource
-def _hg_km_cache():
-    return {}
-
-
-def _hg_km(text, max_len=4500):
-    """បកអក្សរចិនជាខ្មែរ (វចនានុក្រមក្នុងកម្មវិធី មុន រួច Google Translate)។ អក្សរមិនមែនចិន → ទុកដដែល។"""
-    t = str(text or "").strip()
-    if not t or not CJK_RE.search(t):
-        return t
-    if t in _HG_KM:
-        return _HG_KM[t]
-    cache = _hg_km_cache()
-    if t in cache:
-        return cache[t]
-    try:
-        out = (google_translate_request(t[:max_len], retries=2) or "").strip()
-    except Exception:
-        return t
-    if out:
-        cache[t] = out
-        return out
-    return t
-
-
-def _hg_km_many(texts):
-    """បកច្រើនអត្ថបទស្របគ្នា → dict {ដើម: ខ្មែរ}។"""
-    uniq = [t for t in dict.fromkeys(str(x or "").strip() for x in texts) if t]
-    try:
-        with ThreadPoolExecutor(max_workers=12) as ex:
-            return dict(zip(uniq, ex.map(_hg_km, uniq)))
-    except Exception:
-        return {t: t for t in uniq}
-
-
-@st.cache_data(ttl=600, show_spinner=False)
-def _hg_category_tree():
-    """ប្រភេទរឿងជាដើមឈើ: [{name, slug, children:[{name, slug}]}] — សម្រាប់ប៊ូតុងប្រភេទបែប hongguoduanju.com"""
-    data = _hg_api("categories", {})
-    roots = data.get("categories", []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
-    out = []
-    for root in roots:
-        if not isinstance(root, dict) or not root.get("slug"):
-            continue
-        kids = [{"name": str(c.get("name") or c["slug"]), "slug": str(c["slug"])}
-                for c in (root.get("children") or []) if isinstance(c, dict) and c.get("slug")]
-        out.append({"name": str(root.get("name") or root["slug"]), "slug": str(root["slug"]), "children": kids})
-    return out
-
-
-def _hg_chips(key, options, default=None):
-    """ប៊ូតុងជ្រើសរើសមួយ (ដូចម៉ឺនុយ 真人剧 / 漫剧 / 全部 / 爱情 ... នៅលើគេហទំព័រ)។"""
-    options = list(options)
-    if not options:
-        return default
-    dflt = default if default in options else options[0]
-    if hasattr(st, "pills"):
-        val = st.pills("ប្រភេទ", options, selection_mode="single", default=dflt, key=key,
-                       label_visibility="collapsed")
-    else:
-        val = st.radio("ប្រភេទ", options, index=options.index(dflt), horizontal=True, key=key,
-                       label_visibility="collapsed")
-    if val not in options:   # អ្នកប្រើចុចលុបជម្រើស → ប្រើតម្លៃចុងក្រោយ
-        val = st.session_state.get(f"_{key}_last", dflt)
-    st.session_state[f"_{key}_last"] = val
-    return val
-
-
-@st.cache_data(ttl=3600, show_spinner=False, max_entries=600)
-def _hg_cover_b64(url):
-    """ទាញ poster នៅ server រួចដាក់ជា data-URI (cache ១ ម៉ោង) ដើម្បីបង្ហាញក្នុងក្រឡា HTML លឿន។"""
-    if not url:
-        return ""
-    data, _err = _hg_fetch_cover(url)
-    return ("data:image/jpeg;base64," + base64.b64encode(data).decode()) if data else ""
-
-
-def _hg_row_tags(row, limit=2):
-    """ទាញស្លាកប្រភេទ (ឧ. 爱情 / 都市爱情) ពី field ណាមួយដែល API ផ្តល់។"""
-    for k in ("tags", "tag_list", "tagList", "categories", "category_names", "category_list", "genres", "genre", "category"):
-        v = row.get(k)
-        if not v:
-            continue
-        if isinstance(v, str):
-            v = [x for x in re.split(r"[,，/|·\s]+", v) if x]
-        if isinstance(v, (list, tuple)):
-            out = []
-            for x in v:
-                if isinstance(x, dict):
-                    x = x.get("name") or x.get("title") or x.get("label") or ""
-                x = str(x).strip()
-                if x and x not in out:
-                    out.append(x)
-            if out:
-                return out[:limit]
-    return []
-
-
-def _hg_poster_grid(rows, prefix="hg"):
-    """ក្រឡា poster បែប hongguoduanju.com: រូបបញ្ឈរ + «全N集» + ឈ្មោះ (ត្រឹម ១ បន្ទាត់) + ស្លាក។
-    ទូរស័ព្ទ ៣ ជួរ · ទំព័រធំ ៦ ជួរ។ ត្រឡប់ row ដែលអ្នកប្រើចុច «▶ មើល» (ឬ None)។"""
-    st.markdown(f"""<style>
-.st-key-{prefix}_grid[data-testid="stVerticalBlock"], .st-key-{prefix}_grid > div[data-testid="stVerticalBlock"]{{
-  display:grid !important; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px 8px; align-items:start;}}
-@media (min-width:640px){{
-  .st-key-{prefix}_grid[data-testid="stVerticalBlock"], .st-key-{prefix}_grid > div[data-testid="stVerticalBlock"]{{
-    grid-template-columns:repeat(6,minmax(0,1fr)); gap:18px 10px;}} }}
-.st-key-{prefix}_grid > *, .st-key-{prefix}_grid [data-testid="stVerticalBlock"]{{min-width:0 !important; gap:.25rem !important;}}
-.st-key-{prefix}_grid .hgc{{position:relative; aspect-ratio:3/4; border-radius:8px; overflow:hidden; background:#1a2050;}}
-.st-key-{prefix}_grid .hgc img{{width:100%; height:100%; object-fit:cover; display:block;}}
-.st-key-{prefix}_grid .hgc .hgb{{position:absolute; right:0; bottom:0; font-size:11px; line-height:1; color:#fff;
-  padding:3px 6px; background:linear-gradient(90deg,rgba(0,0,0,0),rgba(0,0,0,.55)); border-top-left-radius:6px;}}
-.st-key-{prefix}_grid .hgn{{font-size:13px; font-weight:600; margin-top:6px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}}
-.st-key-{prefix}_grid .hgt{{display:flex; gap:4px; margin-top:4px; overflow:hidden; white-space:nowrap;}}
-.st-key-{prefix}_grid .hgt span{{font-size:10px; padding:1px 6px; border-radius:4px; background:rgba(128,128,128,.22); opacity:.85;}}
-.st-key-{prefix}_grid button{{min-height:30px !important; padding:2px 6px !important; font-size:12px !important;}}
-</style>""", unsafe_allow_html=True)
-    rows = [r for r in rows if isinstance(r, dict) and r.get("series_id")]
-    try:
-        with ThreadPoolExecutor(max_workers=12) as _ex:
-            _imgs = list(_ex.map(_hg_cover_b64, [str(r.get("cover") or "") for r in rows]))
-    except Exception:
-        _imgs = [""] * len(rows)
-    _tmap = _hg_km_many([str(r.get('name') or '') for r in rows] + [t for r in rows for t in _hg_row_tags(r)])
-    clicked = None
-    with st.container(key=f"{prefix}_grid"):
-        for r, b64 in zip(rows, _imgs):
-            sid = r["series_id"]
-            src = b64 or str(r.get("cover") or "")
-            cnt = r.get("episode_cnt") or r.get("listed_cnt") or ""
-            img = (f'<img src="{_esc(src, quote=True)}" referrerpolicy="no-referrer" loading="lazy">' if src
-                   else '<div style="height:100%;display:flex;align-items:center;justify-content:center;font-size:30px">🎬</div>')
-            badge = f'<div class="hgb">សរុប {_esc(str(cnt))} ភាគ</div>' if cnt else ""
-            tags = "".join(f"<span>{_esc(_tmap.get(t, t))}</span>" for t in _hg_row_tags(r))
-            _nm = str(r.get("name") or "រឿង").strip()
-            name = _esc(_tmap.get(_nm, _nm))
-            with st.container(key=f"{prefix}_card_{sid}"):
-                st.markdown(f'<div class="hgc">{img}{badge}</div><div class="hgn" title="{name}">{name}</div>'
-                            f'<div class="hgt">{tags}</div>', unsafe_allow_html=True)
-                if st.button("▶ មើល", key=f"{prefix}_select_{sid}", use_container_width=True):
-                    clicked = r
-    return clicked
-
-
-def _hg_pager(cur, key="hg_pg"):
-    """លេខទំព័របែប ‹ 1 … 4 5 6 ›។ ត្រឡប់លេខទំព័រដែលត្រូវទៅ (ឬ None)។"""
-    cur = max(1, int(cur))
-    pages = sorted({p for p in (1, cur - 1, cur, cur + 1) if p >= 1})
-    tokens = [("‹", cur - 1, cur <= 1, False)]
-    prev = 0
-    for p in pages:
-        if p - prev > 1:
-            tokens.append(("…", None, True, False))
-        tokens.append((str(p), p, p == cur, p == cur))
-        prev = p
-    tokens.append(("›", cur + 1, False, False))
-    goto = None
-    st.markdown("""<style>
-.st-key-hg_pager [data-testid="stHorizontalBlock"]{flex-wrap:nowrap !important; gap:.25rem !important; max-width:420px; margin:0 auto;}
-.st-key-hg_pager [data-testid="stColumn"]{min-width:0 !important; width:auto !important; flex:1 1 0 !important;}
-.st-key-hg_pager button{padding:0 !important; min-height:36px !important;}
-</style>""", unsafe_allow_html=True)
-    with st.container(key="hg_pager"):
-        cols = st.columns(len(tokens), gap="small")
-        for i, (col, (label, target, disabled, active)) in enumerate(zip(cols, tokens)):
-            with col:
-                if st.button(label, key=f"{key}_{i}_{label}", use_container_width=True, disabled=disabled,
-                             type="primary" if active else "secondary") and target:
-                    goto = target
-    return goto
-
-
 def _hg_no_vip_body():
     st.markdown("### 🔒 អ្នកមិនទាន់មាន VIP")
     st.warning("អ្នកគ្មាន VIP ទេ ដូច្នេះគ្មានសិទ្ធិប្រើមុខងារនេះឡើយ។")
@@ -8762,8 +8578,16 @@ def _hg_guest_preview():
         except Exception:
             rows = []
     rows = [r for r in (rows or []) if isinstance(r, dict) and r.get("series_id")]
-    if rows and _hg_poster_grid(rows, "hgg"):
-        _hg_no_vip_dialog()
+    for i in range(0, len(rows), 3):
+        cols = st.columns(3, gap="small")
+        for col, row in zip(cols, rows[i:i + 3]):
+            with col:
+                if row.get("cover"):
+                    _hg_show_cover(row["cover"])
+                st.markdown("**" + str(row.get("name") or "រឿង") + "**")
+                st.caption(f"ចំនួនភាគ៖ {row.get('episode_cnt') or row.get('listed_cnt') or '—'}")
+                if st.button("មើលរឿង", key=f"hgg_select_{row['series_id']}", use_container_width=True):
+                    _hg_no_vip_dialog()
 
 
 with tab_drama:
@@ -8796,27 +8620,6 @@ with tab_drama:
                 _hg_st["app_id"] = (_hg_in_id or "").strip()
                 _hg_st["app_secret"] = (_hg_in_sec or "").strip()
                 st.rerun()
-        with st.expander("🔑 ដាក់ APPID / APPSECRET ផ្ទាល់ខ្លួន (XiaoYingAPI)", expanded=bool(not _hg_ready())):
-            _u_id = st.text_input("APPID (ចាប់ផ្តើមដោយ app_)", key="hg_user_appid_in",
-                                  value=st.session_state.get("user_hg_app_id", ""))
-            _u_sec = st.text_input("APPSECRET (ចាប់ផ្តើមដោយ sk_)", key="hg_user_secret_in", type="password",
-                                   value=st.session_state.get("user_hg_app_secret", ""))
-            st.text_input("API path prefix (ជម្រើស · ពី docs របស់អ្នកលក់ ឧ. /api/dramas/hongguo/)",
-                          key="hg_path_prefix")
-            _uc1, _uc2 = st.columns(2)
-            if _uc1.button("💾 រក្សាទុក", key="hg_user_save", use_container_width=True):
-                st.session_state["user_hg_app_id"] = (_u_id or "").strip()
-                st.session_state["user_hg_app_secret"] = (_u_sec or "").strip()
-                st.session_state.pop("_hg_rows", None)
-                st.rerun()
-            if _uc2.button("🧪 តេស្តការតភ្ជាប់", key="hg_user_test", use_container_width=True):
-                try:
-                    _t = _hg_api("rank", {"type": "hot-drama", "page": 1})
-                    st.success("✅ APPID/APPSECRET ត្រឹមត្រូវ ភ្ជាប់បានហើយ")
-                except Exception as _te:
-                    st.error(str(_te))
-                    _cid = str(st.session_state.get("user_hg_app_id") or _HG_APP_ID or "")
-                    st.caption(f"APPID ដែលកំពុងប្រើ៖ {_cid[:8]}…{_cid[-4:]} (ប្រវែង {len(_cid)}) — ត្រូវតែ 'app_' + 28 តួ = 32")
         if not _hg_ready():
             st.warning("មិនទាន់កំណត់ XiaoYingAPI APPID និង APPSECRET ក្នុង Streamlit Secrets ទេ។ សូម Admin បន្ថែមព័ត៌មាន API ដើម្បីប្រើ Hongguo។")
             if _is_admin_session():
@@ -8837,37 +8640,50 @@ with tab_drama:
             st.session_state["_hg_page"] = 1
         if "_hg_catalog_mode" not in st.session_state:
             st.session_state["_hg_catalog_mode"] = "hot"
-        try:
-            _hg_tree = _hg_category_tree() if _hg_ready() else []
-        except Exception as _cat_err:
-            _hg_tree = []
-            st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
-        _HG_HOT = "🔥 ពេញនិយម"
-        _hg_roots = {_HG_HOT: None}
-        for _r in _hg_tree:
-            _kn = _hg_km(_r["name"])
-            _hg_roots[_kn if _kn not in _hg_roots else f"{_kn} ({_r['slug']})"] = _r
-        _hg_root_name = _hg_chips("hg_root_chip", list(_hg_roots), default=_HG_HOT)
-        _hg_root = _hg_roots.get(_hg_root_name)
-        _hg_mode_new = "hot"
-        if _hg_root:
-            _hg_all_lbl = _hg_km("全部")
-            _hg_subs = {_hg_all_lbl: _hg_root["slug"]}
-            _kmap = _hg_km_many([_c["name"] for _c in _hg_root.get("children", [])])
-            for _c in _hg_root.get("children", []):
-                _kn = _kmap.get(_c["name"].strip(), _c["name"])
-                _hg_subs[_kn if _kn not in _hg_subs else f"{_kn} ({_c['slug']})"] = _c["slug"]
-            _hg_sub_name = _hg_chips(f"hg_sub_chip_{_hg_root['slug']}", list(_hg_subs), default=_hg_all_lbl)
-            _hg_mode_new = "category:" + _hg_subs.get(_hg_sub_name, _hg_root["slug"])
-        if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories"):
-            for _fn in (_hg_category_tree, _HG_CAT_FN, _hg_rank_all, _hg_category_all, _hg_search):
-                try:
-                    _fn.clear()
-                except Exception as _swallow_e:
-                    _log_swallowed(_swallow_e)
-            st.rerun()
-        _hg_chip_changed = _hg_mode_new != st.session_state.get("_hg_chip_sig")
-        st.session_state["_hg_chip_sig"] = _hg_mode_new
+        _hg_c1, _hg_c2 = st.columns([3, 1])
+        with _hg_c1:
+            try:
+                _hg_cat_list_data = _HG_CAT_FN() if _hg_ready() else []
+            except Exception as _cat_err:
+                _hg_cat_list_data = []
+                st.caption(f"មិនអាចទាញយកប្រភេទរឿងបាន៖ {_cat_err}")
+            _hg_cat_map = _hg_flat_categories(_hg_cat_list_data)
+            _hg_cat_options = ["🔥 កំពុងពេញនិយម"] + list(_hg_cat_map.keys())
+            _hg_cat_choice = st.selectbox("📚 ប្រភេទរឿង", _hg_cat_options, key="hg_category_choice")
+            if st.button("🔄 ផ្ទុកប្រភេទឡើងវិញ", key="hg_refresh_categories", use_container_width=True):
+                _HG_CAT_FN.clear()
+                for _fn in (_hg_rank_all, _hg_category_all, _hg_search):
+                    try:
+                        _fn.clear()
+                    except Exception as _swallow_e:
+                        _log_swallowed(_swallow_e)
+                st.rerun()
+        with _hg_c2:
+            st.write("")
+            _hg_load_category = st.button("បង្ហាញរឿង", key="hg_category_load", use_container_width=True)
+        _hg_home_click = st.button("🔥 រឿងកំពុងពេញនិយម", key="hg_home_btn", use_container_width=True)
+        # ប្តូរប្រភេទក្នុង selectbox → ផ្ទុកភ្លាមៗ (មិនចាំបាច់ចុច «បង្ហាញរឿង» ទៀត)
+        _hg_cat_changed = _hg_cat_choice != st.session_state.get("_hg_last_cat_choice", "🔥 កំពុងពេញនិយម")
+        st.session_state["_hg_last_cat_choice"] = _hg_cat_choice
+        if _hg_home_click:
+            st.session_state["_hg_last_cat_choice"] = "🔥 កំពុងពេញនិយម"
+        _hg_load_category = _hg_load_category or (_hg_cat_changed and not _hg_home_click and not _hg_search_click)
+        if _hg_load_category:
+            st.session_state["_hg_page"] = 1
+            st.session_state["_hg_catalog_mode"] = ("hot" if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                                                      else "category:" + _hg_cat_map.get(_hg_cat_choice, ""))
+            st.session_state.pop("_hg_selected", None)
+            st.session_state["_hg_rows"] = []
+            try:
+                with st.spinner(f"កំពុងទាញយករឿង: {_hg_cat_choice} ..."):
+                    st.session_state["_hg_rows"] = (
+                        _hg_rank(1) if _hg_cat_choice == "🔥 កំពុងពេញនិយម"
+                        else _hg_category_list(_hg_cat_map[_hg_cat_choice], 1)
+                    )
+                if not st.session_state["_hg_rows"]:
+                    st.warning(f"រកមិនឃើញរឿងក្នុងប្រភេទ «{_hg_cat_choice}» ទេ។ សាកប្រភេទផ្សេង ឬពិនិត្យ Run log របស់ Actor ក្នុង Apify Console។")
+            except Exception as e:
+                st.error(_hg_error_khmer(e))
         if _hg_search_click and _hg_keyword.strip():
             st.session_state["_hg_page"] = 1
             st.session_state["_hg_catalog_mode"] = "search:" + _hg_keyword.strip()
@@ -8900,26 +8716,23 @@ with tab_drama:
                         st.info("រកមិនឃើញរឿងទេ។ សូមបិទភ្ជាប់ Link ទំព័ររឿង (…/detail?series_id=…) ឬ series_id ។ Link /player/… អាចជាលេខភាព មិនមែនលេខរឿង។")
             except Exception as e:
                 st.error(str(e))
-        elif _hg_ready() and (_hg_chip_changed or (not st.session_state["_hg_rows"]
-                                                   and st.session_state.get("_hg_catalog_mode", "hot") == "hot")):
+        elif _hg_home_click or (not st.session_state["_hg_rows"] and _hg_ready()
+                                and not _hg_load_category
+                                and st.session_state.get("_hg_catalog_mode", "hot") == "hot"):
             try:
                 st.session_state["_hg_page"] = 1
-                st.session_state["_hg_catalog_mode"] = _hg_mode_new
-                st.session_state.pop("_hg_selected", None)
+                st.session_state["_hg_catalog_mode"] = "hot"
                 with st.spinner("កំពុងទាញយកបញ្ជីរឿង..."):
-                    st.session_state["_hg_rows"] = _hg_load_page(_hg_mode_new, 1)
-                if not st.session_state["_hg_rows"]:
-                    st.warning("រកមិនឃើញរឿងក្នុងប្រភេទនេះទេ។ សាកប្រភេទផ្សេង។")
+                    st.session_state["_hg_rows"] = _hg_rank(1)
             except Exception as e:
-                st.session_state["_hg_rows"] = []
-                st.error(_hg_error_khmer(e))
+                st.error(str(e))
         _hg_rows = [r for r in st.session_state.get("_hg_rows", []) if isinstance(r, dict) and r.get("series_id")]
         _hg_selected = st.session_state.get("_hg_selected")
         if _hg_selected:
             if st.button("← ត្រឡប់ទៅបញ្ជីរឿង", key="hg_back", use_container_width=True):
                 st.session_state.pop("_hg_selected", None)
                 st.rerun()
-            st.subheader(_hg_km(_hg_selected.get("name") or "រឿង"))
+            st.subheader(_hg_selected.get("name") or "រឿង")
             _hg_cover = _hg_selected.get("cover")
             if _hg_cover:
                 _hg_show_cover(_hg_cover)
@@ -8927,7 +8740,7 @@ with tab_drama:
                 with st.spinner("កំពុងទាញយកបញ្ជីភាគ..."):
                     _hg_d = _hg_detail(_hg_selected["series_id"])
                 if _hg_d.get("intro"):
-                    st.write(_hg_km(_hg_d["intro"]))
+                    st.write(_hg_d["intro"])
                 _hg_eps = [e for e in (_hg_d.get("episodes") or []) if isinstance(e, dict) and (e.get("playable") or e.get("video_id") or e.get("url"))]
                 if not _hg_eps:
                     st.info("រឿងនេះមិនទាន់មានភាគដែលអាចចាក់បានទេ។")
@@ -9162,12 +8975,33 @@ with tab_drama:
             except Exception as e:
                 st.error(str(e))
         elif _hg_rows:
-            _hg_clicked = _hg_poster_grid(_hg_rows, "hg")
-            if _hg_clicked:
-                st.session_state["_hg_selected"] = _hg_clicked
-                st.rerun()
+            for _hg_i in range(0, len(_hg_rows), 3):
+                _hg_cols = st.columns(3, gap="small")
+                for _hg_col, _hg_row in zip(_hg_cols, _hg_rows[_hg_i:_hg_i+3]):
+                    with _hg_col:
+                        if _hg_row.get("cover"):
+                            _hg_show_cover(_hg_row["cover"])
+                        st.markdown("**" + str(_hg_row.get("name") or "រឿង") + "**")
+                        st.caption(f"ចំនួនភាគ៖ {_hg_row.get('episode_cnt') or _hg_row.get('listed_cnt') or '—'}")
+                        if st.button("មើលរឿង", key=f"hg_select_{_hg_row['series_id']}", use_container_width=True):
+                            st.session_state["_hg_selected"] = _hg_row
+                            st.rerun()
+            _hg_page_start = (st.session_state.get("_hg_page", 1) - 1) * len(_hg_rows) + 1
+            _hg_page_end = _hg_page_start + len(_hg_rows) - 1
+            st.caption(f"បង្ហាញ {_hg_page_start}–{_hg_page_end} រឿង · ទំព័រ {st.session_state.get('_hg_page', 1)}")
             _hg_cur_page = st.session_state.get("_hg_page", 1)
-            _hg_goto = _hg_pager(_hg_cur_page)
+            _hg_prev, _hg_next, _hg_page_label = st.columns([1, 1, 1])
+            _hg_goto = None
+            with _hg_prev:
+                if st.button("⬅️ មុន", key="hg_page_prev", use_container_width=True,
+                             disabled=_hg_cur_page <= 1):
+                    _hg_goto = _hg_cur_page - 1
+            with _hg_page_label:
+                st.markdown(f"<div style='text-align:center;padding:12px'>ទំព័រ {_hg_cur_page}</div>", unsafe_allow_html=True)
+            with _hg_next:
+                if st.button("បន្ទាប់ ➡️", key="hg_page_next", use_container_width=True,
+                             disabled=(len(_hg_rows) < 20 or _hg_cur_page >= _HG_MAX_PAGES)):
+                    _hg_goto = _hg_cur_page + 1
             if _hg_goto:
                 _mode = st.session_state.get("_hg_catalog_mode", "hot")
                 _hg_new_rows = None
